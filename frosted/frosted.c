@@ -212,6 +212,7 @@ int frosted_init(void)
 
     hw_init();
     mpu_init();
+    frosted_usbdev_init();
 
     syscalls_init();
 
@@ -228,7 +229,6 @@ int frosted_init(void)
     xip_mounted = vfs_mount((char *)init, "/bin", "xipfs", 0, NULL);
     vfs_mount(NULL, "/sys", "sysfs", 0, NULL);
 
-    frosted_usbdev_init();
     klog_init();
 
 

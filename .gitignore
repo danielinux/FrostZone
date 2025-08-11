@@ -1,6 +1,11 @@
 *.o
 *.Po
 *.d
+*.elf
+*.bin
 secure-supervisor/build
 frosted/build
+userland/out/*
+userland/gdb/*
+
 

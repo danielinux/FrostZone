@@ -104,7 +104,7 @@ static void cdc_task(void) {
 void usb_tasklet(void *arg) {
     static uint32_t last_poll = 0;
     (void)arg;
-    if (jiffies > last_poll + 1) {
+    if (jiffies > last_poll + 3) {
 
 #ifdef CONFIG_USB_POLLING
         tusb_int_handler(0, false);
@@ -132,12 +132,12 @@ void frosted_usbdev_init(void)
 
 // Invoked when device is mounted
 void tud_mount_cb(void) {
-    usb_connected = 1;
+    //usb_connected = 1;
 }
 
 // Invoked when device is unmounted
 void tud_umount_cb(void) {
-    usb_connected = 0;
+    //usb_connected = 0;
 }
 
 
@@ -145,6 +145,10 @@ void tud_umount_cb(void) {
 // Use to reset to DFU when disconnect with 1200 bps
 void tud_cdc_line_state_cb(uint8_t instance, bool dtr, bool rts) {
   (void)rts;
+  if (!dtr)
+      usb_connected = 0;
+  else
+      usb_connected = 1;
 
 #if 0
   // DTR = false is counted as disconnected
@@ -225,6 +229,7 @@ static int ttyusb_write(struct fnode *fno, const void *buf, unsigned int len)
     if (!u)
         return -1;
 
+    mutex_lock(u->dev->mutex);
     /* Fast path: if ready and no backlog, try direct */
     if (usb_tx_ready(u) && cirbuf_bytesinuse(u->outbuf) == 0) {
         uint32_t avail = tud_cdc_n_write_available(u->itf);
@@ -244,6 +249,7 @@ static int ttyusb_write(struct fnode *fno, const void *buf, unsigned int len)
     /* Try to kick out what we just queued (if the bus is ready) */
     if (usb_tx_ready(u))
         ttyusb_tx_drain(u);
+    mutex_unlock(u->dev->mutex);
 
     return (int)written;
 
@@ -268,7 +274,6 @@ static int ttyusb_read(struct fnode *fno, void *buf, unsigned int len)
     if (len_available <= 0) {
         ttyusb->dev->task = this_task();
         task_suspend();
-        mutex_unlock(ttyusb->dev->mutex);
         out = SYS_CALL_AGAIN;
         goto again;
     }

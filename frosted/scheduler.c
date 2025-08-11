@@ -970,10 +970,11 @@ static void sig_hdlr_return(uint32_t arg)
 
 static void sig_trampoline(struct task *t, struct task_handler *h, int signo)
 {
-    cur_extra = t->tb.sp + NVIC_FRAME_SIZE + EXTRA_FRAME_SIZE;
     cur_nvic = t->tb.sp + EXTRA_FRAME_SIZE;
+    cur_extra = t->tb.sp;
+    tramp_nvic = t->tb.sp - NVIC_FRAME_SIZE;
     tramp_extra = t->tb.sp - EXTRA_FRAME_SIZE;
-    tramp_nvic = t->tb.sp - (EXTRA_FRAME_SIZE + NVIC_FRAME_SIZE);
+    tramp_extra = t->tb.sp - (EXTRA_FRAME_SIZE + NVIC_FRAME_SIZE);
     extra_usr = t->tb.sp;
 
     /* Save stack pointer for later */
@@ -983,17 +984,12 @@ static void sig_trampoline(struct task *t, struct task_handler *h, int signo)
     /* Copy the EXTRA_FRAME into the trampoline extra, to preserve R9 for
      * userspace relocations etc. */
     memcpy((void *)tramp_extra, (void *)cur_extra, EXTRA_FRAME_SIZE);
-
     memset((void *)tramp_nvic, 0, NVIC_FRAME_SIZE);
-    tramp_nvic->pc = (uint32_t)h->hdlr;
+    tramp_nvic->pc = (uint32_t)h->hdlr | 1; /* enforce thumb */
     tramp_nvic->lr = (uint32_t)sig_hdlr_return;
     tramp_nvic->r0 = (uint32_t)signo;
-    tramp_nvic->psr = cur_nvic->psr;
-
+    tramp_nvic->psr = cur_nvic->psr | (1 << 24); /* enforce T bit */
     t->tb.sp = (t->tb.osp - (EXTRA_FRAME_SIZE + NVIC_FRAME_SIZE));
-
-    t->tb.sp -= EXTRA_FRAME_SIZE;
-    memcpy((void *)t->tb.sp, (void *)cur_extra, EXTRA_FRAME_SIZE);
     t->tb.flags |= TASK_FLAG_SIGNALED;
     task_resume(t);
 }
@@ -3060,6 +3056,7 @@ int __naked sv_call_handler(void)
         if (*syscall_retval == SYS_CALL_AGAIN_VAL) {
             *syscall_retval = -EINTR;
         }
+        cur_extra = _cur_task->tb.sp + NVIC_FRAME_SIZE + EXTRA_FRAME_SIZE;
         irq_on();
         goto return_from_syscall;
     }
