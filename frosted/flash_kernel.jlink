@@ -1,0 +1,6 @@
+connect
+r
+loadfile build/task0.bin 0x10010000
+r
+g
+exit

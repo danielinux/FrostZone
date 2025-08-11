@@ -1,0 +1,732 @@
+#1  0x10013c56 in sv_call_handler () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:3093
+#0  sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1394
+#1  0x10013c56 in sv_call_handler () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:3093
+#0  sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1394
+memset (s=0x10010e5b <task_filedesc_del+20>, c=537001808, n=112) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/string.c:31
+#1  0x1001206e in sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1405
+#1  0x1001206e in sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1405
+#2  0x10013c56 in sv_call_handler () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:3093
+#1  0x1001206e in sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1405
+
+Breakpoint 2, task_create_real (new=0x2002120c, arg=0x1002017c <init_args>, nice=0) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+Python Exception <class 'asyncio.exceptions.CancelledError'>: 
+Continuing.
+
+Breakpoint 1, sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1394
+Continuing.
+
+Breakpoint 4, 0x10012246 in sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1450
+Continuing.
+
+Breakpoint 2, task_create_real (new=0x20021284, arg=0x20022270, nice=0) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+Ambiguous command "m": macro, maintenance, make, mem, memory-tag, monitor, mt.
+0x200269d0:	0x00000000
+0x200269d4:	0x00000000
+0x200269d8:	0x00000004
+0x200269dc:	0x20022258
+0x200269e0:	0x20022000
+0x200269e4:	0x10065e55
+0x200269e8:	0x00000000
+0x200269ec:	0x00000000
+0x200269f0:	0x00000039
+0x200269f4:	0x00000000
+0x200269f8:	0x20022000
+No symbol "_pt" in current context.
+Focus set to cmd window.
+No symbol "_pt" in current context.
+No symbol "_pt" in current context.
+0x20024a3c:	0x00000000
+0x20024a40:	0x00000000
+0x20024a44:	0x00000004
+0x20024a48:	0x20022258
+0x20024a4c:	0x20022000
+0x20024a50:	0x10065e55
+0x20024a54:	0x00000000
+0x20024a58:	0x10065e55
+0x20024a5c:	0x00000000
+0x20024a60:	0x00000000
+0x20024a64:	0x0000002f
+0x20024a68:	0x20024ae2
+$13 = (void *) 0x20024a58
+No symbol "_cur_stack" in current context.
+$14 = (void *) 0x20024a58
+0x20024a3c:	0x00000000
+0x20024a40:	0x00000000
+0x20024a44:	0x00000004
+0x20024a48:	0x20022258
+0x20024a4c:	0x20022000
+0x20024a50:	0x10065e55
+0x20024a54:	0x00000000
+0x20024a58:	0x10065e55
+$15 = (void *) 0x20024a58
+No symbol "_pt" in current context.
+$16 = (void *) 0x20024a50
+Num     Type           Disp Enb Address    What
+1       hw breakpoint  keep y   0x10012032 in sys_vfork_hdlr at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1394
+	breakpoint already hit 2 times
+2       hw breakpoint  keep y   0x10011bd0 in task_create_real at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+	breakpoint already hit 2 times
+3       hw breakpoint  keep y   0x10011bd0 in task_create_real at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+	breakpoint already hit 2 times
+4       breakpoint     keep y   0x10012246 in sys_vfork_hdlr at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1450
+	breakpoint already hit 1 time
+Continuing.
+
+Breakpoint 1, sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1394
+Continuing.
+
+Breakpoint 4, 0x10012246 in sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1450
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1000022e in HardFault_Handler () at /home/dan/src/frosted-secure-m33/secure/ivt.c:18
+Resetting target
+Continuing.
+
+Breakpoint 2, task_create_real (new=0x2002120c, arg=0x1002017c <init_args>, nice=0) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+Continuing.
+
+Breakpoint 1, sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1394
+Continuing.
+
+Breakpoint 4, 0x10012246 in sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1450
+$17 = (void *) 0x20024a50
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1001e132 in usbd_control_xfer_cb (rhport=0 '\000', ep_addr=128 '\200', result=XFER_RESULT_SUCCESS, xferred_bytes=18) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/lib/tinyusb/src/device/usbd_control.c:157
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1001e132 in usbd_control_xfer_cb (rhport=0 '\000', ep_addr=128 '\200', result=XFER_RESULT_SUCCESS, xferred_bytes=18) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/lib/tinyusb/src/device/usbd_control.c:157
+Resetting target
+Continuing.
+
+Breakpoint 2, task_create_real (new=0x2002120c, arg=0x1002017c <init_args>, nice=0) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+Continuing.
+
+Breakpoint 1, sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1394
+Continuing.
+
+Breakpoint 4, 0x10012246 in sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1450
+Continuing.
+
+Breakpoint 2, task_create_real (new=0x20021284, arg=0x20022270, nice=0) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+$18 = (void *) 0x20024a50
+$19 = (void *) 0x20024a50
+0x20024a50:	0x10065e55
+0x20024a54:	0x00000000
+0x20024a58:	0x10065e55
+0x20024a5c:	0x00000000
+0x20024a60:	0x00000000
+0x20024a64:	0x0000002f
+0x20024a68:	0x20024ae2
+Resetting target
+Continuing.
+
+Breakpoint 2, task_create_real (new=0x2002120c, arg=0x1002017c <init_args>, nice=0) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+Continuing.
+
+Breakpoint 1, sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1394
+Continuing.
+
+Breakpoint 4, 0x10012246 in sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1450
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1001e132 in usbd_control_xfer_cb (rhport=0 '\000', ep_addr=128 '\200', result=XFER_RESULT_SUCCESS, xferred_bytes=18) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/lib/tinyusb/src/device/usbd_control.c:157
+Resetting target
+Continuing.
+
+Breakpoint 2, task_create_real (new=0x2002120c, arg=0x1002017c <init_args>, nice=0) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+Continuing.
+
+Breakpoint 1, sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1394
+Continuing.
+
+Breakpoint 4, 0x10012246 in sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1450
+Continuing.
+
+Breakpoint 2, task_create_real (new=0x20021284, arg=0x20022270, nice=0) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+Resetting target
+Resetting target
+Resetting target
+Resetting target
+Continuing.
+
+Breakpoint 2, task_create_real (new=0x2002120c, arg=0x1002017c <init_args>, nice=0) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+Continuing.
+
+Breakpoint 1, sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1394
+Continuing.
+
+Breakpoint 4, 0x10012246 in sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1450
+$20 = (void *) 0x20024a50
+0x20024a50:	0x10065e55
+0x20024a54:	0x00000000
+0x20024a58:	0x00000000
+0x20024a5c:	0x00000039
+0x20024a60:	0x00000000
+0x20024a64:	0x20022000
+0x20024a68:	0x00000000
+0x20024a6c:	0x00000000
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1001e132 in usbd_control_xfer_cb (rhport=0 '\000', ep_addr=128 '\200', result=XFER_RESULT_SUCCESS, xferred_bytes=18) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/lib/tinyusb/src/device/usbd_control.c:157
+Resetting target
+Continuing.
+
+Breakpoint 2, task_create_real (new=0x2002120c, arg=0x1002017c <init_args>, nice=0) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+Continuing.
+
+Breakpoint 1, sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1394
+Continuing.
+
+Breakpoint 4, 0x10012246 in sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1450
+Continuing.
+
+Breakpoint 2, task_create_real (new=0x20021284, arg=0x20022270, nice=0) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+There is no member named sp.
+$21 = (void *) 0x20024a50
+0x20024a50:	0x10065e55
+0x20024a54:	0x00000000
+0x20024a58:	0x10065e55
+0x20024a5c:	0x00000000
+0x20024a60:	0x00000000
+0x20024a64:	0x0000002f
+0x200269d0:	0x00000000
+0x200269d4:	0x00000000
+0x200269d8:	0x00000004
+0x200269dc:	0x20022258
+0x200269e0:	0x20022000
+0x200269e4:	0x10065e55
+0x200269e8:	0x00000000
+0x200269ec:	0x00000000
+0x200269f0:	0x00000039
+0x20024a50:	0x10065e55
+0x20024a54:	0x00000000
+0x20024a58:	0x10065e55
+0x20024a5c:	0x00000000
+0x20024a60:	0x00000000
+0x20024a64:	0x0000002f
+0x20024a68:	0x20024ae2
+0x20024a6c:	0x20022000
+0x20024a70:	0x20022270
+0x20024a74:	0x00000000
+0x20024a78:	0x0000002f
+0x20024a7c:	0x20024ae2
+0x20024a80:	0x20022270
+0x20024a84:	0x00000000
+0x20024a88:	0x10064f61
+0x20024a8c:	0x10065e45
+0x20024a90:	0x10065e5a
+0x20024a94:	0x21000200
+0x20024a98:	0x00000000
+0x20024a9c:	0x00000000
+0x20024aa0:	0x00000000
+0x20024aa4:	0x10065e21
+0x20024aa8:	0x00000000
+0x20024aac:	0x00000000
+0x20024ab0:	0x20024ad4
+0x20024ab4:	0x00000000
+0x20024ab8:	0x00000000
+0x20024abc:	0x00000000
+0x20024ac0:	0x10065817
+0x20024ac4:	0x00000000
+0x20024ac8:	0x00000000
+0x20024acc:	0x00000000
+0x20024ad0:	0x10065f57
+0x20024ad4:	0x00000000
+0x20024ad8:	0x00000001
+0x20024adc:	0x00000000
+0x20024ae0:	0x622f2123
+0x20024ae4:	0x662f6e69
+0x20024ae8:	0x68736572
+0x20024aec:	0x69230a00
+0x20024af0:	0x6e696c64
+0x20024af4:	0x0a262067
+0x20024af8:	0x73706723
+Resetting target
+Continuing.
+
+Breakpoint 2, task_create_real (new=0x2002120c, arg=0x1002017c <init_args>, nice=0) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+Continuing.
+
+Breakpoint 1, sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1394
+Continuing.
+
+Breakpoint 4, 0x10012246 in sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1450
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1001e132 in usbd_control_xfer_cb (rhport=0 '\000', ep_addr=128 '\200', result=XFER_RESULT_SUCCESS, xferred_bytes=18) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/lib/tinyusb/src/device/usbd_control.c:157
+Resetting target
+Continuing.
+
+Breakpoint 2, task_create_real (new=0x2002120c, arg=0x1002017c <init_args>, nice=0) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+Continuing.
+
+Breakpoint 1, sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1394
+Continuing.
+
+Breakpoint 4, 0x10012246 in sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1450
+$22 = (void *) 0x20024a50
+0x20024a50:	0x10065e55
+0x20024a54:	0x00000000
+0x20024a58:	0x00000000
+0x20024a5c:	0x00000039
+Hardware watchpoint 5: *0x20024a5c
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+save_task_context () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:2093
+#1  0x1001257a in pend_sv_handler () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:2153
+Initial frame selected; you cannot go up.
+Focus set to src window.
+$23 = 2
+pend_sv_handler () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:2154
+Focus set to cmd window.
+$24 = 0
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+save_task_context () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:2093
+$25 = 2
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+save_task_context () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:2093
+Continuing.
+
+Breakpoint 2, task_create_real (new=0x20021284, arg=0x20022270, nice=0) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+0x20024a58:	0x10065e55
+List of info subcommands:
+
+info address -- Describe where symbol SYM is stored.
+info all-registers -- List of all registers and their contents, for selected stack frame.
+info args -- All argument variables of current stack frame or those matching REGEXPs.
+info auto-load -- Print current status of auto-loaded files.
+info auxv -- Display the inferior's auxiliary vector.
+info bookmarks -- Status of user-settable bookmarks.
+info breakpoints, info b -- Status of specified breakpoints (all user-settable breakpoints if no argument).
+info classes -- All Objective-C classes, or those matching REGEXP.
+info common -- Print out the values contained in a Fortran COMMON block.
+info connections -- Target connections in use.
+info copying -- Conditions for redistributing copies of GDB.
+info dcache -- Print information on the dcache performance.
+info display -- Expressions to display when program stops, with code numbers.
+info exceptions -- List all Ada exception names.
+info extensions -- All filename extensions associated with a source language.
+info files -- Names of targets and files being debugged.
+info float -- Print the status of the floating point unit.
+info frame, info f -- All about the selected stack frame.
+info frame-filter -- List all registered Python frame-filters.
+info functions -- All function names or those matching REGEXPs.
+info guile, info gu -- Prefix command for Guile info displays.
+info inferiors -- Print a list of inferiors being managed.
+info line -- Core addresses of the code for a source line.
+info locals -- All local variables of current stack frame or those matching REGEXPs.
+info macro -- Show the definition of MACRO, and it's source location.
+info macros -- Show the definitions of all macros at LINESPEC, or the current source location.
+info main -- Get main symbol to identify entry point into program.
+info mem -- Memory region attributes.
+info missing-debug-handlers -- GDB command to list missing debug handlers.
+info missing-objfile-handlers -- GDB command to list missing objfile handlers.
+info module -- Print information about modules.
+info modules -- All module names, or those matching REGEXP.
+Quit
+Num     Type           Disp Enb Address    What
+5       hw watchpoint  keep y              *0x20024a5c
+0x20024a5c:	0x00000000
+1: *(uint32_t *)0x20024a5c = 0
+Target does not support this command.
+Target does not support this command.
+Resetting target
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+memset (m=m@entry=0x20020000, c=c@entry=0, n=<optimized out>, n@entry=393216) at ../../../../../../newlib/libc/string/memset.c:72
+1: *(uint32_t *)0x20024a5c = 0
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x100023fc in memset (m=m@entry=0x20020000, c=c@entry=0, n=<optimized out>, n@entry=393216) at ../../../../../../newlib/libc/string/memset.c:77
+1: *(uint32_t *)0x20024a5c = 0
+Continuing.
+
+Breakpoint 2, task_create_real (new=0x2002120c, arg=0x1002017c <init_args>, nice=0) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+1: *(uint32_t *)0x20024a5c = 0
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+sv_call_handler () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:3032
+1: *(uint32_t *)0x20024a5c = 537010776
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+save_task_context () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:2093
+1: *(uint32_t *)0x20024a5c = 0
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+save_task_context () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:2093
+1: *(uint32_t *)0x20024a5c = 0
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+save_task_context () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:2093
+1: *(uint32_t *)0x20024a5c = 57
+$26 = 0x39
+$27 = 1
+Continuing.
+
+Breakpoint 1, sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1394
+1: *(uint32_t *)0x20024a5c = 57
+$28 = 1
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+1: *(uint32_t *)0x20024a5c = 57
+$29 = (uint32_t *) 0x20024b80
+0x200269f8:	0x20022000
+0x20026a00:	0x00000000
+0x20026a04:	0x00000002
+0x20026a08:	0x00000000
+0x20026a0c:	0x00000000
+0x20026a10:	0x00000000
+0x20026a14:	0x1006504d
+0x20026a18:	0x10065e45
+0x20026a1c:	0x10065e5a
+0x20026a20:	0x21000200
+0x20026a24:	0x10065e5a
+0x20026a28:	0x00000000
+0x20026a2c:	0x00000000
+0x20026a30:	0x10065e21
+0x20026a34:	0x00000000
+0x20026a38:	0x00000000
+0x20026a3c:	0x20024ad4
+0x20026a40:	0x00000000
+0x20026a44:	0x00000000
+0x20026a48:	0x00000000
+0x20026a4c:	0x10065957
+0x20026a50:	0x00000000
+0x20026a54:	0x00000000
+0x20026a58:	0x00000000
+0x20026a5c:	0x1006518f
+0x200269ec:	0x00000000
+0x200269f0:	0x00000039
+0x200269f4:	0x00000000
+0x200269f8:	0x20022000
+0x200269f4:	0x00000000
+0x200269f8:	0x20022000
+0x200269f0:	0x00000039
+$30 = (uint32_t *) 0x200269f0
+Hardware watchpoint 6: *0x200269f0
+Continuing.
+
+Breakpoint 4, 0x10012246 in sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1450
+1: *(uint32_t *)0x20024a5c = 57
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1001e132 in usbd_control_xfer_cb (rhport=0 '\000', ep_addr=128 '\200', result=XFER_RESULT_SUCCESS, xferred_bytes=18) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/lib/tinyusb/src/device/usbd_control.c:157
+1: *(uint32_t *)0x20024a5c = 57
+Num     Type           Disp Enb Address    What
+5       hw watchpoint  keep y              *0x20024a5c
+6       hw watchpoint  keep y              *0x200269f0
+2: *(uint32_t)0x200269f0 = 57
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1001e132 in usbd_control_xfer_cb (rhport=0 '\000', ep_addr=128 '\200', result=XFER_RESULT_SUCCESS, xferred_bytes=18) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/lib/tinyusb/src/device/usbd_control.c:157
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1001e132 in usbd_control_xfer_cb (rhport=0 '\000', ep_addr=128 '\200', result=XFER_RESULT_SUCCESS, xferred_bytes=18) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/lib/tinyusb/src/device/usbd_control.c:157
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+Resetting target
+Continuing.
+
+Breakpoint 2, task_create_real (new=0x2002120c, arg=0x1002017c <init_args>, nice=0) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 0
+Continuing.
+
+Hardware watchpoint 6: *0x200269f0
+
+Old value = 57
+New value = 0
+irq_off () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/port/rp2350/../../include/interrupts.h:37
+1: *(uint32_t *)0x20024a5c = 537010776
+2: *(uint32_t)0x200269f0 = 0
+Continuing.
+
+Breakpoint 1, sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1394
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 0
+Continuing.
+
+Breakpoint 4, 0x10012246 in sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1450
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+Continuing.
+
+Hardware watchpoint 6: *0x200269f0
+
+Old value = 0
+New value = 57
+save_task_context () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:2094
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+There is no member named pif.
+$31 = 2
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+pend_sv_handler () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:2154
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1001e132 in usbd_control_xfer_cb (rhport=0 '\000', ep_addr=128 '\200', result=XFER_RESULT_SUCCESS, xferred_bytes=18) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/lib/tinyusb/src/device/usbd_control.c:157
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1001e132 in usbd_control_xfer_cb (rhport=0 '\000', ep_addr=128 '\200', result=XFER_RESULT_SUCCESS, xferred_bytes=18) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/lib/tinyusb/src/device/usbd_control.c:157
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1001e132 in usbd_control_xfer_cb (rhport=0 '\000', ep_addr=128 '\200', result=XFER_RESULT_SUCCESS, xferred_bytes=18) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/lib/tinyusb/src/device/usbd_control.c:157
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1001e132 in usbd_control_xfer_cb (rhport=0 '\000', ep_addr=128 '\200', result=XFER_RESULT_SUCCESS, xferred_bytes=18) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/lib/tinyusb/src/device/usbd_control.c:157
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1001e132 in usbd_control_xfer_cb (rhport=0 '\000', ep_addr=128 '\200', result=XFER_RESULT_SUCCESS, xferred_bytes=18) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/lib/tinyusb/src/device/usbd_control.c:157
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1001e132 in usbd_control_xfer_cb (rhport=0 '\000', ep_addr=128 '\200', result=XFER_RESULT_SUCCESS, xferred_bytes=18) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/lib/tinyusb/src/device/usbd_control.c:157
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1001e132 in usbd_control_xfer_cb (rhport=0 '\000', ep_addr=128 '\200', result=XFER_RESULT_SUCCESS, xferred_bytes=18) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/lib/tinyusb/src/device/usbd_control.c:157
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1001e132 in usbd_control_xfer_cb (rhport=0 '\000', ep_addr=128 '\200', result=XFER_RESULT_SUCCESS, xferred_bytes=18) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/lib/tinyusb/src/device/usbd_control.c:157
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1001e132 in usbd_control_xfer_cb (rhport=0 '\000', ep_addr=128 '\200', result=XFER_RESULT_SUCCESS, xferred_bytes=18) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/lib/tinyusb/src/device/usbd_control.c:157
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1001e132 in usbd_control_xfer_cb (rhport=0 '\000', ep_addr=128 '\200', result=XFER_RESULT_SUCCESS, xferred_bytes=18) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/lib/tinyusb/src/device/usbd_control.c:157
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1001e132 in usbd_control_xfer_cb (rhport=0 '\000', ep_addr=128 '\200', result=XFER_RESULT_SUCCESS, xferred_bytes=18) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/lib/tinyusb/src/device/usbd_control.c:157
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+Continuing.
+
+Program received signal SIGTRAP, Trace/breakpoint trap.
+0x1001e132 in usbd_control_xfer_cb (rhport=0 '\000', ep_addr=128 '\200', result=XFER_RESULT_SUCCESS, xferred_bytes=18) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/lib/tinyusb/src/device/usbd_control.c:157
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+Resetting target
+Continuing.
+
+Breakpoint 2, task_create_real (new=0x2002120c, arg=0x1002017c <init_args>, nice=0) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 0
+Continuing.
+
+Hardware watchpoint 6: *0x200269f0
+
+Old value = 57
+New value = 0
+irq_off () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/port/rp2350/../../include/interrupts.h:37
+1: *(uint32_t *)0x20024a5c = 537010776
+2: *(uint32_t)0x200269f0 = 0
+Continuing.
+
+Breakpoint 1, sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1394
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 0
+Continuing.
+
+Breakpoint 4, 0x10012246 in sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1450
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+Continuing.
+
+Hardware watchpoint 6: *0x200269f0
+
+Old value = 0
+New value = 57
+save_task_context () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:2094
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+Continuing.
+
+Breakpoint 2, task_create_real (new=0x20021284, arg=0x20022270, nice=0) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+Continuing.
+
+Breakpoint 1, sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1394
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 0
+Resetting target
+Continuing.
+
+Hardware watchpoint 6: *0x200269f0
+
+Old value = 57
+New value = 0
+0x10002402 in memset (m=m@entry=0x20020000, c=c@entry=0, n=<optimized out>, n@entry=393216) at ../../../../../../newlib/libc/string/memset.c:72
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 0
+Continuing.
+
+Breakpoint 2, task_create_real (new=0x2002120c, arg=0x1002017c <init_args>, nice=0) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 0
+Continuing.
+
+Breakpoint 1, sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1394
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 0
+Continuing.
+
+Breakpoint 4, 0x10012246 in sys_vfork_hdlr () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1450
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+$32 = 1
+$33 = (void *) 0x20024a50
+$34 = 2
+$35 = (void *) 0x20024a50
+Continuing.
+
+Hardware watchpoint 6: *0x200269f0
+
+Old value = 0
+New value = 57
+save_task_context () at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:2094
+1: *(uint32_t *)0x20024a5c = 57
+2: *(uint32_t)0x200269f0 = 57
+There is no member named tb_pid.
+$36 = 2
+Continuing.
+
+Breakpoint 2, task_create_real (new=0x20021284, arg=0x20022270, nice=0) at /home/dan/src/frosted-secure-m33/nonsecure_kernel/scheduler.c:1274
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 57
+1: *(uint32_t *)0x20024a5c = 0
+2: *(uint32_t)0x200269f0 = 0

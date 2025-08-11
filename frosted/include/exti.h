@@ -1,0 +1,9 @@
+#ifndef INC_STM32F4EXTI
+#define INC_STM32F4EXTI
+
+int exti_register(uint32_t base, uint16_t pin, uint8_t trigger, void (*isr)(void *), void *isr_arg);
+void exti_unregister(int pin);
+int exti_enable(int idx, int enable);
+void exti_init(void);
+
+#endif

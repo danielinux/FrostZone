@@ -1,0 +1,6 @@
+*.o
+*.Po
+*.d
+secure-supervisor/build
+frosted/build
+
