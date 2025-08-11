@@ -1,0 +1,6 @@
+connect
+r
+loadfile userspace.bin 0x10030000
+r
+g
+exit

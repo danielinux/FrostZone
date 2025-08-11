@@ -1,0 +1,50 @@
+# Object files
+*.o
+*.ko
+*.obj
+*.elf
+*.bin
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Libraries
+*.lib
+*.a
+*.la
+*.lo
+
+# Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Executables
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+*.map
+
+# Debug files
+*.dSYM/
+*.lst
+*.d
+tags
+
+#python compiled
+*.pyc
+
+#kconfig
+kconfig/.config
+kconfig/.config.old
+
+#generated files
+apps/apps.ld
+.gdbinit
+*.ld
+libfrosted/syscall_table.c

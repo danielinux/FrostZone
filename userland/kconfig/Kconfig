@@ -1,0 +1,200 @@
+mainmenu "FROSTED Userspace content selection"
+menu "Libraries"
+    config LIB_WOLFSSL
+    bool "WolfSSL TLS + Encryption"
+    default n
+
+    config LIB_MONGOOSE
+    bool "Cesanta's Mongoose REST API library"
+    default n
+
+endmenu
+
+menu "Applications"
+
+
+menu "Base binary utils"
+config APP_INIT
+bool "init: main task"
+default y
+
+config APP_IDLING
+bool "idling: flashing leds"
+default y
+
+config ICEBOX
+bool "icebox - singe-binary built-in application"
+option modules
+
+config APP_BUSYBOX
+bool "busybox - Software suite that provides several Unix utilities in a single executable file"
+
+config APP_FRESH
+tristate "fresh: Frosted shell"
+default y
+
+
+config APP_CAT
+    tristate "cat"
+
+config APP_ECHO
+    tristate "echo"
+    default m
+config APP_LS
+    tristate "ls"
+config APP_TOUCH
+    tristate "touch"
+config APP_RM
+    tristate "rm"
+config APP_KILL
+    tristate "kill"
+config APP_TRUE
+    tristate "true"
+config APP_FALSE
+    tristate "false"
+config APP_LN
+    tristate "ln"
+config APP_DIRNAME
+    tristate "dirname"
+config APP_MKDIR
+    tristate "mkdir"
+config APP_MOUNT
+    tristate "mount"
+config APP_PS
+    tristate "ps"
+config APP_PLAY
+    tristate "play"
+config APP_WC
+    tristate "wc"
+config APP_HEAD
+    tristate "head"
+config APP_TAIL
+    tristate "tail"
+config APP_YES
+    tristate "yes"
+config APP_SLEEP
+    tristate "sleep"
+config APP_UPTIME
+    tristate "uptime"
+config APP_KLOGD
+    tristate "klogd"
+config APP_GDBSERVER
+    bool "gdbserver"
+config APP_REBOOT
+    tristate "reboot"
+config APP_RENICE
+    tristate "renice"
+config APP_CUT
+    tristate "cut"
+config APP_GREP
+    tristate "grep"
+config APP_KILO
+    bool "kilo (text editor)"
+config APP_POWERCTL
+    tristate "Remote power control (powerctl)"
+config APP_DATE
+    tristate "date"
+config APP_FILE
+    tristate "file"
+config APP_STERM
+    tristate "sterm"
+config APP_PWRCTL
+    tristate "pwrctl - suspend and sleep"
+endmenu
+
+menu "Networking utils"
+config APP_IFCONFIG
+    bool "ifconfig"
+config APP_ROUTE
+    bool "route"
+config APP_PING
+    bool "ping"
+config APP_HOST
+    bool "host"
+config APP_TELNETD
+    bool "telnetd"
+config APP_NETCAT
+    bool "netcat"
+#config APP_HTTPD
+#    bool "httpd"
+#    depends on LIB_WOLFSSL
+config APP_SSHD
+    bool "sshd"
+    depends on LIB_WOLFSSL
+config APP_NTPC
+    bool "ntpc"
+config APP_STARWARS
+    bool "starwars"
+endmenu
+
+menu "Interpreters"
+config APP_PYTHON
+    bool "python interpreter (micropython)"
+endmenu
+
+
+menu "Hardware utils"
+config APP_BUSYLOOP
+    bool "busyloop - CPU busy test"
+config APP_MORSE
+    bool "Morse led blinker"
+config APP_RANDOM
+    bool "Random number generator"
+config APP_FBCTL
+    bool "fbctl (screen on/off utility)"
+config APP_GPIOCTL
+    bool "gpioctl - Tools to set up GPIOs"
+config APP_LATENCY
+    bool "process latency measurement"
+config APP_ACC
+    bool "Accelerometer tool (acc)"
+config APP_LCD
+    bool "LCD 2-lines display (lcd)"
+endmenu
+
+menu "Games"
+config APP_DOOM
+    bool "ID Software's DOOM"
+config APP_DICE
+    bool "dice - Roll the dice"
+config APP_BYTEBEAT
+    bool "bytebeat - sample bytebeat"
+config APP_GROOVY
+    bool "groovy - bytebeat positional generator"
+config APP_CMATRIX
+    bool "cmatrix - shows matrix on the screen"
+endmenu
+
+menu "Test suites"
+
+    menuconfig SWTESTS
+    bool "Software test suite"
+    default n
+
+    if SWTESTS
+        config APP_PTHREADS
+            bool "Pthreads test (pthreads)"
+            default y
+        config APP_SEM
+            bool "Semaphore test(sem)"
+            default y
+        config APP_FSTEST
+            bool "Filesystem test(fstest)"
+            default y
+    endif
+
+    menuconfig HWTESTS
+    bool "Hardware test suite"
+    default n
+
+    if HWTESTS
+        config APP_SENSOR
+            bool "Test for sensors (obsolete)"
+            default n
+        config APP_FBTEST
+            bool "Test for framebuffer"
+            default n
+    endif
+
+endmenu
+endmenu

@@ -1,0 +1,99 @@
+#
+# Automatically generated file; DO NOT EDIT.
+# FROSTED Userspace content selection
+#
+
+#
+# Libraries
+#
+# LIB_WOLFSSL is not set
+# LIB_MONGOOSE is not set
+
+#
+# Applications
+#
+
+#
+# Base binary utils
+#
+APP_INIT=y
+APP_IDLING=y
+ICEBOX=y
+# APP_BUSYBOX is not set
+APP_FRESH=y
+APP_CAT=m
+APP_ECHO=m
+APP_LS=m
+APP_TOUCH=m
+APP_RM=m
+APP_KILL=m
+APP_TRUE=m
+APP_FALSE=m
+APP_LN=m
+APP_DIRNAME=m
+APP_MKDIR=m
+APP_MOUNT=m
+APP_PS=m
+APP_PLAY=m
+APP_WC=m
+APP_HEAD=m
+APP_TAIL=m
+APP_YES=m
+APP_SLEEP=m
+APP_UPTIME=m
+APP_KLOGD=m
+# APP_GDBSERVER is not set
+APP_REBOOT=m
+# APP_RENICE is not set
+APP_CUT=m
+APP_GREP=m
+# APP_KILO is not set
+# APP_POWERCTL is not set
+# APP_DATE is not set
+APP_FILE=m
+APP_STERM=m
+# APP_PWRCTL is not set
+
+#
+# Networking utils
+#
+APP_IFCONFIG=y
+# APP_ROUTE is not set
+APP_PING=y
+# APP_HOST is not set
+# APP_TELNETD is not set
+# APP_NETCAT is not set
+# APP_NTPC is not set
+# APP_STARWARS is not set
+
+#
+# Interpreters
+#
+# APP_PYTHON is not set
+
+#
+# Hardware utils
+#
+# APP_BUSYLOOP is not set
+# APP_MORSE is not set
+# APP_RANDOM is not set
+# APP_FBCTL is not set
+# APP_GPIOCTL is not set
+# APP_LATENCY is not set
+# APP_ACC is not set
+APP_LCD=y
+
+#
+# Games
+#
+# APP_DOOM is not set
+# APP_DICE is not set
+# APP_BYTEBEAT is not set
+# APP_GROOVY is not set
+# APP_CMATRIX is not set
+
+#
+# Test suites
+#
+# SWTESTS is not set
+# HWTESTS is not set

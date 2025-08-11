@@ -1,0 +1,77 @@
+/*
+ *      This file is part of frosted.
+ *
+ *      frosted is free software: you can redistribute it and/or modify
+ *      it under the terms of the GNU General Public License version 2, as
+ *      published by the Free Software Foundation.
+ *
+ *
+ *      frosted is distributed in the hope that it will be useful,
+ *      but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *      MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *      GNU General Public License for more details.
+ *
+ *      You should have received a copy of the GNU General Public License
+ *      along with frosted.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *      Authors: Daniele Lacamera
+ *
+ */
+
+#include <fcntl.h>
+#include <sys/signal.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+static int received_signal = 0;
+int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
+
+void usr1_hdlr(int signo)
+{
+    // sleep(1);
+    received_signal = signo;
+}
+
+#ifndef APP_IDLING_MODULE
+int main(int argc, char *argv[])
+#else
+int icebox_idling(int argc, char** argv)
+#endif
+{
+    int pid;
+    int led[4];
+    int i, j;
+    struct sigaction act = {};
+    act.sa_handler = usr1_hdlr;
+
+    sigaction(SIGUSR1, &act, NULL);
+
+#define LED0 "/dev/led0"
+#define LED1 "/dev/led1"
+#define LED2 "/dev/led2"
+#define LED3 "/dev/led3"
+
+    led[0] = open(LED0, O_RDWR, 0);
+    led[1] = open(LED1, O_RDWR, 0);
+    led[2] = open(LED2, O_RDWR, 0);
+    led[3] = open(LED3, O_RDWR, 0);
+
+    if (led[0] >= 0) {
+        while (1) {
+            for (i = 0; i < 9; i++) {
+                if (i < 4) {
+                    write(led[i], "0", 1);
+                } else {
+                    char val = (1 - (i % 2)) + '0';
+                    for (j = 0; j < 4; j++) write(led[j], &val, 1);
+                }
+                usleep(200000);
+            }
+        }
+    } else {
+        exit(1); /* GPIO unavailable, exit. */
+    }
+}
