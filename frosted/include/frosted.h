@@ -25,6 +25,11 @@
 
 #include <stdint.h>
 
+#ifndef CONFIG_TASK_STACK_SIZE
+#define CONFIG_TASK_STACK_SIZE 8192
+#endif
+#define SCHEDULER_STACK_SIZE   (CONFIG_TASK_STACK_SIZE)
+
 
 /* Types */
 struct task;
@@ -87,6 +92,9 @@ void sysfs_init(void);
 /* Called by boot code.
  * Set system NVIC priorities and start systick. */
 void frosted_scheduler_on(void);
+
+/* get a pointer to the kernel task */
+struct task * const get_kernel(void);
 
 /* Forced preemption */
 void task_preempt(void);

@@ -70,7 +70,7 @@ target_include_directories(secure PRIVATE
     ./include
 )
 
-target_link_libraries(secure pico_stdlib hardware_flash)
+target_link_libraries(secure pico_stdlib hardware_flash pico_multicore)
 pico_set_linker_script(secure ../secure-supervisor.ld)
 pico_enable_stdio_usb(secure 1)
 pico_enable_stdio_uart(secure 0)

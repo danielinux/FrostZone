@@ -57,12 +57,7 @@ extern void sys_tick_handler(void);
 
 void debug_mon_handler(void) { while (1); }
 
-void usb_irq_handler(void)
-{
-    tusb_int_handler(0, true);
-}
-
-
+void usb_irq_handler(void);
 
 __attribute__((section(".vectors")))
 void (* const vector_table[])(void) = {

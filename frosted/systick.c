@@ -143,6 +143,7 @@ void sys_tick_handler(void)
     SysTick_Hook();
     jiffies ++;
     _n_int++;
+    asm volatile("sev");
 
     if (ktimer_expired()) {
         task_preempt_all();

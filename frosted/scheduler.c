@@ -48,13 +48,6 @@ struct module *MODS;
 #define __inl inline
 #define __naked __attribute__((naked))
 
-#ifndef CONFIG_STACK_SIZE
-#define CONFIG_STACK_SIZE 8192
-#endif
-
-#ifndef CONFIG_TASK_STACK_SIZE
-#define CONFIG_TASK_STACK_SIZE 8192
-#endif
 
 #ifndef NULL
 #define NULL ((void *)0u)
@@ -159,10 +152,10 @@ int sys_register_handler(uint32_t n, int (*_sys_c)(uint32_t arg1, uint32_t arg2,
 }
 
 #define MAX_TASKS 16
-#define BASE_TIMESLICE (20)
+#define BASE_TIMESLICE (5)
 
-#define TIMESLICE(x) ((BASE_TIMESLICE) - ((x)->tb.nice >> 1))
-#define SCHEDULER_STACK_SIZE      (CONFIG_TASK_STACK_SIZE - sizeof(struct task_block))
+//#define TIMESLICE(x) ((BASE_TIMESLICE) - ((x)->tb.nice >> 1))
+#define TIMESLICE(x) BASE_TIMESLICE
 #define INIT_SCHEDULER_STACK_SIZE (256)
 
 struct __attribute__((packed)) nvic_stack_frame {
@@ -302,6 +295,11 @@ struct __attribute__((packed)) task {
 
 static struct task struct_task_kernel;
 static struct task *const kernel = (struct task *)(&struct_task_kernel);
+
+struct task * const get_kernel(void)
+{
+    return kernel;
+}
 
 static int number_of_tasks = 0;
 

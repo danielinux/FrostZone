@@ -63,6 +63,7 @@ static void fpu_enable(void)
 
 
 
+
 static void sau_init(void)
 {
     /* Enable secure fault handler */

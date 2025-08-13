@@ -39,18 +39,6 @@
 #include "systick.h"
 #include "tusb.h"
 
-#ifdef CONFIG_PICOTCP
-# include "pico_stack.h"
-#endif
-
-#ifdef CONFIG_PICOTCP_LOOP
-struct pico_device *pico_loop_create(struct pico_stack *S);
-#else
-# define pico_loop_create(S) (NULL)
-#endif
-
-
-void frosted_usbdev_init(void);
 
 
 #define IDLE() while(1){do{}while(0);}
@@ -190,6 +178,43 @@ static void hw_init(void)
 }
 
 
+extern unsigned long __core1_ns_ivt;
+extern unsigned long __core1_ns_stack_top;
+
+void cpu1_main(void)
+{
+    while(1)
+    {
+        check_tasklets();
+        asm volatile("wfe");
+    }
+
+}
+
+void core1_ns_reset(void) {
+    cpu1_main();
+    while(1)
+        ;
+}
+
+__attribute__((section(".core1_vectors")))
+const void *core1_ivt[] = {
+     &__core1_ns_stack_top,
+     core1_ns_reset,
+     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+};
+
+
+void secure_core1_start(uint32_t vtor_ns, uint32_t sp_ns, uint32_t entry_ns);
+void cpu1_start(void)
+{
+    task_stop(get_kernel());
+    secure_core1_start((uintptr_t)&__core1_ns_ivt,
+                       (uintptr_t)&__core1_ns_stack_top,
+                       (uintptr_t)&cpu1_main);
+}
+
+void frosted_usbdev_init(void);
 int vfs_mount(char *source, char *target, char *module, uint32_t flags, void *args);
 int frosted_init(void)
 {
@@ -197,8 +222,10 @@ int frosted_init(void)
     int xip_mounted;
     /* ktimers must be enabled before systick */
     ktimer_init();
+    
 
     kernel_task_init();
+    
 
 #if defined(__ARM_ARCH_7M__) || defined(__ARM_ARCH_7EM__)
     fpb_init();
@@ -206,13 +233,15 @@ int frosted_init(void)
 
     vfs_init();
     devnull_init(fno_search("/dev"));
+    
+    hw_init();
+    frosted_usbdev_init();
 
     /* Set up system */
 
 
-    hw_init();
     mpu_init();
-    frosted_usbdev_init();
+    
 
     syscalls_init();
 
@@ -235,19 +264,10 @@ int frosted_init(void)
 #ifdef UNIX
     socket_un_init();
 #endif
+    cpu1_start();
 
     return xip_mounted;
 }
-
-static void ktimer_tcpip(uint32_t time, void *arg);
-
-#ifdef CONFIG_PICOTCP
-struct pico_stack *PicoTCP;
-void frosted_tcpip_wakeup(void)
-{
-}
-#endif
-
 
 static const char init_path[] = "/bin/init";
 static const char *const init_args[2] = { init_path, NULL };
@@ -284,32 +304,11 @@ void frosted_kernel(int xipfs_mounted)
         IDLE();
     }
 
-
-#ifdef CONFIG_PICOTCP
-    pico_stack_init(&PicoTCP);
-    socket_in_init();
-    pico_lock_init();
-
-    /* Network devices initialization */
-    usb_ethernet_init(USB_DEV_FS);
-    pico_loop_create(PicoTCP);
-    pico_eth_start();
-#endif
-
     frosted_scheduler_on();
 
     while(1) {
-#ifdef CONFIG_PICOTCP
-        if (pico_trylock_kernel() == 0) {
-            irq_off();
-            pico_stack_tick(PicoTCP);
-            irq_on();
-            pico_unlock();
-        }
-#endif
         check_tasklets();
         asm volatile ("wfe");
-        //__WFI();
     }
 }
 

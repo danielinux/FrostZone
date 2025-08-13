@@ -307,8 +307,6 @@ static int launchProg(char **args, int background)
         }
         sprintf(exit_status_str, "%d", child_status);
         setenv("?", exit_status_str, 1);
-        sleep(1);
-        printf("\r\n");
         return WEXITSTATUS(child_status);
     } else {
         // In order to create a background process, the current process

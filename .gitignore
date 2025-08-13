@@ -7,5 +7,5 @@ secure-supervisor/build
 frosted/build
 userland/out/*
 userland/gdb/*
-
+tags
 

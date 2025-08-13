@@ -50,6 +50,7 @@ add_executable(task0
     ./usb.c
     ./usb_descriptors.c
     ./tty_console.c
+    ./sysfs.c
     
     ./frosted_rp2350.c
 	
@@ -105,9 +106,15 @@ target_compile_definitions(task0 PRIVATE
     CFG_TUSB_MCU=OPT_MCU_RP2040
     CONFIG_DEVUSB=1
     CFG_TUD_ENABLED=1
+    #TUD_OPT_RP2040_USB_DEVICE_UFRAME_FIX=1
+
+
     CONFIG_USB_POLLING=1
+    CONFIG_USB_NET=1
     CONFIG_SIGNALS=1
-    #CONFIG_PTY_UNIX=1
+    CONFIG_PTY_UNIX=1
+
+    LINK_MTU=1514
 )
 
 target_include_directories(task0 PRIVATE 

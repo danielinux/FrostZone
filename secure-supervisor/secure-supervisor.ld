@@ -192,6 +192,12 @@ SECTIONS
         . = ALIGN(4);
         *(.rodata*)
         . = ALIGN(4);
+        PROVIDE(__core1_ivt = .);
+        *(.core1_ivt*)
+        . = ALIGN(4);
+        PROVIDE(__core1_kickstart = .);
+        *(.core1_kickstart*)
+        . = ALIGN(4);
 
         *(.data*)
         *(.sdata*)
@@ -279,6 +285,10 @@ SECTIONS
         KEEP(*(.nonsecure_vector*))
         KEEP(*(.nonsecure*))
         __nonsecure_end = .;
+        __core1_stack = .;
+        . += 0x400;
+        __core1_stack_top = .;
+
     } > SCRATCH_X AT > FLASH
     __nonsecure_source = LOADADDR(.scratch_x);
     __scratch_x_source__ = LOADADDR(.scratch_x);

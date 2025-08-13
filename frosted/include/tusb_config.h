@@ -43,10 +43,8 @@ typedef uint32_t uint;
 #define BOARD_TUD_RHPORT      0
 #endif
 
-// RHPort max operational speed can defined by board.mk
-#ifndef BOARD_TUD_MAX_SPEED
-#define BOARD_TUD_MAX_SPEED   OPT_MODE_DEFAULT_SPEED
-#endif
+#define BOARD_TUD_MAX_SPEED TUSB_SPEED_FULL
+#define CFG_TUSB_RHPORT0_MODE   (OPT_MODE_DEVICE | OPT_MODE_FULL_SPEED)
 
 //--------------------------------------------------------------------
 // COMMON CONFIGURATION
@@ -94,12 +92,35 @@ typedef uint32_t uint;
 #define CFG_TUD_ENDPOINT0_SIZE    64
 #endif
 
+//--------------------------------------------------------------------
+// NCM CLASS CONFIGURATION, SEE "ncm.h" FOR PERFORMANCE TUNING
+//--------------------------------------------------------------------
+
+// Must be >> MTU
+// Can be set to 2048 without impact
+#define CFG_TUD_NCM_IN_NTB_MAX_SIZE (2 * LINK_MTU)
+
+// Must be >> MTU
+// Can be set to smaller values if wNtbOutMaxDatagrams==1
+#define CFG_TUD_NCM_OUT_NTB_MAX_SIZE (2 * LINK_MTU)
+
+// Number of NCM transfer blocks for reception side
+#ifndef CFG_TUD_NCM_OUT_NTB_N
+  #define CFG_TUD_NCM_OUT_NTB_N 1
+#endif
+
+// Number of NCM transfer blocks for transmission side
+#ifndef CFG_TUD_NCM_IN_NTB_N
+  #define CFG_TUD_NCM_IN_NTB_N 1
+#endif
+
 //------------- CLASS -------------//
 #define CFG_TUD_CDC               2
 #define CFG_TUD_MSC               0
 #define CFG_TUD_HID               0
 #define CFG_TUD_MIDI              0
 #define CFG_TUD_VENDOR            0
+#define CFG_TUD_NCM               1
 
 // CDC FIFO size of TX and RX
 #define CFG_TUD_CDC_RX_BUFSIZE   (TUD_OPT_HIGH_SPEED ? 512 : 64)

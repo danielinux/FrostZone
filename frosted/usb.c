@@ -37,6 +37,8 @@ struct dev_ttyusb {
     uint8_t *w_end;
 };
 
+
+
 static struct dev_ttyusb DEV_TTYUSB[2];
 static volatile int usb_connected = 0;
 
@@ -90,8 +92,10 @@ static void cdc_task(void) {
                         }
                         continue;
                     }
+                    mutex_lock(u->dev->mutex);
                     /* read data into circular buffer */
                     cirbuf_writebyte(u->inbuf, b);
+                    mutex_unlock(u->dev->mutex);
                     /* If a process is attached, resume the process */
                     if (u->dev->task != NULL)
                         task_resume(u->dev->task);
@@ -104,7 +108,11 @@ static void cdc_task(void) {
 void usb_tasklet(void *arg) {
     static uint32_t last_poll = 0;
     (void)arg;
-    if (jiffies > last_poll + 3) {
+    if (jiffies > last_poll) {
+        /* Lock both ttyusb */
+        
+        if (!usb_connected)
+            tud_connect();
 
 #ifdef CONFIG_USB_POLLING
         tusb_int_handler(0, false);
@@ -116,30 +124,29 @@ void usb_tasklet(void *arg) {
     tasklet_add(usb_tasklet, NULL);
 }
 
+void rp2040_usb_init(void);
 void frosted_usbdev_init(void)
 {
-    reset_block(RESETS_RESET_USBCTRL_BITS);
-    unreset_block_wait(RESETS_RESET_USBCTRL_BITS);
-    // init device stack on configured roothub port
     tusb_rhport_init_t dev_init = {
         .role = TUSB_ROLE_DEVICE,
         .speed = TUSB_SPEED_AUTO
     };
+#if 0
+    reset_block(RESETS_RESET_USBCTRL_BITS);
+    unreset_block_wait(RESETS_RESET_USBCTRL_BITS);
+    // init device stack on configured roothub port
+#endif
+    rp2040_usb_init();
     tusb_init(BOARD_TUD_RHPORT, &dev_init);
     ttyusb_init();
     tasklet_add(usb_tasklet, NULL);
 }
 
-// Invoked when device is mounted
 void tud_mount_cb(void) {
-    //usb_connected = 1;
 }
 
-// Invoked when device is unmounted
 void tud_umount_cb(void) {
-    //usb_connected = 0;
 }
-
 
 // Invoked when cdc when line state changed e.g connected/disconnected
 // Use to reset to DFU when disconnect with 1200 bps
@@ -149,22 +156,6 @@ void tud_cdc_line_state_cb(uint8_t instance, bool dtr, bool rts) {
       usb_connected = 0;
   else
       usb_connected = 1;
-
-#if 0
-  // DTR = false is counted as disconnected
-  if (!dtr) {
-    // touch1200 only with first CDC instance (Serial)
-    if (instance == 0) {
-      cdc_line_coding_t coding;
-      tud_cdc_get_line_coding(&coding);
-      if (coding.bit_rate == 1200) {
-        if (board_reset_to_bootloader) {
-          board_reset_to_bootloader();
-        }
-      }
-    }
-  }
-#endif
 }
 
 static void ttyusb_tty_attach(struct fnode *fno, int pid)
@@ -185,20 +176,30 @@ static inline int usb_tx_ready(struct dev_ttyusb *u)
 static void ttyusb_tx_drain(struct dev_ttyusb *u)
 {
     uint32_t avail;
-    if (!tud_cdc_n_connected(u->itf)) return;
+    if (!tud_cdc_n_connected(u->itf)) {
+        tud_connect();
+        return;
+    }
 
 
     avail = tud_cdc_n_write_available(u->itf);
+
     while (avail && cirbuf_bytesinuse(u->outbuf)) {
-        size_t chunk = cirbuf_bytesinuse(u->outbuf);   /* contiguous bytes available to read */
-        if (chunk > avail) chunk = avail;
+        uint32_t chunk, wrote;
+        uint8_t tmp[64];                 /* bounded copy is fine; loop if larger */
+
+        mutex_lock(u->dev->mutex);
+        chunk = cirbuf_bytesinuse(u->outbuf);   /* contiguous bytes available to read */
+        if (chunk > avail)
+            chunk = avail;
 
         /* temporary pointer to the linear span */
-        uint8_t tmp[64];                 /* bounded copy is fine; loop if larger */
-        if (chunk > sizeof(tmp)) chunk = sizeof(tmp);
+        if (chunk > sizeof(tmp)) 
+            chunk = sizeof(tmp);
         cirbuf_readbytes(u->outbuf, tmp, chunk);
+        mutex_unlock(u->dev->mutex);
 
-        uint32_t wrote = tud_cdc_n_write(u->itf, tmp, (uint32_t)chunk);
+        wrote = tud_cdc_n_write(u->itf, tmp, (uint32_t)chunk);
         (void)wrote; /* TinyUSB's CDC write is all-or-less, but we handle loop */
         avail = tud_cdc_n_write_available(u->itf);
     }
@@ -210,7 +211,8 @@ static void ttyusb_tx_drain(struct dev_ttyusb *u)
 void tud_cdc_tx_complete_cb(uint8_t itf)
 {
     struct dev_ttyusb *u = &DEV_TTYUSB[itf];
-    if (!u->dev) return;
+    if (!u->dev)
+        return;
     ttyusb_tx_drain(u);
 }
 
@@ -222,8 +224,10 @@ static int ttyusb_write(struct fnode *fno, const void *buf, unsigned int len)
     uint32_t written = 0;
     uint32_t pushed;
 
-    if (!usb_connected)
+    if (!usb_connected) {
+        tud_connect();
         return len;
+    }
 
     u = (struct dev_ttyusb *)FNO_MOD_PRIV(fno, &mod_devttyusb);
     if (!u)
@@ -336,14 +340,54 @@ static int ttyusb_fno_init(uint8_t itf)
     u->inbuf = cirbuf_create(256);
     u->outbuf = cirbuf_create(512);
     u->dev->task = NULL;
+
     return 0;
 }
 
+#define USBCTRL_BASE 0x50110000
+#define USB_SIE_CTRL *((volatile uint32_t *)(USBCTRL_BASE + 0x4C))
+#define USB_SIE_STATUS *((volatile uint32_t *)(USBCTRL_BASE + 0x50))
+#define USB_INTE *((volatile uint32_t *)(USBCTRL_BASE + 0x90))
+#define USB_INTS *((volatile uint32_t *)(USBCTRL_BASE + 0x98))
+#define USB_INTE_TRANS_COMPLETE (1 << 3)
+#define USB_SIE_STATUS_TRANS_COMPLETE (1 << 18)
+#define USB_SIE_CTRL_EP0_INT_1BUF (1 << 29)
+#define USB_SIE_CTRL_PU_EN (1 << 16)
+
+void usb_irq_handler(void)
+{
+    tusb_int_handler(0, true);
+    USB_SIE_STATUS |= USB_SIE_STATUS_TRANS_COMPLETE;
+}
+
+
 int ttyusb_init(void)
 {
+#ifndef CONFIG_USB_POLLING
+    nvic_set_pending(1u << 14);
+    nvic_set_priority(14, 3u << 6);
+    nvic_enable_irq(1u << 14);
+    USB_SIE_CTRL |= USB_SIE_CTRL_EP0_INT_1BUF;
+    //USB_INTE |= USB_INTE_TRANS_COMPLETE;
+    USB_SIE_CTRL |= USB_SIE_CTRL_PU_EN;
+#endif
     register_module(&mod_devttyusb);
     ttyusb_fno_init(0);
     ttyusb_fno_init(1);
     return 0;
 }
+
+bool tud_network_recv_cb(const uint8_t *src, uint16_t size) {
+    return true;
+}
+
+
+uint16_t tud_network_xmit_cb(uint8_t *dst, void *ref, uint16_t arg) {
+    return arg;
+}
+
+void tud_network_init_cb(void)
+{
+}
+
 

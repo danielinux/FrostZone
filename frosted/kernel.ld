@@ -23,6 +23,10 @@ SECTIONS
         PROVIDE(_ns_sdata = .);
         *(.data*)
         *(.time_critical.tinyusb*)
+        . = ALIGN(4);
+        __core1_ns_ivt = .;
+        KEEP(*(.core1_vectors*));
+        . = ALIGN(512);
         PROVIDE(_ns_edata = .);
     } > RAM
 
@@ -33,7 +37,9 @@ SECTIONS
         _ebss = .;
     } > RAM
 
-    _estack = ORIGIN(STACK_MEM) + LENGTH(STACK_MEM);
+    _estack = ORIGIN(STACK_MEM) + LENGTH(STACK_MEM) - 0x800;
+
+    __core1_ns_stack_top = ORIGIN(STACK_MEM) + LENGTH(STACK_MEM);
 
     PROVIDE(_ns_sidata = LOADADDR(.data));
 

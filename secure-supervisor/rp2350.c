@@ -19,9 +19,15 @@
  */
 
 #include "stdint.h"
+#include "string.h"
 #include "hardware/clocks.h"
 #include "hardware/pll.h"
 #include "hardware/gpio.h"
+
+#include "hardware/regs/usb.h"
+#include "hardware/structs/usb.h"
+#include "hardware/resets.h"
+#include "pico/multicore.h"
 
 #define NVIC_ICER0 (*(volatile uint32_t *)(0xE000E180))
 #define NVIC_ICPR0 (*(volatile uint32_t *)(0xE000E280))
@@ -107,7 +113,7 @@ static void rp2350_configure_nvic(void)
 static void rp2350_configure_access_control(void)
 {
     int i;
-    const uint32_t secure_fl = (ACCESS_BITS_SU | ACCESS_BITS_SP | ACCESS_BITS_DMA | ACCESS_BITS_DBG | ACCESS_BITS_CORE0) | ACCESS_MAGIC;
+    const uint32_t secure_fl = (ACCESS_BITS_SU | ACCESS_BITS_SP | ACCESS_BITS_DMA | ACCESS_BITS_DBG | ACCESS_BITS_CORE0 | ACCESS_BITS_CORE1) | ACCESS_MAGIC;
     const uint32_t non_secure_fl = (ACCESS_BITS_NSU | ACCESS_BITS_NSP | ACCESS_BITS_DMA | ACCESS_BITS_DBG | ACCESS_BITS_CORE0 | ACCESS_BITS_CORE1) | ACCESS_MAGIC;
 
 
@@ -144,7 +150,7 @@ static void rp2350_configure_access_control(void)
     ACCESS_CONTROL_RESETS = non_secure_fl | secure_fl;
     ACCESS_CONTROL_USBCTRL= non_secure_fl | secure_fl;
     /* Force core 1 to non-secure */
-    ACCESS_CONTROL_FORCE_CORE_NS = (1 << 1) | ACCESS_MAGIC;
+    // ACCESS_CONTROL_FORCE_CORE_NS = (1 << 1) | ACCESS_MAGIC;
 
     /* GPIO masks: Each bit represents "NS allowed" for a GPIO pin */
     ACCESS_CONTROL_GPIOMASK0 = 0xFFFFFFFF;
@@ -157,9 +163,67 @@ static void rp2350_configure_access_control(void)
     ACCESS_CONTROL_LOCK = non_secure_fl | secure_fl;
 }
 
+
+typedef struct {
+  uint32_t vtor_ns;   // NS vector table base
+  uint32_t msp_ns;    // NS stack pointer value (top-of-stack)
+  uint32_t entry_ns;  // NS entry point (Thumb bit will be OR'ed)
+} core1_ns_boot_t;
+
+
+
+volatile core1_ns_boot_t core1_ns_boot;
+
+
+extern unsigned long __core1_kickstart;
+extern unsigned long __core1_ivt;
+extern unsigned long __core1_stack_top;
+
+__attribute__((used, aligned(128), section(".core1_ivt")))
+void * __core1_sec_vtor[] = {
+    (void *)&__core1_stack_top,                    // SP
+    (void *)((uintptr_t)(&__core1_kickstart)),             // Reset (Thumb)
+    0,0,0,0,0,0,0,0,                                   // keep tiny
+};
+
+// Secure stub that runs first on core1, then switches to NS
+#define SCB_NS_VTOR (*(volatile uint32_t *)0xE002ED08u)   // Secure alias of VTOR_NS
+static inline void set_msp_ns(uint32_t v) { __asm volatile ("msr MSP_NS, %0" :: "r"(v)); }
+
+__attribute__((noreturn, section(".core1_kickstart")))
+void core1_secure_entry(void) {
+    // Program Non-secure context from the values provided by NS
+    SCB_NS_VTOR = core1_ns_boot.vtor_ns;
+    set_msp_ns(core1_ns_boot.msp_ns);
+    asm volatile ("dsb");
+    asm volatile ("isb");
+
+    uint32_t pc_ns = core1_ns_boot.entry_ns | 1u;  // ensure Thumb
+    __asm volatile ("bxns %0" :: "r"(pc_ns) : "memory");
+    __builtin_unreachable();
+}
+
+// NS-callable veneer: stash NS context, then use SDK to launch core1
+__attribute__((cmse_nonsecure_entry))
+void secure_core1_start(uint32_t vtor_ns, uint32_t sp_ns, uint32_t entry_ns) {
+    core1_ns_boot.vtor_ns  = vtor_ns;
+    core1_ns_boot.msp_ns   = sp_ns;
+    core1_ns_boot.entry_ns = entry_ns;
+
+    // Reset core1 (optional but tidy), then launch with explicit SP & VTOR
+    multicore_reset_core1();
+    extern void * __core1_sec_vtor[];                // secure VTOR we defined
+    extern uint32_t __core1_stack_top;
+    multicore_launch_core1_raw(core1_secure_entry,
+                               (uint32_t *)&__core1_stack_top,
+                               (uint32_t)__core1_sec_vtor);
+}
+
 void machine_init(void)
 {
     set_sys_clock_khz(120000, true);
+
+    rp2350_configure_access_control();
     gpio_set_function(24, GPIO_FUNC_USB);          // DM
     gpio_set_function(25, GPIO_FUNC_USB);          // DP
     gpio_disable_pulls(24);
@@ -172,7 +236,31 @@ void machine_init(void)
             CLOCKS_CLK_USB_CTRL_AUXSRC_VALUE_CLKSRC_PLL_USB,
             48 * MHZ,   // src_freq (PLL_USB out)
             48 * MHZ);  // target freq
+                        //
+    // Reset -> unreset USBCTRL
+    reset_block(RESETS_RESET_USBCTRL_BITS);
+    unreset_block_wait(RESETS_RESET_USBCTRL_BITS);
+
+    // Clear DPRAM
+    memset(usb_dpram, 0, sizeof(*usb_dpram));
+
+    // Route controller to on-chip PHY, force VBUS present
+    usb_hw->muxing = USB_USB_MUXING_TO_PHY_BITS | USB_USB_MUXING_SOFTCON_BITS;
+    usb_hw->pwr    = USB_USB_PWR_VBUS_DETECT_BITS | USB_USB_PWR_VBUS_DETECT_OVERRIDE_EN_BITS;
+
+    // Clear PHY isolation (RP2350) and enable controller
+    hw_clear_bits(&usb_hw->main_ctrl, USB_MAIN_CTRL_PHY_ISO_BITS);
+    hw_set_bits(&usb_hw->main_ctrl, USB_MAIN_CTRL_CONTROLLER_EN_BITS);
+
+    // Optional: per-transaction EP0 IRQ (kept disabled until NS takes over)
+#ifdef USB_SIE_CTRL_EP0_INT_1BUF_BITS
+    hw_set_bits(&usb_hw->sie_ctrl, USB_SIE_CTRL_EP0_INT_1BUF_BITS);
+#endif
+
+    // DO NOT enable device pull-up yet; DO NOT enable block interrupts yet
+    hw_clear_bits(&usb_hw->sie_ctrl, USB_SIE_CTRL_PULLUP_EN_BITS);
+    usb_hw->inte = 0;
 
     rp2350_configure_nvic();
-    rp2350_configure_access_control();
+
 }
