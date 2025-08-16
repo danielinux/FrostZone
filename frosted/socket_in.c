@@ -30,6 +30,11 @@ static struct frosted_inet_socket *fd_inet(int fd)
 {
     struct fnode *fno;
     struct frosted_inet_socket *s;
+    fno = task_filedesc_get(fd);
+    if (!fno)
+        return NULL;
+    if (fno->owner != &mod_socket_in)
+        return NULL;
     s = (struct frosted_inet_socket *)fno->priv;
     return s;
 }
