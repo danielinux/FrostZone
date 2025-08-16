@@ -36,7 +36,7 @@
 
 #ifndef _NET_IF_H_
 #define	_NET_IF_H_
-#include <sys/time.h>
+#include "stdint.h"
 
 
 struct ifnet;
@@ -55,30 +55,30 @@ struct ifnet;
  */
 struct if_data {
 	/* generic interface information */
-	u_char	ifi_type;		/* ethernet, tokenring, etc */
-	u_char	ifi_physical;		/* e.g., AUI, Thinnet, 10base-T, etc */
-	u_char	ifi_addrlen;		/* media address length */
-	u_char	ifi_hdrlen;		/* media header length */
-	u_char	ifi_recvquota;		/* polling quota for receive intrs */
-	u_char	ifi_xmitquota;		/* polling quota for xmit intrs */
-	u_long	ifi_mtu;		/* maximum transmission unit */
-	u_long	ifi_metric;		/* routing metric (external only) */
-	u_long	ifi_baudrate;		/* linespeed */
+	uint8_t	ifi_type;		/* ethernet, tokenring, etc */
+	uint8_t	ifi_physical;		/* e.g., AUI, Thinnet, 10base-T, etc */
+	uint8_t	ifi_addrlen;		/* media address length */
+	uint8_t	ifi_hdrlen;		/* media header length */
+	uint8_t	ifi_recvquota;		/* polling quota for receive intrs */
+	uint8_t	ifi_xmitquota;		/* polling quota for xmit intrs */
+	uint32_t	ifi_mtu;		/* maximum transmission unit */
+	uint32_t	ifi_metric;		/* routing metric (external only) */
+	uint32_t	ifi_baudrate;		/* linespeed */
 	/* volatile statistics */
-	u_long	ifi_ipackets;		/* packets received on interface */
-	u_long	ifi_ierrors;		/* input errors on interface */
-	u_long	ifi_opackets;		/* packets sent on interface */
-	u_long	ifi_oerrors;		/* output errors on interface */
-	u_long	ifi_collisions;		/* collisions on csma interfaces */
-	u_long	ifi_ibytes;		/* total number of octets received */
-	u_long	ifi_obytes;		/* total number of octets sent */
-	u_long	ifi_imcasts;		/* packets received via multicast */
-	u_long	ifi_omcasts;		/* packets sent via multicast */
-	u_long	ifi_iqdrops;		/* dropped on input, this interface */
-	u_long	ifi_noproto;		/* destined for unsupported protocol */
-	u_long	ifi_hwassist;		/* HW offload capabilities */
-	u_long	ifi_unused;		/* XXX was ifi_xmittiming */
-	struct	timeval ifi_lastchange;	/* time of last administrative change */
+	uint32_t	ifi_ipackets;		/* packets received on interface */
+	uint32_t	ifi_ierrors;		/* input errors on interface */
+	uint32_t	ifi_opackets;		/* packets sent on interface */
+	uint32_t	ifi_oerrors;		/* output errors on interface */
+	uint32_t	ifi_collisions;		/* collisions on csma interfaces */
+	uint32_t	ifi_ibytes;		/* total number of octets received */
+	uint32_t	ifi_obytes;		/* total number of octets sent */
+	uint32_t	ifi_imcasts;		/* packets received via multicast */
+	uint32_t	ifi_omcasts;		/* packets sent via multicast */
+	uint32_t	ifi_iqdrops;		/* dropped on input, this interface */
+	uint32_t	ifi_noproto;		/* destined for unsupported protocol */
+	uint32_t	ifi_hwassist;		/* HW offload capabilities */
+	uint32_t	ifi_unused;		/* XXX was ifi_xmittiming */
+	uint64_t    ifi_tv_lastchange[2];	/* time of last administrative change */
 };
 
 #define	IFF_UP		0x1		/* interface is up */
@@ -128,12 +128,12 @@ struct if_data {
  * from getkerninfo and the routing socket
  */
 struct if_msghdr {
-	u_short	ifm_msglen;	/* to skip over non-understood messages */
-	u_char	ifm_version;	/* future binary compatibility */
-	u_char	ifm_type;	/* message type */
+	uint16_t	ifm_msglen;	/* to skip over non-understood messages */
+	uint8_t	ifm_version;	/* future binary compatibility */
+	uint8_t	ifm_type;	/* message type */
 	int	ifm_addrs;	/* like rtm_addrs */
 	int	ifm_flags;	/* value of if_flags */
-	u_short	ifm_index;	/* index for associated ifp */
+	uint16_t	ifm_index;	/* index for associated ifp */
 	struct	if_data ifm_data;/* statistics and other data about if */
 };
 
@@ -142,12 +142,12 @@ struct if_msghdr {
  * from getkerninfo and the routing socket
  */
 struct ifa_msghdr {
-	u_short	ifam_msglen;	/* to skip over non-understood messages */
-	u_char	ifam_version;	/* future binary compatibility */
-	u_char	ifam_type;	/* message type */
+	uint16_t	ifam_msglen;	/* to skip over non-understood messages */
+	uint8_t	ifam_version;	/* future binary compatibility */
+	uint8_t	ifam_type;	/* message type */
 	int	ifam_addrs;	/* like rtm_addrs */
 	int	ifam_flags;	/* value of ifa_flags */
-	u_short	ifam_index;	/* index for associated ifp */
+	uint16_t	ifam_index;	/* index for associated ifp */
 	int	ifam_metric;	/* value of ifa_metric */
 };
 
@@ -156,24 +156,24 @@ struct ifa_msghdr {
  * from the routing socket
  */
 struct ifma_msghdr {
-	u_short	ifmam_msglen;	/* to skip over non-understood messages */
-	u_char	ifmam_version;	/* future binary compatibility */
-	u_char	ifmam_type;	/* message type */
+	uint16_t	ifmam_msglen;	/* to skip over non-understood messages */
+	uint8_t	ifmam_version;	/* future binary compatibility */
+	uint8_t	ifmam_type;	/* message type */
 	int	ifmam_addrs;	/* like rtm_addrs */
 	int	ifmam_flags;	/* value of ifa_flags */
-	u_short	ifmam_index;	/* index for associated ifp */
+	uint16_t	ifmam_index;	/* index for associated ifp */
 };
 
 /*
  * Message format announcing the arrival or departure of a network interface.
  */
 struct if_announcemsghdr {
-	u_short	ifan_msglen;	/* to skip over non-understood messages */
-	u_char	ifan_version;	/* future binary compatibility */
-	u_char	ifan_type;	/* message type */
-	u_short	ifan_index;	/* index for associated ifp */
+	uint16_t	ifan_msglen;	/* to skip over non-understood messages */
+	uint8_t	ifan_version;	/* future binary compatibility */
+	uint8_t	ifan_type;	/* message type */
+	uint16_t	ifan_index;	/* index for associated ifp */
 	char	ifan_name[IFNAMSIZ]; /* if name, e.g. "en0" */
-	u_short	ifan_what;	/* what type of announcement */
+	uint16_t	ifan_what;	/* what type of announcement */
 };
 
 #define	IFAN_ARRIVAL	0	/* interface arrival */
@@ -199,7 +199,7 @@ struct	ifreq {
 		int	ifru_mtu;
 		int	ifru_phys;
 		int	ifru_media;
-		caddr_t	ifru_data;
+		uintptr_t	ifru_data;
 		int	ifru_cap[2];
 	} ifr_ifru;
 #define	ifr_addr	ifr_ifru.ifru_addr	/* address */
@@ -257,7 +257,7 @@ struct ifstat {
 struct	ifconf {
 	int	ifc_len;		/* size of associated buffer */
 	union {
-		caddr_t	ifcu_buf;
+		uintptr_t	ifcu_buf;
 		struct	ifreq *ifcu_req;
 	} ifc_ifcu;
 #define	ifc_buf	ifc_ifcu.ifcu_buf	/* buffer address */
@@ -270,9 +270,9 @@ struct	ifconf {
  */
 struct if_laddrreq {
 	char	iflr_name[IFNAMSIZ];
-	u_int	flags;
+	uint32_t	flags;
 #define	IFLR_PREFIX	0x8000  /* in: prefix given  out: kernel fills id */
-	u_int	prefixlen;         /* in/out */
+	uint32_t	prefixlen;         /* in/out */
 	struct	sockaddr_storage addr;   /* in/out */
 	struct	sockaddr_storage dstaddr; /* out */
 };
@@ -286,16 +286,14 @@ MALLOC_DECLARE(M_IFMADDR);
 
 #ifndef _KERNEL
 struct if_nameindex {
-	u_int	if_index;	/* 1, 2, ... */
+	uint32_t	if_index;	/* 1, 2, ... */
 	char	*if_name;	/* null terminated name: "le0", ... */
 };
 
-__BEGIN_DECLS
-u_int	 if_nametoindex(const char *);
-char	*if_indextoname(u_int, char *);
+uint32_t	 if_nametoindex(const char *);
+char	*if_indextoname(uint32_t, char *);
 struct	 if_nameindex *if_nameindex(void);
 void	 if_freenameindex(struct if_nameindex *);
-__END_DECLS
 #endif
 
 #ifdef _KERNEL

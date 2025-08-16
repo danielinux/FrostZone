@@ -189,7 +189,7 @@ char const *string_desc_arr[] =
   NULL,                          // 3: Serials will use unique ID if possible
  #ifdef CONFIG_USB_NET
   "Frosted CDC ACM-NCM",  // 4: CDC Interface
-  "0202846A9601"   // 5: macaddr
+  "0202846A9609"   // 5: macaddr
  #else
   "Frosted CDC ACM"
 #endif

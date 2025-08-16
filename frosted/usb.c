@@ -24,6 +24,7 @@
 #include "poll.h"
 #include "cirbuf.h"
 #include "locks.h"
+#include "stdint.h"
 
 int ttyusb_init(void);
 #define MAX_TTYUSB_DEV 2
@@ -50,13 +51,24 @@ static void ttyusb_tty_attach(struct fnode *fno, int pid);
 
 static struct module mod_devttyusb = {
     .family = FAMILY_FILE,
-    .name = "ttyUSB",
+    .name = "usb_tty",
     .ops.open = device_open,
     .ops.read = ttyusb_read,
     .ops.poll = ttyusb_poll,
     .ops.write = ttyusb_write,
     .ops.tty_attach = ttyusb_tty_attach,
 };
+
+
+#ifdef CONFIG_USB_NET
+#include "net.h"
+
+
+static struct module mod_devusbnet = {
+    .family = FAMILY_DEV,
+    .name = "usb_net",
+};
+#endif
 
 uint32_t tusb_time_millis_api(void) {
     return jiffies;
@@ -119,6 +131,14 @@ void usb_tasklet(void *arg) {
 #endif
         tud_task(); // tinyusb device task
         cdc_task();
+#ifdef CONFIG_USB_NET
+        if ((jiffies & 0x3) == 0) {
+            if (IPStack)
+                wolfIP_poll(IPStack, jiffies);
+            else
+                netusb_init();
+        }
+#endif
         last_poll = jiffies;
     }
     tasklet_add(usb_tasklet, NULL);
@@ -181,9 +201,7 @@ static void ttyusb_tx_drain(struct dev_ttyusb *u)
         return;
     }
 
-
     avail = tud_cdc_n_write_available(u->itf);
-
     while (avail && cirbuf_bytesinuse(u->outbuf)) {
         uint32_t chunk, wrote;
         uint8_t tmp[64];                 /* bounded copy is fine; loop if larger */
@@ -205,7 +223,6 @@ static void ttyusb_tx_drain(struct dev_ttyusb *u)
     }
 
     tud_cdc_n_write_flush(u->itf);
-
 }
 
 void tud_cdc_tx_complete_cb(uint8_t itf)
@@ -223,16 +240,13 @@ static int ttyusb_write(struct fnode *fno, const void *buf, unsigned int len)
     const uint8_t *p = buf;
     uint32_t written = 0;
     uint32_t pushed;
-
     if (!usb_connected) {
         tud_connect();
         return len;
     }
-
     u = (struct dev_ttyusb *)FNO_MOD_PRIV(fno, &mod_devttyusb);
     if (!u)
         return -1;
-
     mutex_lock(u->dev->mutex);
     /* Fast path: if ready and no backlog, try direct */
     if (usb_tx_ready(u) && cirbuf_bytesinuse(u->outbuf) == 0) {
@@ -254,9 +268,7 @@ static int ttyusb_write(struct fnode *fno, const void *buf, unsigned int len)
     if (usb_tx_ready(u))
         ttyusb_tx_drain(u);
     mutex_unlock(u->dev->mutex);
-
     return (int)written;
-
 }
 
 static int ttyusb_read(struct fnode *fno, void *buf, unsigned int len)
@@ -377,17 +389,147 @@ int ttyusb_init(void)
     return 0;
 }
 
+
+#ifdef CONFIG_USB_NET
+#include "wolfip.h"
+
+/* Two static buffers for RX frames from USB host */
+uint8_t tusb_net_rxbuf[2][LINK_MTU];
+uint8_t tusb_net_rxbuf_used[2] =  {0, 0};
+
+/* Two static buffers for TX frames to USB host */
+uint8_t tusb_net_txbuf[LINK_MTU][2];
+uint16_t tusb_net_txbuf_sz[2] = {0, 0};
+
+
+static int ll_usb_send(struct ll *dev, void *frame, uint32_t sz) {
+    uint16_t sz16 = (uint16_t)sz;
+    uint32_t i;
+    (void) dev;
+    for (;;) {
+        if (!tud_ready()) {
+            return 0;
+        }
+        if (tud_network_can_xmit(sz16)) {
+            for (i = 0; i < 2; i++) {
+                if (tusb_net_txbuf_sz[i] == 0) {
+                    memcpy(tusb_net_txbuf[i], frame, sz16);
+                    tusb_net_txbuf_sz[i] = sz16;
+                    tud_network_xmit(tusb_net_txbuf[i], tusb_net_txbuf_sz[i]);
+                    return (int)sz16;
+                }
+            }
+            return 0;
+        }
+        /* transfer execution to TinyUSB in the hopes that it will finish transmitting the prior packet */
+        tud_task();
+    }
+}
+
+/* This is the callback that TinyUSB calls when it is ready to send a frame.
+ * This is where the write operation is finalized.
+ */
+uint16_t tud_network_xmit_cb(uint8_t *dst, void *ref, uint16_t arg) {
+    uint16_t ret = arg;
+    (void) ref;
+    (void) arg;
+    memcpy(dst, ref, arg);
+    if (ref == tusb_net_rxbuf[0])
+        tusb_net_txbuf_sz[0] = 0;
+    else if (ref == tusb_net_txbuf[1])
+        tusb_net_txbuf_sz[1] = 0;
+    return ret;
+}
+
+/* This is the callback that TinyUSB calls when it is ready to receive a frame.
+ * This is where the read operation is initiated, the frame is copied to the
+ * static buffer, and the buffer is marked as used.
+ */
+
+static void tusb_net_push_rx(const uint8_t *src, uint16_t size) {
+    uint8_t *dst = NULL;
+    int i;
+    for (i = 0; i < 2; i++) {
+        if (!tusb_net_rxbuf_used[i]) {
+            dst = tusb_net_rxbuf[i];
+            break;
+        }
+    }
+    if (dst) {
+        memcpy(dst, src, size);
+        tusb_net_rxbuf_used[i] = 1;
+    }
+}
+
+bool tud_network_recv_cb(const uint8_t *src, uint16_t size) {
+    tusb_net_push_rx(src, size);
+    return true;
+}
+
+/* This is the poll function of the wolfIP device driver.
+ * It is called by the wolfIP stack when it is ready to receive a frame.
+ * It will return the number of bytes received, or 0 if no frame is available.
+ *
+ * Frames copied in tusb_net_push_rx are processed here and sent to the stack.
+ */
+int  ll_usb_poll(struct ll *dev, void *frame, uint32_t sz) {
+    int i;
+    (void) dev;
+    if (sz < 64)
+        return 0;
+    for (i = 0; i < 2; i++) {
+        if (tusb_net_rxbuf_used[i]) {
+            memcpy(frame, tusb_net_rxbuf[i], sz);
+            tusb_net_rxbuf_used[i] = 0;
+            return (int)sz;
+        }
+    }
+    return 0;
+}
+
+
+int netusb_init(void) {
+    const uint8_t usb_macaddr[6] = { 0x02, 0x02, 0x84, 0x6A, 0x96, 0x07 };
+    struct ll *tusb_netdev;
+    register_module(&mod_devusbnet);
+    socket_in_init();
+
+    tusb_netdev = wolfIP_getdev(IPStack);
+    memcpy(tusb_netdev->mac, usb_macaddr, 6);
+    strcpy(tusb_netdev->ifname, "usb");
+    tusb_netdev->poll = ll_usb_poll;
+    tusb_netdev->send = ll_usb_send;
+
+    /* set the IP address, netmask, and gateway */
+    /* 192.168.7.2/24, gateway 192.168.7.1 */
+    wolfIP_ipconfig_set(IPStack, atoip4("192.168.7.2"),
+            atoip4("255.255.255.0"), atoip4("192.168.7.1"));
+    return 0;
+}
+
+#else
+uint16_t tud_network_xmit_cb(uint8_t *dst, void *ref, uint16_t arg) {
+    return arg;
+}
+
 bool tud_network_recv_cb(const uint8_t *src, uint16_t size) {
     return true;
 }
 
 
-uint16_t tud_network_xmit_cb(uint8_t *dst, void *ref, uint16_t arg) {
-    return arg;
-}
+
+#endif
 
 void tud_network_init_cb(void)
 {
 }
 
+
+int secure_getrandom(void *buf, unsigned size);
+uint32_t wolfIP_getrandom(void)
+{
+    uint32_t r;
+    secure_getrandom(&r, sizeof(r));
+    return r;
+}
 

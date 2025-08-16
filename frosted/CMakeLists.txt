@@ -51,8 +51,12 @@ add_executable(task0
     ./usb_descriptors.c
     ./tty_console.c
     ./sysfs.c
+    ./memfs.c
     
     ./frosted_rp2350.c
+
+    ./socket_in.c
+    ./wolfip.c
 	
     # TinyUSB
     ./lib/tinyusb/src/tusb.c

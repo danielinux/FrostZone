@@ -6,19 +6,13 @@ Author: Maxime Vincent, Daniele Lacamera
 
 #include <stdint.h>
 #include <signal.h>
+#include "wolfip.h"
+#include "fcntl.h"
 
 #define SOCKSIZE  16
 #define SOCKSIZE6 28
 
-struct pico_bsd_endpoint;
-extern void   *picoLock;
-extern void   *pico_signal_tick;
-typedef int socklen_t;
-
-
 #define AF_UNSPEC   (0)
-#define AF_INET     (2)
-#define AF_INET6    (10)
 #define SOL_SOCKET (0x80)
 
 #define SO_ERROR            (4103)
@@ -112,25 +106,6 @@ typedef int64_t time_t;
 #define __time_t_defined
 #endif
 
-#if !defined _TIME_H && !defined _TIMEVAL_DEFINED && !defined _STRUCT_TIMEVAL
-struct timeval {
-    time_t tv_sec;
-    time_t tv_usec;
-};
-
-#if !defined __timespec_defined && !defined _SYS__TIMESPEC_H_
-struct timespec {
-    long tv_sec;
-    long tv_nsec;
-};
-#endif
-
-struct timezone {
-    int tz_minuteswest;     /* minutes west of Greenwich */
-    int tz_dsttime;         /* type of DST correction */
-};
-#define _TIMEVAL_DEFINED
-#endif
 
 #ifndef SO_REUSEPORT
     #define SO_REUSEPORT    (15)

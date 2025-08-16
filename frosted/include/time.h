@@ -35,5 +35,6 @@ typedef struct timespec {
     time_t tv_sec;          /* seconds */
     long   tv_nsec;         /* nanoseconds */
 } timespec;
+#define _TIMEVAL_DEFINED
 
 #endif /* _FROSTED_TIME_H */

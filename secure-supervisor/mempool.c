@@ -25,7 +25,7 @@
 #include "limits.h"
 #include "task.h"
 
-#define MEMPOOL_SIZE        (0x60000) /* 20020000 ~ 2006FFFF */
+#define MEMPOOL_SIZE        (0x50000) /* 20030000 ~ 2006FFFF */
 #define MAX_MEMPOOL_BLOCKS  512         /* Max blocks in tracking table */
 #define ALIGNMENT           8
 #define ALIGN_UP(x)         (((x) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1))

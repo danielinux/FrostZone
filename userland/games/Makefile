@@ -7,6 +7,7 @@ APPS-$(APP_DICE)+=dice
 APPS-$(APP_BYTEBEAT)+=bytebeat
 APPS-$(APP_GROOVY)+=groovy
 APPS-$(APP_CMATRIX)+=cmatrix
+APPS-$(APP_LIFE)+=life
 BIN:=$(patsubst %,../out/%,$(APPS-y))
 OBJ:=$(patsubst %,%.o,$(APPS-y))
 
@@ -27,6 +28,7 @@ DOOM/frosted-doom/fdoom:
 
 ../../doom1.wad:
 	wget http://distro.ibiblio.org/pub/linux/distributions/slitaz/sources/packages/d/doom1.wad  -O $@
+
 
 
 ../out/%: %.o

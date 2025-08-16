@@ -82,6 +82,7 @@ struct sysfs_fnode {
     int (*do_write)(struct sysfs_fnode *sfs, const void *buf, int len);
 };
 void sysfs_init(void);
+int sysfs_no_write(struct sysfs_fnode *sfs, const void *buf, int len);
 
 
 /* Scheduler */

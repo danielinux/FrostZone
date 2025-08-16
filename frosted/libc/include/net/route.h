@@ -2,9 +2,6 @@
 #define NET_ROUTE_H
 
 #include <stdint.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <netinet/in.h>
 
 
 struct rtentry {

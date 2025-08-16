@@ -107,7 +107,6 @@ void machine_init(void)
 {
 }
 
-
 void main(void) {
     uint32_t ivt_ns_reset = (NS_RESET_VECTOR) + 1;
 

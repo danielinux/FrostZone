@@ -25,6 +25,8 @@
 #define SG_MAP_MEMORY_REGION    1
 #define SG_VFORK                2
 
+
+
 /* Non-secure caller context struct (optional, can carry metadata) */
 typedef struct {
     uint32_t syscall_id;

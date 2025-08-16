@@ -100,6 +100,63 @@
 #define ACCESS_CONTROL_XIP_AUX          (*(volatile uint32_t *)(ACCESS_CONTROL + 0x00E8))
 
 
+/* ----------------- RESETS (Section 7.5) ----------------- */
+#define RESETS_RESET           *((volatile uint32_t *)(RESETS_BASE + 0x00u))
+#define RESETS_RESET_DONE      *((volatile uint32_t *)(RESETS_BASE + 0x08u))
+/* Bit number for TRNG in RESET/RESET_DONE */
+#define RESETS_TRNG_BIT        25u
+#define RESETS_TRNG_MASK       (1u << RESETS_TRNG_BIT)
+
+/* ----------------- TRNG (Section 12.12) ----------------- */
+
+/* Control & status */
+#define TRNG_RNG_IMR           *((volatile uint32_t *)(TRNG_BASE + 0x100u)) /* Interrupt mask */
+#define TRNG_RNG_ISR           *((volatile uint32_t *)(TRNG_BASE + 0x104u)) /* Status */
+#define TRNG_RNG_ICR           *((volatile uint32_t *)(TRNG_BASE + 0x108u)) /* W1C */
+#define TRNG_CONFIG            *((volatile uint32_t *)(TRNG_BASE + 0x10Cu)) /* RND_SRC_SEL[1:0] */
+#define TRNG_VALID             *((volatile uint32_t *)(TRNG_BASE + 0x110u)) /* EHR_VALID bit mirrors ISR[0] */
+#define TRNG_EHR_DATA0         *((volatile uint32_t *)(TRNG_BASE + 0x114u)) /* then +0x4 up to _DATA5 */
+#define TRNG_EHR_DATA(n)       *((volatile uint32_t *)(TRNG_EHR_DATA0 + ((n) * 4u))) /* n=0..5 */
+#define TRNG_RND_SOURCE_ENABLE *((volatile uint32_t *)(TRNG_BASE + 0x12Cu)) /* bit0 RND_SRC_EN */
+#define TRNG_SAMPLE_CNT1       *((volatile uint32_t *)(TRNG_BASE + 0x130u)) /* sample period */
+#define TRNG_DEBUG_CONTROL     *((volatile uint32_t *)(TRNG_BASE + 0x138u)) /* optional */
+#define TRNG_SW_RESET          *((volatile uint32_t *)(TRNG_BASE + 0x140u)) /* bit0 cause internal reset */
+#define TRNG_BUSY              *((volatile uint32_t *)(TRNG_BASE + 0x1B8u)) /* bit0 busy flag */
+#define TRNG_RST_BITS_COUNTER  *((volatile uint32_t *)(TRNG_BASE + 0x1BCu))
+
+/* RNG_ISR / RNG_ICR bits */
+#define TRNG_ISR_VN_ERR        (1u << 3) /* Von Neumann decorrelator error */
+#define TRNG_ISR_CRNGT_ERR     (1u << 2) /* Continuous RNG test failed */
+#define TRNG_ISR_AUTOCORR_ERR  (1u << 1) /* Autocorrelation test failed 4x */
+#define TRNG_ISR_EHR_VALID     (1u << 0) /* 192 bits ready */
+
+/* RND_SOURCE_ENABLE bit */
+#define TRNG_RND_SRC_EN        (1u << 0)
+
+/* Reasonable defaults per datasheet guidance (sec 12.12.2):
+ * chain length 0 or 1; sample count ~20-25 for ~2ms typical. */
+#define TRNG_DEFAULT_CHAIN_LEN 0u      /* TRNG_CONFIG[1:0] */
+#define TRNG_DEFAULT_SAMPLECNT 25u     /* TRNG_SAMPLE_CNT1 */
+
+/* Simple timeout to avoid deadlocks in pathological cases */
+#define TRNG_TIMEOUT_ITER      (2000000u)
+
+int trng_init(void)
+{
+    RESETS_RESET &= ~RESETS_TRNG_MASK;
+    while (!(RESETS_RESET_DONE & RESETS_TRNG_MASK))
+        ;
+    TRNG_RND_SOURCE_ENABLE = 0;
+    TRNG_RNG_ICR = TRNG_ISR_VN_ERR | TRNG_ISR_CRNGT_ERR | TRNG_ISR_AUTOCORR_ERR |
+                   TRNG_ISR_EHR_VALID;
+    TRNG_CONFIG = TRNG_DEFAULT_CHAIN_LEN & 0x03;
+    TRNG_SAMPLE_CNT1 = TRNG_DEFAULT_SAMPLECNT & 0x7F;
+    TRNG_RST_BITS_COUNTER = 1;
+    TRNG_SW_RESET = 1;
+    return 0;
+}
+
+
 static void rp2350_configure_nvic(void)
 {
     /* Disable all interrupts */
@@ -219,6 +276,77 @@ void secure_core1_start(uint32_t vtor_ns, uint32_t sp_ns, uint32_t entry_ns) {
                                (uint32_t)__core1_sec_vtor);
 }
 
+
+static int trng_getrandom(void *buf, int size)
+{
+    uint8_t *p = (uint8_t *)buf;
+    int remaining = size;
+
+    while (remaining > 0) {
+        /* Clear prior status and counters */
+        TRNG_RNG_ICR = TRNG_ISR_VN_ERR | TRNG_ISR_CRNGT_ERR |
+                              TRNG_ISR_AUTOCORR_ERR | TRNG_ISR_EHR_VALID;
+
+        /* Start entropy generation */
+        TRNG_RND_SOURCE_ENABLE = TRNG_RND_SRC_EN;
+
+        /* Poll for completion or an error */
+        unsigned tmo = TRNG_TIMEOUT_ITER;
+        uint32_t isr;
+        do {
+            isr = TRNG_RNG_ISR;
+            if (isr & (TRNG_ISR_VN_ERR | TRNG_ISR_CRNGT_ERR | TRNG_ISR_AUTOCORR_ERR)) {
+                /* Clear error(s), stop source, and retry this block */
+                TRNG_RNG_ICR = isr;             /* W1C the set bits */
+                TRNG_RND_SOURCE_ENABLE = 0u;    /* stop */
+                /* Optionally increase sample count a bit after an error */
+                uint32_t sc = TRNG_SAMPLE_CNT1;
+                if (sc < 100u) TRNG_SAMPLE_CNT1 = sc + 5u;
+                goto retry_block;
+            }
+        } while (((isr & TRNG_ISR_EHR_VALID) == 0u) && --tmo);
+
+        if (tmo == 0u) {
+            /* Timeout: stop and bail out */
+            TRNG_RND_SOURCE_ENABLE = 0u;
+            break;
+        }
+
+        /* Read 192 bits (6 x 32-bit words). Reading DATA5 clears the EHR. */
+        uint32_t w[6];
+        w[0] = TRNG_EHR_DATA(0);
+        w[1] = TRNG_EHR_DATA(1);
+        w[2] = TRNG_EHR_DATA(2);
+        w[3] = TRNG_EHR_DATA(3);
+        w[4] = TRNG_EHR_DATA(4);
+        w[5] = TRNG_EHR_DATA(5); /* reading this last clears */
+
+        /* Stop source when idle to save power/noise */
+        TRNG_RND_SOURCE_ENABLE = 0u;
+
+        /* Copy as many bytes as the caller still needs (up to 24) */
+        const uint8_t *wb = (const uint8_t *)w;
+        int take = (remaining < 24u) ? remaining : 24u;
+        for (int i = 0; i < take; i++) {
+            p[i] = wb[i];
+        }
+        p += take;
+        remaining -= take;
+
+    retry_block:
+        (void)0;
+    }
+
+    return size - remaining;
+}
+
+__attribute__((cmse_nonsecure_entry))
+int secure_getrandom(void *buf, int size)
+{
+    return trng_getrandom(buf, size);
+}
+
+
 void machine_init(void)
 {
     set_sys_clock_khz(120000, true);
@@ -260,6 +388,8 @@ void machine_init(void)
     // DO NOT enable device pull-up yet; DO NOT enable block interrupts yet
     hw_clear_bits(&usb_hw->sie_ctrl, USB_SIE_CTRL_PULLUP_EN_BITS);
     usb_hw->inte = 0;
+
+    trng_init();
 
     rp2350_configure_nvic();
 

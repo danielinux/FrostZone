@@ -45,6 +45,11 @@ struct ipconf {
 #error "MARK_TCP_SOCKET must be less than MARK_UDP_SOCKET"
 #endif
 
+#define IS_TCP(sck) ((sck) & MARK_TCP_SOCKET)
+#define IS_UDP(sck) ((sck) & MARK_UDP_SOCKET)
+#define IS_WOLFIP_SOCKET(sck) ((sck) & (MARK_TCP_SOCKET | MARK_UDP_SOCKET))
+#define WOLFIP_SOCKETNUM(sck) (IS_TCP(sck)?((sck & ~MARK_TCP_SOCKET)):((sck & ~MARK_UDP_SOCKET)))
+
 
 #ifndef WOLF_POSIX
 #define IPSTACK_SOCK_STREAM 1
@@ -82,8 +87,8 @@ int wolfIP_sock_recvfrom(struct wolfIP *s, int sockfd, void *buf, size_t len, in
 int wolfIP_sock_recv(struct wolfIP *s, int sockfd, void *buf, size_t len, int flags);
 int wolfIP_sock_read(struct wolfIP *s, int sockfd, void *buf, size_t len);
 int wolfIP_sock_close(struct wolfIP *s, int sockfd);
-int wolfIP_sock_getpeername(struct wolfIP *s, int sockfd, struct wolfIP_sockaddr *addr, const socklen_t *addrlen);
-int wolfIP_sock_getsockname(struct wolfIP *s, int sockfd, struct wolfIP_sockaddr *addr, const socklen_t *addrlen);
+int wolfIP_sock_getpeername(struct wolfIP *s, int sockfd, struct wolfIP_sockaddr *addr, socklen_t *addrlen);
+int wolfIP_sock_getsockname(struct wolfIP *s, int sockfd, struct wolfIP_sockaddr *addr, socklen_t *addrlen);
 
 int dhcp_client_init(struct wolfIP *s);
 int dhcp_bound(struct wolfIP *s);
