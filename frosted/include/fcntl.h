@@ -8,19 +8,20 @@
 #define O_ACCMODE   0x0003
 
 /* File creation flags */
-#define O_CREAT     0x0100  /* Create file if it does not exist */
-#define O_EXCL      0x0200  /* Error if O_CREAT and the file exists */
-#define O_NOCTTY    0x0400  /* Do not assign controlling terminal */
-#define O_TRUNC     0x0800  /* Truncate flag */
+#define O_CREAT     0x0200  /* Create file if it does not exist */
+#define O_TRUNC     0x0400  /* Truncate flag */
+#define O_EXCL      0x0800  /* Error if O_CREAT and the file exists */
+
+#define O_NOCTTY    0x8000  /* Do not assign controlling terminal */
 
 /* File status flags */
-#define O_APPEND    0x1000  /* Writes append to end of file */
-#define O_NONBLOCK  0x2000  /* Non-blocking mode */
-#define O_SYNC      0x4000  /* Synchronous writes */
-#define O_DSYNC     0x8000  /* Synchronous data writes */
+#define O_APPEND    0x0008  /* Writes append to end of file */
+#define O_NONBLOCK  0x4000  /* Non-blocking mode */
+#define O_SYNC      0x2000  /* Synchronous writes */
+#define O_DSYNC     O_SYNC  /* Synchronous data writes */
 
 /* Misc */
-#define O_DIRECTORY 0x10000 /* Must be a directory */
-#define O_CLOEXEC   0x20000 /* Close on exec */
+#define O_CLOEXEC   0x40000 /* Close on exec */
+#define O_DIRECTORY 0x200000 /* Must be a directory */
 
 #endif /* _FROSTED_FCNTL_H */

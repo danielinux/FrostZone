@@ -146,19 +146,6 @@ enum KEY_ACTION{
         PAGE_DOWN
 };
 
-static void editorMakeFilename(void) {
-  const char scratchpad_fname[]="cjit-scratchpad.c";
-  char dirname_tmpl[] = "/tmp/cjit-scratchpad.c.XXXXXX";
-  char *dir_nm;
-  size_t filename_sz;
-  if (E.filename)
-      return;
-  dir_nm = mkdtemp(dirname_tmpl);
-  filename_sz = strlen(dir_nm) + 1 + strlen(scratchpad_fname) + 1;
-  E.filename = malloc(filename_sz);
-  snprintf(E.filename, filename_sz, "%s/%s", dir_nm, scratchpad_fname);
-}
-
 void editorSetStatusMessage(const char *fmt, ...);
 
 /* =========================== Syntax highlights DB =========================
@@ -239,6 +226,7 @@ void editorAtExit(void) {
         //unlinkat(0, dir_nm, AT_REMOVEDIR);
         free(cp1);
     }
+    printf("\033[2J\033[1;1H");
 }
 
 /* Raw mode: 1960 magic shit. */
@@ -904,20 +892,25 @@ void editorDelChar() {
 
 /* Load the specified program in the editor memory and returns 0 on success
  * or 1 on error. */
-int editorOpen(void) {
+int editorOpen(char *filename) {
     FILE *fp;
 
-    if (!E.filename)
-        return 0;
 
     E.dirty = 0;
+    free(E.filename);
+    size_t fnlen = strlen(filename)+1;
+    E.filename = malloc(fnlen);
+    memcpy(E.filename,filename,fnlen);
+
     fp = fopen(E.filename,"r");
     if (!fp) {
         if (errno != ENOENT) {
-            perror("Opening file");
-            exit(1);
-        }
-        return 1;
+            fp = fopen(E.filename,"w+");
+            if (!fp) {
+                perror("Error Opening file");
+                exit(1);
+            }
+        } else return 1;
     }
 
     char *line = NULL;
@@ -934,22 +927,11 @@ int editorOpen(void) {
     return 0;
 }
 
-int editorRun(void)
-{
-    int len;
-    char *buf = editorRowsToString(&len);
-    if (E.compiler_cb == NULL) {
-        return 0;
-    }
-    return E.compiler_cb(E.compiler_cb_ctx, buf, 0, NULL);
-}
-
 /* Save the current file on disk. Return 0 on success, 1 on error. */
 int editorSave(void) {
     int len, fd;
     char *buf;
 
-    editorMakeFilename();
     buf = editorRowsToString(&len);
     fd = open(E.filename,O_RDWR|O_CREAT|O_TRUNC,0644);
     if (fd == -1) goto writeerr;
@@ -1381,24 +1363,6 @@ void editorProcessKeypress(int fd) {
         E.keep_scratchpad = 1;
         editorSave();
         break;
-    case CTRL_E:        /* Ctrl-e */
-        char ed_cmd[200]="/usr/bin/editor ";
-        E.dirty++;
-        editorSave();
-        strcat(ed_cmd, E.filename);
-        disableRawMode(STDIN_FILENO);
-        editorReset();
-        printf("Running %s\n", ed_cmd);
-        system(ed_cmd);
-        enableRawMode(STDIN_FILENO);
-        editorOpen();
-        break;
-    case CTRL_R:        /* Ctrl-r */
-        E.cx = 0;
-        E.cy = 0;
-        editorRefreshScreen();
-        editorRun();
-        break;
     case CTRL_F:
         editorFind(fd);
         break;
@@ -1502,7 +1466,7 @@ int main(int argc, char **argv) {
 
     initEditor();
     editorSelectSyntaxHighlight(argv[1]);
-    editorOpen();
+    editorOpen(argv[1]);
     enableRawMode(STDIN_FILENO);
     editorSetStatusMessage(
         "HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find");

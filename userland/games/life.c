@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#define X 80
+#define X 60
 #define Y 25
 // Conway's Game of Life
 // make conway && ./conway
@@ -85,7 +85,7 @@ int main () {
   while (1) {
     tick(game);
     printf("\n");
-    usleep(15000);
+    usleep(300000);
   }
   free(seedboard);
   free(gameboard);

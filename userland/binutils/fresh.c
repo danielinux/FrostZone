@@ -779,6 +779,15 @@ char *readline_tty(char *input, int size)
                 }
             }
 
+            if ((got[0] == 0x0C)) { /* CTRL-L */
+                printf("\033[2J\033[H");
+                fflush(stdout);
+                shellPrompt();
+                for (i = 0; i < len; i++) {
+                    write(STDOUT_FILENO, &input[i], 1);
+                }
+            }
+
             if ((got[0] == 0x0D) || (got[0] == 0x0A)) {
                 input[len] = 0x0A;
                 input[len + 1] = '\0';
