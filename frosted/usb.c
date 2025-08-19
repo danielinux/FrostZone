@@ -48,6 +48,8 @@ static int ttyusb_write(struct fnode *fno, const void *buf, size_t len);
 static int ttyusb_poll(struct fnode *fno, uint16_t events, uint16_t *revents);
 static void ttyusb_tty_attach(struct fnode *fno, int pid);
 
+static sem_t sem_usb;
+
 
 static struct module mod_devttyusb = {
     .family = FAMILY_FILE,
@@ -120,46 +122,69 @@ static void cdc_task(void) {
 void usb_tasklet(void *arg) {
     static uint32_t last_poll = 0;
     (void)arg;
-    if (jiffies > last_poll) {
-        /* Lock both ttyusb */
-        
-        if (!usb_connected)
-            tud_connect();
-
-#ifdef CONFIG_USB_POLLING
-        tusb_int_handler(0, false);
-#endif
+    while(sem_trywait(&sem_usb) == 0) {
         tud_task(); // tinyusb device task
+        tud_cdc_write_flush();
         cdc_task();
-#ifdef CONFIG_USB_NET
-        if ((jiffies & 0x3) == 0) {
-            if (IPStack)
-                wolfIP_poll(IPStack, jiffies);
-            else
-                netusb_init();
-        }
-#endif
         last_poll = jiffies;
     }
-    tasklet_add(usb_tasklet, NULL);
+    if (jiffies > last_poll + 500) {
+        uint32_t disconn_time = jiffies;
+        tud_task();
+        tud_disconnect();
+        while (jiffies < disconn_time + 20) {
+            schedule();
+        }
+        tud_connect();
+    }
+    last_poll = jiffies;
 }
+
+#define USBCTRL_BASE 0x50110000
+#define USB_MAIN *((volatile uint32_t *)(USBCTRL_BASE + 0x40))
+#define USB_SIE_CTRL *((volatile uint32_t *)(USBCTRL_BASE + 0x4C))
+#define USB_SIE_STATUS *((volatile uint32_t *)(USBCTRL_BASE + 0x50))
+#define USB_INTE *((volatile uint32_t *)(USBCTRL_BASE + 0x90))
+#define USB_INTS *((volatile uint32_t *)(USBCTRL_BASE + 0x98))
+
+#define USB_MAIN_PHY_ISO (1 << 2)
+#define USB_MAIN_EN (1 << 0)
+#define USB_INTE_TRANS_COMPLETE (1 << 3)
+#define USB_SIE_STATUS_TRANS_COMPLETE (1 << 18)
+#define USB_SIE_CTRL_EP0_INT_1BUF (1 << 29)
+#define USB_SIE_CTRL_PU_EN (1 << 16)
+
 
 void rp2040_usb_init(void);
 void frosted_usbdev_init(void)
 {
+    uint32_t now;
+    sem_init(&sem_usb, 0);
     tusb_rhport_init_t dev_init = {
         .role = TUSB_ROLE_DEVICE,
         .speed = TUSB_SPEED_AUTO
     };
-#if 0
+
+    now = jiffies;
+    USB_MAIN &= ~USB_MAIN_PHY_ISO;
+
     reset_block(RESETS_RESET_USBCTRL_BITS);
+    
+    while (jiffies < now + 10)
+        schedule();
+
     unreset_block_wait(RESETS_RESET_USBCTRL_BITS);
+
     // init device stack on configured roothub port
-#endif
     rp2040_usb_init();
     tusb_init(BOARD_TUD_RHPORT, &dev_init);
     ttyusb_init();
-    tasklet_add(usb_tasklet, NULL);
+    tud_connect();
+#ifndef CONFIG_USB_POLLING
+    nvic_set_pending(1u << 14);
+    nvic_set_priority(14, 1 << 5);
+    nvic_enable_irq(1u << 14);
+#endif
 }
 
 void tud_mount_cb(void) {
@@ -221,7 +246,7 @@ static void ttyusb_tx_drain(struct dev_ttyusb *u)
         (void)wrote; /* TinyUSB's CDC write is all-or-less, but we handle loop */
         avail = tud_cdc_n_write_available(u->itf);
     }
-
+    sem_post(&sem_usb);
     tud_cdc_n_write_flush(u->itf);
 }
 
@@ -356,33 +381,19 @@ static int ttyusb_fno_init(uint8_t itf)
     return 0;
 }
 
-#define USBCTRL_BASE 0x50110000
-#define USB_SIE_CTRL *((volatile uint32_t *)(USBCTRL_BASE + 0x4C))
-#define USB_SIE_STATUS *((volatile uint32_t *)(USBCTRL_BASE + 0x50))
-#define USB_INTE *((volatile uint32_t *)(USBCTRL_BASE + 0x90))
-#define USB_INTS *((volatile uint32_t *)(USBCTRL_BASE + 0x98))
-#define USB_INTE_TRANS_COMPLETE (1 << 3)
-#define USB_SIE_STATUS_TRANS_COMPLETE (1 << 18)
-#define USB_SIE_CTRL_EP0_INT_1BUF (1 << 29)
-#define USB_SIE_CTRL_PU_EN (1 << 16)
-
 void usb_irq_handler(void)
 {
+    //dcd_int_handler(0);
     tusb_int_handler(0, true);
-    USB_SIE_STATUS |= USB_SIE_STATUS_TRANS_COMPLETE;
+    sem_post(&sem_usb);
+    tasklet_add(usb_tasklet, NULL);
+    //asm volatile("sev");
 }
 
 
 int ttyusb_init(void)
 {
-#ifndef CONFIG_USB_POLLING
-    nvic_set_pending(1u << 14);
-    nvic_set_priority(14, 3u << 6);
-    nvic_enable_irq(1u << 14);
-    USB_SIE_CTRL |= USB_SIE_CTRL_EP0_INT_1BUF;
-    //USB_INTE |= USB_INTE_TRANS_COMPLETE;
-    USB_SIE_CTRL |= USB_SIE_CTRL_PU_EN;
-#endif
+
     register_module(&mod_devttyusb);
     ttyusb_fno_init(0);
     ttyusb_fno_init(1);
@@ -394,12 +405,12 @@ int ttyusb_init(void)
 #include "wolfip.h"
 
 /* Two static buffers for RX frames from USB host */
-uint8_t tusb_net_rxbuf[2][LINK_MTU];
+uint8_t tusb_net_rxbuf[LINK_MTU][2];
 uint8_t tusb_net_rxbuf_used[2] =  {0, 0};
 
 /* Two static buffers for TX frames to USB host */
-uint8_t tusb_net_txbuf[LINK_MTU][2];
-uint16_t tusb_net_txbuf_sz[2] = {0, 0};
+uint8_t tusb_net_txbuf[LINK_MTU][4];
+uint16_t tusb_net_txbuf_sz[4] = {0, 0, 0, 0};
 
 
 static int ll_usb_send(struct ll *dev, void *frame, uint32_t sz) {
@@ -408,10 +419,11 @@ static int ll_usb_send(struct ll *dev, void *frame, uint32_t sz) {
     (void) dev;
     for (;;) {
         if (!tud_ready()) {
+            sem_post(&sem_usb);
             return 0;
         }
         if (tud_network_can_xmit(sz16)) {
-            for (i = 0; i < 2; i++) {
+            for (i = 0; i < 4; i++) {
                 if (tusb_net_txbuf_sz[i] == 0) {
                     memcpy(tusb_net_txbuf[i], frame, sz16);
                     tusb_net_txbuf_sz[i] = sz16;
@@ -419,10 +431,9 @@ static int ll_usb_send(struct ll *dev, void *frame, uint32_t sz) {
                     return (int)sz16;
                 }
             }
+            sem_post(&sem_usb);
             return 0;
         }
-        /* transfer execution to TinyUSB in the hopes that it will finish transmitting the prior packet */
-        tud_task();
     }
 }
 
@@ -438,6 +449,11 @@ uint16_t tud_network_xmit_cb(uint8_t *dst, void *ref, uint16_t arg) {
         tusb_net_txbuf_sz[0] = 0;
     else if (ref == tusb_net_txbuf[1])
         tusb_net_txbuf_sz[1] = 0;
+    else if (ref == tusb_net_txbuf[2])
+        tusb_net_txbuf_sz[2] = 0;
+    else if (ref == tusb_net_txbuf[3])
+        tusb_net_txbuf_sz[3] = 0;
+    sem_post(&sem_usb);
     return ret;
 }
 
@@ -463,6 +479,7 @@ static void tusb_net_push_rx(const uint8_t *src, uint16_t size) {
 
 bool tud_network_recv_cb(const uint8_t *src, uint16_t size) {
     tusb_net_push_rx(src, size);
+    tud_network_recv_renew();
     return true;
 }
 

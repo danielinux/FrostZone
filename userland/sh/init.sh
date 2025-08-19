@@ -1,2 +1,2 @@
 #!/bin/fresh
-fresh -t /dev/ttyUSB0 
+/bin/fresh -t /dev/ttyUSB0

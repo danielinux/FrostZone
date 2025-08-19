@@ -7,11 +7,35 @@
 #include "config.h"
 #include "net/if.h"
 #include "net/route.h"
+#include "locks.h"
+#include "wolfip.h"
 
 
 static struct module mod_socket_in;
 
 volatile struct wolfIP *IPStack;
+static mutex_t *ipstack_mutex;
+int ipstack_timer = -1;
+
+void ipstack_lock(void)
+{
+    if (ipstack_mutex)
+        mutex_lock(ipstack_mutex);
+}
+
+void ipstack_unlock(void)
+{
+    if (ipstack_mutex)
+        mutex_unlock(ipstack_mutex);
+}
+
+int ipstack_trylock(void)
+{
+    if (ipstack_mutex)
+        return mutex_trylock(ipstack_mutex);
+    return 0;
+}
+
 
 struct frosted_inet_socket {
     struct fnode *node;
@@ -705,9 +729,20 @@ static int sysfs_no_op(struct sysfs_fnode *sfs, void *buf, int len)
 }
 
 
+#define IPTIMER_STACK_INTERVAL_MS 5
+static void ipstack_timer_cb(void *arg)
+{
+    if (IPStack)
+        wolfIP_poll(IPStack, jiffies);
+    ktimer_add(IPTIMER_STACK_INTERVAL_MS, ipstack_timer_cb, NULL);
+}
+
+
 void socket_in_init(void)
 {
     mod_socket_in.family = FAMILY_INET;
+    if (!ipstack_mutex) 
+        ipstack_mutex = mutex_init();
     wolfIP_init_static(&IPStack);
     strcpy(mod_socket_in.name,"tcp_ip");
     mod_socket_in.ops.poll = sock_poll;
@@ -734,4 +769,7 @@ void socket_in_init(void)
 
     /* Register /sys/net/route */
     sysfs_register("route", "/sys/net", sysfs_net_route_list, sysfs_no_write);
+
+    /* Start TCP/IP timer */
+    ipstack_timer = ktimer_add(IPTIMER_STACK_INTERVAL_MS, ipstack_timer_cb, NULL);
 }

@@ -15,6 +15,9 @@
 /* Vector base register */
 #define SCB_VTOR       (*(volatile uint32_t *)0xE000ED08)
 
+/* System interrupt priority */
+#define SCB_SHPR       ((volatile uint8_t *)(0xE000ED18))
+
 /* System exception numbers (ARM Cortex-M) */
 #define NVIC_NMI_IRQ              (-14)
 #define NVIC_HARDFAULT_IRQ        (-13)
@@ -51,10 +54,12 @@ static inline void nvic_clear_pending(uint32_t irq)
         NVIC_ICPR_BASE[irq >> 5] = (1U << (irq & 0x1F));
 }
 
-static inline void nvic_set_priority(uint32_t irq, uint8_t priority)
+static inline void nvic_set_priority(int irq, uint8_t priority)
 {
-    if (irq < NVIC_NUM_IRQS)
+    if (irq > 0)
         NVIC_IPR_BASE[irq] = priority;
+    else
+        SCB_SHPR[(uint32_t)(irq & 0x0FUL) - 4] = priority;
 }
 
 static inline void nvic_trigger_irq(uint32_t irq)

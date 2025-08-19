@@ -38,12 +38,14 @@
 #include "tty_console.h"
 #include "systick.h"
 #include "tusb.h"
+#include "nvic.h"
 
 
 
 #define IDLE() while(1){do{}while(0);}
 
 static int tcpip_timer_pending = 0;
+static volatile int cpu1_started = 0;
 
 /* The following needs to be defined by
  * the application code
@@ -164,6 +166,21 @@ void usage_fault_handler(void)
     while(1);
 }
 
+extern uintptr_t *_ram_vectors;
+extern uintptr_t *_flash_vectors;
+void relocate_vectors(void)
+{
+    uintptr_t flash_iv = &_flash_vectors;
+    uintptr_t ram_iv = &_ram_vectors;
+    memcpy(ram_iv, flash_iv, 0x200);
+    SCB_VTOR = ram_iv;
+    asm volatile("dsb");
+
+}
+
+
+
+
 static void hw_init(void)
 {
     gpio_init();
@@ -183,10 +200,12 @@ extern unsigned long __core1_ns_stack_top;
 
 void cpu1_main(void)
 {
+    nvic_disable_irq(1 << 14);
+    cpu1_started = 1;
     while(1)
     {
         check_tasklets();
-        asm volatile("wfe");
+        //asm volatile("wfe");
     }
 
 }
@@ -208,7 +227,6 @@ const void *core1_ivt[] = {
 void secure_core1_start(uint32_t vtor_ns, uint32_t sp_ns, uint32_t entry_ns);
 void cpu1_start(void)
 {
-    task_stop(get_kernel());
     secure_core1_start((uintptr_t)&__core1_ns_ivt,
                        (uintptr_t)&__core1_ns_stack_top,
                        (uintptr_t)&cpu1_main);
@@ -220,6 +238,9 @@ int frosted_init(void)
 {
     extern void * _k__syscall__;
     int xip_mounted;
+#ifdef CONFIG_RELOCATE_VECTORS_TO_RAM
+    relocate_vectors();
+#endif
     /* ktimers must be enabled before systick */
     ktimer_init();
     
@@ -264,7 +285,8 @@ int frosted_init(void)
 #ifdef UNIX
     socket_un_init();
 #endif
-    cpu1_start();
+    netusb_init();
+    //cpu1_start();
 
     return xip_mounted;
 }
@@ -307,7 +329,8 @@ void frosted_kernel(int xipfs_mounted)
     frosted_scheduler_on();
 
     while(1) {
-        check_tasklets();
+        if (!cpu1_started)
+            check_tasklets();
         asm volatile ("wfe");
     }
 }

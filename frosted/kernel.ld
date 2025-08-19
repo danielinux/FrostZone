@@ -11,6 +11,7 @@ MEMORY
 SECTIONS
 {
     .vectors : {
+        PROVIDE(_flash_vectors = .);
         KEEP(*(.vectors))
     } > FLASH
 
@@ -25,6 +26,9 @@ SECTIONS
         *(.time_critical.tinyusb*)
         . = ALIGN(4);
         __core1_ns_ivt = .;
+        . = ALIGN(0x200);
+        PROVIDE(_ram_vectors = .);
+        . = ALIGN(0x200); /* Reserve space for vectors in RAM */
         KEEP(*(.core1_vectors*));
         . = ALIGN(512);
         PROVIDE(_ns_edata = .);

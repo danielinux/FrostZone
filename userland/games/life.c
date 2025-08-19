@@ -1,8 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#define X 60
-#define Y 20
+#define X 80
+#define Y 25
 // Conway's Game of Life
 // make conway && ./conway
 // change X and Y for display area

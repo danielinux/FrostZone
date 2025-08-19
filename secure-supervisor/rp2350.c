@@ -31,7 +31,7 @@
 
 #define NVIC_ICER0 (*(volatile uint32_t *)(0xE000E180))
 #define NVIC_ICPR0 (*(volatile uint32_t *)(0xE000E280))
-#define NVIC_ITNS0 (*(volatile uint32_t *)(0xE000EF00))
+#define NVIC_ITNS0 (*(volatile uint32_t *)(0xE000E380))
 
 #define NSACR (*(volatile uint32_t *)(0xE000ED8C))
 #define CPACR (*(volatile uint32_t *)(0xE000ED88))
@@ -347,15 +347,23 @@ int secure_getrandom(void *buf, int size)
 }
 
 
+#define USB_MAIN *((volatile uint32_t *)(USBCTRL_BASE + 0x40))
+#define USB_MAIN_PHY_ISO (1 << 2)
+#define USB_MAIN_CONTROLLER_EN (1 << 0)
+
 void machine_init(void)
 {
     set_sys_clock_khz(120000, true);
 
-    rp2350_configure_access_control();
+    USB_MAIN |= USB_MAIN_PHY_ISO; // PHY isolation
+    USB_MAIN &= (~USB_MAIN_CONTROLLER_EN); // Disable controller
+
     gpio_set_function(24, GPIO_FUNC_USB);          // DM
     gpio_set_function(25, GPIO_FUNC_USB);          // DP
     gpio_disable_pulls(24);
     gpio_disable_pulls(25);
+    rp2350_configure_access_control();
+#if 0
 
     pll_init(pll_usb, 1, 480 * MHZ, 5, 2);  // VCO=480MHz -> 480/(5*2)=48MHz
 
@@ -388,6 +396,7 @@ void machine_init(void)
     // DO NOT enable device pull-up yet; DO NOT enable block interrupts yet
     hw_clear_bits(&usb_hw->sie_ctrl, USB_SIE_CTRL_PULLUP_EN_BITS);
     usb_hw->inte = 0;
+#endif
 
     trng_init();
 

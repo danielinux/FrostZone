@@ -22,7 +22,6 @@
 #include "heap.h"
 #include "nvic.h"
 #include "systick.h"
-#define SEV() asm volatile ("sev")
 
 
 volatile unsigned int jiffies = 0u;
@@ -33,9 +32,9 @@ static int _sched_active = 0;
 
 void frosted_scheduler_on(void)
 {
-    nvic_set_priority(NVIC_PENDSV_IRQ, 2);
-    nvic_set_priority(NVIC_SV_CALL_IRQ, 1);
-    nvic_set_priority(NVIC_SYSTICK_IRQ, 0);
+    nvic_set_priority(NVIC_PENDSV_IRQ, 4 << 5);
+    nvic_set_priority(NVIC_SV_CALL_IRQ, 3 << 5);
+    nvic_set_priority(NVIC_SYSTICK_IRQ, 2 << 5);
     nvic_enable_irq(NVIC_SYSTICK_IRQ);
     systick_counter_enable();
     systick_interrupt_enable();
@@ -143,7 +142,6 @@ void sys_tick_handler(void)
     SysTick_Hook();
     jiffies ++;
     _n_int++;
-    asm volatile("sev");
 
     if (ktimer_expired()) {
         task_preempt_all();

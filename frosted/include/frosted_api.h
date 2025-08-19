@@ -59,6 +59,7 @@ struct dirent {
 #define SOCK_DGRAM 17
 #endif
 
+
 struct __attribute__((packed)) sockaddr {
     uint16_t sa_family;
     uint8_t  sa_zero[14];

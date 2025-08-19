@@ -152,7 +152,7 @@ int sys_register_handler(uint32_t n, int (*_sys_c)(uint32_t arg1, uint32_t arg2,
 }
 
 #define MAX_TASKS 16
-#define BASE_TIMESLICE (5)
+#define BASE_TIMESLICE (20)
 
 //#define TIMESLICE(x) ((BASE_TIMESLICE) - ((x)->tb.nice >> 1))
 #define TIMESLICE(x) BASE_TIMESLICE
