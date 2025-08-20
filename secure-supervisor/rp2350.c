@@ -28,6 +28,7 @@
 #include "hardware/structs/usb.h"
 #include "hardware/resets.h"
 #include "pico/multicore.h"
+#include "pico/rand.h"
 
 #define NVIC_ICER0 (*(volatile uint32_t *)(0xE000E180))
 #define NVIC_ICPR0 (*(volatile uint32_t *)(0xE000E280))
@@ -110,13 +111,11 @@
 /* ----------------- TRNG (Section 12.12) ----------------- */
 
 /* Control & status */
-#define TRNG_RNG_IMR           *((volatile uint32_t *)(TRNG_BASE + 0x100u)) /* Interrupt mask */
 #define TRNG_RNG_ISR           *((volatile uint32_t *)(TRNG_BASE + 0x104u)) /* Status */
 #define TRNG_RNG_ICR           *((volatile uint32_t *)(TRNG_BASE + 0x108u)) /* W1C */
 #define TRNG_CONFIG            *((volatile uint32_t *)(TRNG_BASE + 0x10Cu)) /* RND_SRC_SEL[1:0] */
 #define TRNG_VALID             *((volatile uint32_t *)(TRNG_BASE + 0x110u)) /* EHR_VALID bit mirrors ISR[0] */
-#define TRNG_EHR_DATA0         *((volatile uint32_t *)(TRNG_BASE + 0x114u)) /* then +0x4 up to _DATA5 */
-#define TRNG_EHR_DATA(n)       *((volatile uint32_t *)(TRNG_EHR_DATA0 + ((n) * 4u))) /* n=0..5 */
+#define TRNG_EHR_DATA           ((volatile uint32_t *)(TRNG_BASE + 0x114u)) /* Array of 5 uint32_t */
 #define TRNG_RND_SOURCE_ENABLE *((volatile uint32_t *)(TRNG_BASE + 0x12Cu)) /* bit0 RND_SRC_EN */
 #define TRNG_SAMPLE_CNT1       *((volatile uint32_t *)(TRNG_BASE + 0x130u)) /* sample period */
 #define TRNG_DEBUG_CONTROL     *((volatile uint32_t *)(TRNG_BASE + 0x138u)) /* optional */
@@ -314,12 +313,12 @@ static int trng_getrandom(void *buf, int size)
 
         /* Read 192 bits (6 x 32-bit words). Reading DATA5 clears the EHR. */
         uint32_t w[6];
-        w[0] = TRNG_EHR_DATA(0);
-        w[1] = TRNG_EHR_DATA(1);
-        w[2] = TRNG_EHR_DATA(2);
-        w[3] = TRNG_EHR_DATA(3);
-        w[4] = TRNG_EHR_DATA(4);
-        w[5] = TRNG_EHR_DATA(5); /* reading this last clears */
+        w[0] = TRNG_EHR_DATA[0];
+        w[1] = TRNG_EHR_DATA[1];
+        w[2] = TRNG_EHR_DATA[2];
+        w[3] = TRNG_EHR_DATA[3];
+        w[4] = TRNG_EHR_DATA[4];
+        w[5] = TRNG_EHR_DATA[5]; /* reading this last clears */
 
         /* Stop source when idle to save power/noise */
         TRNG_RND_SOURCE_ENABLE = 0u;
@@ -343,7 +342,19 @@ static int trng_getrandom(void *buf, int size)
 __attribute__((cmse_nonsecure_entry))
 int secure_getrandom(void *buf, int size)
 {
-    return trng_getrandom(buf, size);
+    uint64_t rand64;
+    int take, ret = size; 
+    if (size < 0)
+        return -1;
+    while (size) {
+        rand64 = get_rand_64();
+        take = size < 8 ? size : 8;
+        memcpy(buf, &rand64, take);
+        buf += take;
+        size -= take;
+    }
+    return ret;
+    //return trng_getrandom(buf, size);
 }
 
 

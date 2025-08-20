@@ -187,11 +187,11 @@ static int sock_recvfrom(int fd, void *buf, unsigned int len, int flags, struct 
             ret = wolfIP_sock_read(IPStack, s->sock_fd, buf + s->bytes, len - s->bytes);
         }
 
-        if (ret < 0) {
+        if ((ret < 0) && (ret != (-11))) {
             goto out;
         }
 
-        if (ret == 0) {
+        if ((ret == 0) || (ret == -11)) {
             s->revents &= (~CB_EVENT_READABLE);
             if (SOCK_BLOCKING(s))  {
                 s->events = CB_EVENT_READABLE;
@@ -200,7 +200,6 @@ static int sock_recvfrom(int fd, void *buf, unsigned int len, int flags, struct 
                 ret = SYS_CALL_AGAIN;
                 goto out;
             }
-            break;
         }
         s->bytes += ret;
         if (s->bytes > 0)
@@ -287,15 +286,20 @@ static int sock_accept(int fd, struct sockaddr *addr, unsigned int *addrlen)
     if (!l) {
         return -EINVAL;
     }
-    l->events = CB_EVENT_WRITABLE;
+    l->events = CB_EVENT_READABLE;
 
     sock_fd = wolfIP_sock_accept(IPStack, l->sock_fd, addr, addrlen);
     if ((sock_fd < 0) && (sock_fd != -11))
         return sock_fd;
-    if (sock_fd == -11)
+    if (sock_fd == -11) {
+        if (SOCK_BLOCKING(l)) {
+            l->task = this_task();
+            task_suspend();
+        }
         return SYS_CALL_AGAIN;
+    }
     
-    l->revents &= (~CB_EVENT_WRITABLE);
+    l->revents &= (~CB_EVENT_READABLE);
     if (sock_fd >= 0) {
         s = sockfd_inet(sock_fd);
         if (!s) {
@@ -327,20 +331,21 @@ static int sock_connect(int fd, struct sockaddr *addr, unsigned int addrlen)
         return -EINVAL;
     }
 
-    s->events = CB_EVENT_WRITABLE;
-    if ((s->revents & CB_EVENT_WRITABLE) == 0) {
+    s->events = CB_EVENT_READABLE;
+    if ((s->revents & CB_EVENT_READABLE) == 0) {
         ret = wolfIP_sock_connect(IPStack, s->sock_fd, addr, addrlen);
         if (SOCK_BLOCKING(s)) {
             s->task = this_task();
+            task_suspend();
             ret = SYS_CALL_AGAIN;
         } else {
             ret = -EAGAIN;
         }
     }
-    /* CB_EVENT_WRITABLE received. Successfully connected. */
+    /* CB_EVENT_READABLE received. Successfully connected. */
     ret = 0;
-    s->events  &= ~(CB_EVENT_WRITABLE);
-    s->revents &= ~(CB_EVENT_WRITABLE);
+    s->events  &= ~(CB_EVENT_READABLE);
+    s->revents &= ~(CB_EVENT_READABLE);
     return ret;
 }
 
@@ -354,7 +359,7 @@ static int sock_listen(int fd, int backlog)
         goto out;
     }
     ret = wolfIP_sock_listen(IPStack, s->sock_fd, backlog);
-    s->events |= CB_EVENT_WRITABLE;
+    s->events |= CB_EVENT_READABLE;
 out:
     
     return ret;
