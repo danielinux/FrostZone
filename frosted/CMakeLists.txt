@@ -52,6 +52,7 @@ add_executable(task0
     ./tty_console.c
     ./sysfs.c
     ./memfs.c
+    ./flashfs.c
     
     ./frosted_rp2350.c
 
@@ -117,6 +118,8 @@ target_compile_definitions(task0 PRIVATE
     CONFIG_USB_NET=1
     CONFIG_SIGNALS=1
     CONFIG_PTY_UNIX=1
+
+    CONFIG_EXTENDED_MEMFAULT=1
 
     LINK_MTU=1514
 )

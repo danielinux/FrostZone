@@ -269,6 +269,7 @@ struct mountpoint
 };
 
 struct fnode *fno_create(struct module *owner, const char *name, struct fnode *parent);
+struct fnode *fno_create_raw(struct module *owner, const char *name, struct fnode *parent);
 struct fnode *fno_create_rdonly(struct module *owner, const char *name, struct fnode *parent);
 struct fnode *fno_create_wronly(struct module *owner, const char *name, struct fnode *parent);
 struct fnode *fno_mkdir(struct module *owner, const char *name, struct fnode *parent);

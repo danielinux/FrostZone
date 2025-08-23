@@ -1,0 +1,5 @@
+connect
+r
+erase 0x101F0000 0x10200000 reset
+g
+exit

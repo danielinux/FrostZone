@@ -1,105 +1,206 @@
 /*
- *      This file is part of frostzone.
+ *      This file is part of frosted.
  *
- *      frostzone is free software: you can redistribute it and/or modify
- *      it under the terms of the GNU General Public License version 3, as
+ *      frosted is free software: you can redistribute it and/or modify
+ *      it under the terms of the GNU General Public License version 2, as
  *      published by the Free Software Foundation.
  *
  *
- *      frostzone is distributed in the hope that it will be useful,
+ *      frosted is distributed in the hope that it will be useful,
  *      but WITHOUT ANY WARRANTY; without even the implied warranty of
  *      MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *      GNU General Public License for more details.
  *
  *      You should have received a copy of the GNU General Public License
- *      along with frostzone.  If not, see <http://www.gnu.org/licenses/>.
+ *      along with frosted.  If not, see <http://www.gnu.org/licenses/>.
  *
- *      Authors: Daniele Lacamera
- * 
+ *      Authors:
+ *
  */
 
 #include <stdint.h>
-#include "task.h"
+
+#define MPU_BASE        (0xE002ED90UL)   /* MPU register block base address in non-secure domain */
+
+#include "mpu_struct.h"
+#include "mpu_armv8.h"
 #include "limits.h"
 
-extern secure_task_t secure_tasks[];
+volatile MPU_Type *volatile MPU = (MPU_Type *)MPU_BASE;
 
-/* ARMv8‑M MPU registers */
-#define MPU_TYPE       (*(volatile uint32_t *)0xE000ED90)
-#define MPU_CTRL       (*(volatile uint32_t *)0xE000ED94)
-#define MPU_RNR        (*(volatile uint32_t *)0xE000ED98)
-#define MPU_RBAR       (*(volatile uint32_t *)0xE000ED9C)
-#define MPU_RLAR       (*(volatile uint32_t *)0xE000EDA0)
 
-/* Helper macros for region attributes */
-#define MPU_AP_FULL      (0x07 << 8)   /* Full access (AP[2:0] = 111) */
-#define MPU_AP_RW        (0x03 << 8)   /* Read/Write (AP[2:0] = 011) */
-#define MPU_XN           (0x0 << 4)    /* Execute allowed (XN = 0) */
-#define MPU_REGION_ENABLE (0x1)        /* Enable bit in RLAR */
 
-/* Disable the MPU and clear all regions */
-void mpu_disable(void)
+#define NS_FILESYSTEM_START (0x10010000UL)
+#define NS_FILESYSTEM_END   (0x10200000UL - 1)
+
+#define NS_RAM_START      (0x20010000UL )
+#define NS_RAM_END        (0x20080000UL - 1)
+
+#define DEV_START        (0x40000000UL)
+#define DEV_END          (0x60000000UL - 1)
+
+#define REG_START        (0xE0000000UL)
+#define REG_END          (0xE0100000UL - 1)
+
+
+enum attr_layout {
+  ATTR_NORMAL_WBWA = 0,  /* Normal, WB/WA (inner+outer) */
+  ATTR_NORMAL_NC   = 1,  /* Normal, Non-cacheable (inner+outer) */
+  ATTR_DEV_nGnRE   = 2,  /* Device nGnRE */
+  ATTR_DEV_nGnRnE  = 3   /* Device nGnRnE */
+};
+
+
+void mpu_init(void)
 {
-    /* Disable MPU */
-    MPU_CTRL = 0;
+    uint32_t mair0, o, b, i;
+    MPU->CTRL = 0U; /* Disable */
+#ifndef DISABLE_MPU
+    /* Fill attribute tables */
+    /* Slot 0: normal WB/WA (out = in = 0xF) */
+    mair0 = MPU->MAIR0;
+    o = ARM_MPU_ATTR_MEMORY_(1U, 1U, 1U, 1U);
+    b = ARM_MPU_ATTR(o, o);
+    mair0 = (mair0 & ~(0xFFU << (ATTR_NORMAL_WBWA * 8))) |
+        (b << (ATTR_NORMAL_WBWA * 8));
+    MPU->MAIR0 = mair0;
 
-    /* Clear all regions */
-    uint32_t regions = ((MPU_TYPE >> 8) & 0xFF); /* DREGION field */
-    for (uint32_t i = 0; i < regions; i++) {
-        MPU_RNR  = i;
-        MPU_RBAR = 0;
-        MPU_RLAR = 0;
-    }
-
-    /* Ensure the changes take effect */
-    __asm volatile ("dsb");
-    __asm volatile ("isb");
-}
+    /* Slot 1: Normal Non-cacheable (0x44) */
+    mair0 = MPU->MAIR0;
+    b = ARM_MPU_ATTR(ARM_MPU_ATTR_NON_CACHEABLE, ARM_MPU_ATTR_NON_CACHEABLE);
+    mair0 = (mair0 & ~(0xFFU << (ATTR_NORMAL_NC * 8))) |
+        (b << (ATTR_NORMAL_NC * 8));
+    MPU->MAIR0 = mair0;
     
-static void add_region(uint32_t base, uint32_t size, uint32_t ap, uint32_t nr) {
-    MPU_RNR  = nr;
-    MPU_RBAR = base & 0xFFFFFFE0;          /* 32‑byte alignment */
-    MPU_RLAR = (base + size - 1) & 0xFFFFFFE0
-        | ap | MPU_XN | MPU_REGION_ENABLE;
-}
+    /* Slot 2: Device memory (nGnRE) */
+    mair0 = MPU->MAIR0;
+    b = ARM_MPU_ATTR(ARM_MPU_ATTR_DEVICE, ARM_MPU_ATTR_DEVICE_nGnRE);
+    mair0 = (mair0 & ~(0xFFU << (ATTR_DEV_nGnRE * 8))) |
+        (b << (ATTR_DEV_nGnRE * 8));
+    MPU->MAIR0 = mair0;
 
-/* Configure MPU regions for all secure tasks (including the kernel) */
-void mpu_configure(void)
-{
-    /* First disable MPU and clear all regions */
-    mpu_disable();
+    /* Slot 3: Strongly ordered memory (nGnRnE) */
+    mair0 = MPU->MAIR0;
+    b = ARM_MPU_ATTR(ARM_MPU_ATTR_DEVICE, ARM_MPU_ATTR_DEVICE_nGnRnE);
+    mair0 = (mair0 & ~(0xFFU << (ATTR_DEV_nGnRnE * 8))) |
+        (b << (ATTR_DEV_nGnRnE * 8));
+    MPU->MAIR0 = mair0;
 
-    /* Determine how many regions the MPU supports */
-    uint32_t max_regions = ((MPU_TYPE >> 8) & 0xFF);
-    uint32_t region_idx  = 0;
+    /* NS blanket regions */
+    /* Access is denied by default via PRIVDEFENA=0 */
 
-    /* Helper to add a region */
+    /* Region 0: Device + PPB space. Read-write. Privileged. Non-executable. */
+    MPU->RNR = 0;
+    MPU->RBAR = ARM_MPU_RBAR(DEV_START, ARM_MPU_SH_OUTER,
+            0U, /* RW */
+            0U, /* P */
+            1U /* XN */
+            );
+    MPU->RLAR = ARM_MPU_RLAR(REG_END, ATTR_DEV_nGnRnE); /* Ends after registers. */
 
-    /* Iterate over all secure tasks */
-    for (int i = 0; i < MAX_SECURE_TASKS; i++) {
-        secure_task_t *t = &secure_tasks[i];
-        if (t->task_id == 0xFFFF) {
-            continue; /* unused entry */
-        }
+    
+    /* Region 1: Kernel Non-secure RAM. Read-write. Privileged. Executable. */
+    MPU->RNR = 1;
+    MPU->RBAR = ARM_MPU_RBAR(NS_RAM_START, ARM_MPU_SH_INNER,
+            0U, /* RW */
+            0U, /* P */
+            0U /* X */
+            );
+    MPU->RLAR = ARM_MPU_RLAR(NS_RAM_END, ATTR_NORMAL_NC);
+    
+    /* Region 2: Kernel and processes: Non-secure flash. Read-only. Non-privileged. Executable. */
+    MPU->RNR = 2;
+    MPU->RBAR = ARM_MPU_RBAR(NS_FILESYSTEM_START, ARM_MPU_SH_NON,
+            1U, /* RO */
+            1U, /* NP */
+            0U /* X */
+            );
+    MPU->RLAR = ARM_MPU_RLAR(NS_FILESYSTEM_END, ATTR_NORMAL_NC);
 
-        /* Determine access permissions */
-        uint32_t ap = (t->task_id == 0) ? MPU_AP_FULL : MPU_AP_RW;
-
-        /* Main segment (data/bss) */
-        if (t->main_segment.base && t->main_segment.size) {
-            add_region((uint32_t)t->main_segment.base,
-                       t->main_segment.size, ap, region_idx++);
-        }
-
-        /* Mempool blocks */
-        for (int j = 0; j < CONFIG_MEMPOOL_SEGMENTS_PER_TASK; j++) {
-            if (t->mempool[j].base && t->mempool[j].size) {
-                add_region((uint32_t)t->mempool[j].base,
-                           t->mempool[j].size, ap, region_idx++);
-            }
-        }
+    /* Regions 3-7: Disable */
+    for (i = 3; i < 8; i++) {
+        MPU->RNR = i;
+        MPU->RBAR = 0;
+        MPU->RLAR = 0;
     }
 
-    /* Enable MPU with default privileged settings */
-    MPU_CTRL = MPU_CTRL | 0x1; /* Enable MPU */
+    /* Go! */
+    MPU->CTRL = MPU_CTRL_ENABLE_Msk;
+#endif /* DISABLE_MPU */
+    asm volatile("dsb");
+    asm volatile("isb");
+}
+
+static uint32_t rbar_build(uint32_t base, uint32_t sh, uint32_t rw, uint32_t np, uint32_t xn)
+{
+    volatile uint32_t rbar = base & MPU_RBAR_BASE_Msk;
+    rbar |= sh << 3;
+    rbar |= np << 2;
+    rbar |= rw << 1;
+    rbar |= xn;
+    return rbar;
+}
+
+__attribute__((cmse_nonsecure_entry))
+void mpu_task_on(uint16_t pid)
+{
+    secure_task_t *task;
+    uint32_t i;
+    task = get_secure_task(pid);
+    MPU->CTRL = 0;
+
+#ifndef DISABLE_MPU
+    /* Regions 3-7: Disable */
+    for (i = 3; i < 8; i++) {
+        MPU->RNR = i;
+        MPU->RBAR = 0;
+        MPU->RLAR = 0;
+    }
+
+    if ((pid == 0) || (!task)) {
+        MPU->CTRL = MPU_CTRL_ENABLE_Msk; 
+        return;
+    }
+
+    /* Stack space for the task */
+    MPU->RNR = 3;
+    MPU->RBAR = rbar_build((uintptr_t)task->stack_segment.base, ARM_MPU_SH_INNER,
+            0U, /* RW */
+            1U, /* NP */
+            1U /* XN */
+            );
+    MPU->RLAR = ARM_MPU_RLAR((uintptr_t)task->stack_segment.base + task->stack_segment.size + 32,
+            ATTR_NORMAL_NC);
+
+    /* Main segment for the task */
+    MPU->RNR = 4;
+    MPU->RBAR = rbar_build((uintptr_t)task->main_segment.base, ARM_MPU_SH_INNER,
+            0U, /* RW */
+            1U, /* NP */
+            1U /* XN */
+            );
+    MPU->RLAR = ARM_MPU_RLAR((uintptr_t)task->main_segment.base + task->main_segment.size + 32,
+            ATTR_NORMAL_NC);
+
+    /* Up to three heap segments for the task */
+    for (int i = 0; i < task->mempool_count && i < 3; i++) {
+        MPU->RNR = 5 + i;
+        MPU->RBAR = rbar_build((uintptr_t)task->mempool[i].base, ARM_MPU_SH_INNER,
+                0U, /* RW */
+                1U, /* NP */
+                1U /* XN */
+                );
+        MPU->RLAR = ARM_MPU_RLAR((uintptr_t)task->mempool[i].base + task->mempool[i].size + 32,
+                ATTR_NORMAL_NC);
+    }
+    /* Disable unused */
+    for (i = task->mempool_count; i < 3; i++) {
+        MPU->RNR = 5 + i;
+        MPU->RLAR = 0;
+    }
+
+    MPU->CTRL = MPU_CTRL_ENABLE_Msk;
+#endif /* DISABLE_MPU */
+    asm volatile("dsb");
+    asm volatile("isb");
 }

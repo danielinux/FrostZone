@@ -15,8 +15,12 @@
 /* Vector base register */
 #define SCB_VTOR       (*(volatile uint32_t *)0xE000ED08)
 
+
 /* System interrupt priority */
 #define SCB_SHPR       ((volatile uint8_t *)(0xE000ED18))
+
+/* System interrupt control register */ 
+#define SCB_SHCSR      (*(volatile uint32_t *)0xE000ED24)
 
 /* System exception numbers (ARM Cortex-M) */
 #define NVIC_NMI_IRQ              (-14)
@@ -72,6 +76,13 @@ static inline void **nvic_vector_base(void)
 {
     return (void **)(SCB_VTOR);
 }
+
+static inline void nvic_enable_memfault(void)
+{
+    SCB_SHCSR |= (1 << 16);
+    SCB_SHPR[0] |= 0x80;
+}
+
 
 void empty_handler(void);
 

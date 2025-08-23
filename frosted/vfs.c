@@ -257,9 +257,11 @@ static int path_check(const char *path, const char *dirname)
 {
 
     int i = 0;
-    for (i = 0; dirname[i]; i++) {
-        if (path[i] != dirname[i])
-            return 0;
+    if (dirname) {
+        for (i = 0; dirname[i]; i++) {
+            if (path[i] != dirname[i])
+                return 0;
+        }
     }
 
     if (path[i] == '\0')
@@ -268,7 +270,7 @@ static int path_check(const char *path, const char *dirname)
     if (path[i] == '/')
         return 1;
 
-    if (i > 0 && (path[i - 1] == '/' && dirname[i - 1] == '/'))
+    if (i > 0 && (path[i - 1] == '/' && (!dirname || dirname[i - 1] == '/')))
         return 1;
 
     return 0;
@@ -375,6 +377,11 @@ static struct fnode *_fno_create(struct module *owner, const char *name, struct 
     fno->children = NULL;
     fno->owner = owner;
     return fno;
+}
+
+struct fnode *fno_create_raw(struct module *owner, const char *name, struct fnode *parent)
+{
+    return _fno_create(owner, name, parent);
 }
 
 struct fnode *fno_create(struct module *owner, const char *name, struct fnode *parent)
@@ -1076,5 +1083,8 @@ void vfs_init(void)
 
     /* Init "/mnt" dir */
     fno_mkdir(NULL, "mnt", NULL);
+
+    /* Init "/var" dir */
+    fno_mkdir(NULL, "var", NULL);
 }
 

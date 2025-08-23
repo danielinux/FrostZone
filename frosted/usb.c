@@ -122,6 +122,8 @@ static void cdc_task(void) {
 void usb_tasklet(void *arg) {
     static uint32_t last_poll = 0;
     (void)arg;
+    if (!tusb_inited())
+        return;
     while(sem_trywait(&sem_usb) == 0) {
         tud_task(); // tinyusb device task
         tud_cdc_write_flush();

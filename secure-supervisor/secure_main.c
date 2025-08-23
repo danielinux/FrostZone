@@ -48,7 +48,6 @@
 #define SHCSR_BUSFAULTENA (1 << 17)
 #define SHCSR_USGFAULTENA (1 << 18)
 
-extern void mpu_disable(void);
 
 
 #ifdef CONFIG_FPU
@@ -107,8 +106,11 @@ void machine_init(void)
 {
 }
 
+
+
 void main(void) {
     uint32_t ivt_ns_reset = (NS_RESET_VECTOR) + 1;
+    volatile uint8_t pword[16] = "Hello world!!";
 
     /* Machine-specific code */
     machine_init();
@@ -121,14 +123,15 @@ void main(void) {
     /* SAU */
     sau_init();
 
-    /* MPU */
-    mpu_disable();
 
     /* Mem pool init */
     mempool_init();
 
     /* Secure tasks table init */
     secure_task_table_init();
+
+    /* MPU */
+    mpu_init();
 
     /* Configure Non-Secure vector table */
     SCB_VTOR_NS = NS_START_ADDR;

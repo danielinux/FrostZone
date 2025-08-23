@@ -151,6 +151,9 @@ static void *mempool_task_alloc(size_t task_size, uint16_t task_id)
     return NULL; /* No memory available to create this task. */
 }
 
+
+#define MMAP_ALIGN 64
+
 /* Pool memory allocator for processes.
  * Called by the kernel upon mmap() syscall, when a process requests
  * a new memory area to manage the heap allocations.
@@ -158,8 +161,15 @@ static void *mempool_task_alloc(size_t task_size, uint16_t task_id)
  */
 void *mempool_mmap(size_t size, uint16_t task_id, uint32_t flags)
 {
-
     int i, j;
+    uint32_t size_alignment = size % MMAP_ALIGN;
+
+    if (size == 0)
+        return NULL;
+    if (size_alignment) {
+        size += MMAP_ALIGN - size_alignment;
+    }
+
     secure_task_t *task = get_secure_task(task_id);
     if (!task || !(task->caps & CAP_MALLOC)) {
         return NULL; /* no capability */

@@ -153,6 +153,8 @@ static void try_merge_blocks(uint8_t *base, uint16_t *offset, uint32_t capacity)
     while (off + sizeof(uint32_t) <= *offset) {
         uint32_t *hdr = (uint32_t *)(base + off);
         uint32_t size = *hdr & BLOCK_SIZE_MASK;
+        if (!size)
+            break;
         if (!(*hdr & BLOCK_FREE)) {
             max_used = off + size;
         } else {

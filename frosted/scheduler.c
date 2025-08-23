@@ -1302,7 +1302,7 @@ static void task_create_real(struct task *new, void *arg, unsigned int nice)
 
     /* Base/Top of the stack memory */
     new->tb.cur_stack = new->stack;
-    sp = (((uint8_t *)(new->stack)) + SCHEDULER_STACK_SIZE);
+    sp = (((uint8_t *)(new->stack)) + SCHEDULER_STACK_SIZE - 32);
 
     /* Push the arguments at the top */
     new->tb.arg = task_pass_args(arg, new->tb.pid, &sp);
@@ -1321,6 +1321,8 @@ static void task_create_real(struct task *new, void *arg, unsigned int nice)
     extra_frame = (struct extra_stack_frame *)sp;
     extra_frame->r9 = (uint32_t)new->tb.exec_info.got_loc;
     new->tb.sp = (uint32_t *)sp;
+    asm volatile ("dsb");
+    asm volatile ("isb");
 }
 
 int task_create(struct task_exec_info *exec_info, void *arg, unsigned int nice)
@@ -1375,8 +1377,7 @@ int scheduler_exec(struct task_exec_info *info, void *args)
     task_create_real(t, (void *)args, t->tb.nice);
     asm volatile("msr " PSP ", %0" ::"r"(_cur_task->tb.sp));
     t->tb.state = TASK_RUNNING;
-    mpu_task_on((void *)(((uint32_t)t->tb.cur_stack) -
-                         (sizeof(struct task_block))));
+    mpu_task_on(_cur_task->tb.pid);
     return 0;
 }
 
@@ -2175,13 +2176,13 @@ void __naked pend_sv_handler(void)
         asm volatile("isb");
         restore_kernel_context();
         runnable = RUN_KERNEL;
+        mpu_task_on(0);
     } else {
-        mpu_task_on((void *)(((uint32_t)_cur_task->tb.cur_stack) -
-                             (sizeof(struct task_block))));
         asm volatile("msr " PSP ", %0" ::"r"(_cur_task->tb.sp));
         asm volatile("isb");
         restore_task_context();
         runnable = RUN_USER;
+        mpu_task_on(_cur_task->tb.pid);
     }
 
     /* Set control bit for non-kernel threads */
@@ -3117,13 +3118,13 @@ return_from_syscall:
         asm volatile("isb");
         restore_kernel_context();
         runnable = RUN_KERNEL;
+        mpu_task_on(0);
     } else {
-        mpu_task_on((void *)(((uint32_t)_cur_task->tb.cur_stack) -
-                             (sizeof(struct task_block))));
         asm volatile("msr " PSP ", %0" ::"r"(_cur_task->tb.sp));
         asm volatile("isb");
         restore_task_context();
         runnable = RUN_USER;
+        mpu_task_on(_cur_task->tb.pid);
     }
 
     /* Set control bit for non-kernel threads */

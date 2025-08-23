@@ -206,12 +206,27 @@ static int memfs_mount(char *source, char *tgt, uint32_t flags, void *arg)
     return 0;
 }
 
+static int memfs_mount_info(struct fnode *fno, char *buf, int len)
+{
+    const char desc[] = "Volatile (tmpfs) filesystem in RAM";
+    if (len < 0)
+        return -1;
+    strncpy(buf,desc,len);
+    if (len > strlen(desc)) {
+        len = strlen(desc);
+        buf[len++] = 0;
+    } else
+        buf[len - 1] = 0;
+    return len;
+}
+
 void memfs_init(void)
 {
     mod_memfs.family = FAMILY_FILE;
     strcpy(mod_memfs.name,"memfs");
 
     mod_memfs.mount = memfs_mount;
+    mod_memfs.mount_info = memfs_mount_info;
 
     mod_memfs.ops.read = memfs_read;
     mod_memfs.ops.poll = memfs_poll;

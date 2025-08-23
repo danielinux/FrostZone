@@ -25,7 +25,7 @@ DIR-y+=lib binutils hw-utils netutils games tests
 DIR-$(APP_BUSYBOX)+=busybox
 
 # COMPILER FLAGS -- Target CPU
-CFLAGS+=-mthumb -mlittle-endian -mthumb-interwork -ffunction-sections -D__Frosted__
+CFLAGS+=-mthumb -mlittle-endian -mthumb-interwork -ffunction-sections -D__Frosted__ -Wno-implicit-int -Wno-implicit-function-declaration
 ifeq ($(ARCH),)
 	CFLAGS+=-mcpu=cortex-m33
 else

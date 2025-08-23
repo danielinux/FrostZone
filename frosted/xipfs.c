@@ -209,12 +209,27 @@ static int xipfs_mount(char *source, char *tgt, uint32_t flags, void *arg)
     return 0;
 }
 
+static int xipfs_mount_info(struct fnode *fno, char *buf, int len)
+{
+    const char desc[] = "Applications and executables in bFLT format";
+    if (len < 0)
+        return -1;
+    strncpy(buf,desc,len);
+    if (len > strlen(desc)) {
+        len = strlen(desc);
+        buf[len++] = 0;
+    } else
+        buf[len - 1] = 0;
+    return len;
+}
+
 
 void xipfs_init(void)
 {
     mod_xipfs.family = FAMILY_FILE;
     mod_xipfs.mount = xipfs_mount;
     strcpy(mod_xipfs.name,"xipfs");
+    mod_xipfs.mount_info = xipfs_mount_info;
     mod_xipfs.ops.read = xipfs_read;
     mod_xipfs.ops.poll = xipfs_poll;
     mod_xipfs.ops.write = xipfs_write;

@@ -364,7 +364,10 @@ bool dcd_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
   usb_hw->pwr = USB_USB_PWR_VBUS_DETECT_BITS | USB_USB_PWR_VBUS_DETECT_OVERRIDE_EN_BITS;
 #endif
 
+  /* Danielinux: removed adding an IRQ here, our IVT is in flash. */
+#if 0
   irq_add_shared_handler(USBCTRL_IRQ, dcd_rp2040_irq, PICO_SHARED_IRQ_HANDLER_HIGHEST_ORDER_PRIORITY);
+#endif
 
   // Init control endpoints
   tu_memclr(hw_endpoints[0], 2 * sizeof(hw_endpoint_t));

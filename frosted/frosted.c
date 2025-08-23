@@ -238,13 +238,20 @@ int frosted_init(void)
 {
     extern void * _k__syscall__;
     int xip_mounted;
+
+    nvic_enable_memfault();
+
+    /* Disable FPU */
+    #define NS_FPU_FPCCR   (*(volatile uint32_t *)0xE000EF34UL)  /* FPCCR @ +0xEF34 */
+    #define FPCCR_ASPEN    (1u << 31)
+    #define FPCCR_LSPEN    (1u << 30)
+    NS_FPU_FPCCR &= ~(FPCCR_ASPEN | FPCCR_LSPEN);
+
 #ifdef CONFIG_RELOCATE_VECTORS_TO_RAM
     relocate_vectors();
 #endif
     /* ktimers must be enabled before systick */
     ktimer_init();
-    
-
     kernel_task_init();
     
 
@@ -260,16 +267,13 @@ int frosted_init(void)
 
     /* Set up system */
 
-
-    mpu_init();
-    
-
     syscalls_init();
 
     memfs_init();
     xipfs_init();
     sysfs_init();
     fatfs_init();
+    flashfs_init();
 
     ltdc_init();
     fbcon_init( 480, 272);
@@ -278,6 +282,7 @@ int frosted_init(void)
     vfs_mount(NULL, "/tmp", "memfs", 0, NULL);
     xip_mounted = vfs_mount((char *)init, "/bin", "xipfs", 0, NULL);
     vfs_mount(NULL, "/sys", "sysfs", 0, NULL);
+    vfs_mount(NULL, "/var", "flashfs", 0, NULL);
 
     klog_init();
 

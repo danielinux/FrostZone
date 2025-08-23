@@ -3,6 +3,7 @@
 *.d
 *.elf
 *.bin
+*.out
 secure-supervisor/build
 frosted/build
 userland/out/*

@@ -706,6 +706,20 @@ static int sysfs_mount(char *source, char *tgt, uint32_t flags, void *args)
     return 0;
 }
 
+static int sysfs_mount_info(struct fnode *fno, char *buf, int len)
+{
+    const char desc[] = "Kernel runtime status and configuration";
+    if (len < 0)
+        return -1;
+    strncpy(buf,desc,len);
+    if (len > strlen(desc)) {
+        len = strlen(desc);
+        buf[len++] = 0;
+    } else
+        buf[len - 1] = 0;
+    return len;
+}
+
 
 void sysfs_init(void)
 {
@@ -713,6 +727,7 @@ void sysfs_init(void)
     strcpy(mod_sysfs.name, "sysfs");
 
     mod_sysfs.mount = sysfs_mount;
+    mod_sysfs.mount_info = sysfs_mount_info;
 
     mod_sysfs.ops.read = sysfs_read;
     mod_sysfs.ops.poll = sysfs_poll;

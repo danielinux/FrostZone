@@ -11,6 +11,8 @@ APPS-$(APP_LIFE)+=life
 BIN:=$(patsubst %,../out/%,$(APPS-y))
 OBJ:=$(patsubst %,%.o,$(APPS-y))
 
+CFLAGS+=-Wno-implicit-int
+
 DOOM-$(APP_DOOM):=../out/fdoom ../../doom1.wad
 
 all: $(BIN) $(DOOM-y)
