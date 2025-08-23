@@ -1,6 +1,7 @@
 python
 import gdb
 
+
 class AddEx(gdb.Command):
     """Add a symbol file for the current fno->fname with .gdb suffix."""
 
@@ -165,6 +166,7 @@ target remote :3333
 mon reset init
 break secure_main
 add-symbol-file frosted/build/task0.elf
+set $mpu = (MPU_Type *)(0xe000ed90)
 focus cmd
 continue
 

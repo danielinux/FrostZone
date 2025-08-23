@@ -204,9 +204,10 @@ struct __attribute__((packed)) extra_stack_frame {
 #define EXTRA_FRAME_SIZE ((sizeof(struct extra_stack_frame)))
 
 static void *_top_stack;
-#define TASK_FLAG_VFORK 0x01
+#define TASK_FLAG_VFORK_PARENT 0x01
 #define TASK_FLAG_IN_SYSCALL 0x02
 #define TASK_FLAG_SIGNALED 0x04
+#define TASK_FLAG_VFORK_CHILD 0x08
 #define TASK_FLAG_INTR 0x40
 #define TASK_FLAG_SYSCALL_STOP 0x80
 /* thread related */
@@ -1282,7 +1283,7 @@ static void task_create_real(struct task *new, void *arg, unsigned int nice)
     new->tb.specifics = NULL;
     new->tb.n_specifics = 0;
 
-    if ((new->tb.flags &TASK_FLAG_VFORK) != 0) {
+    if ((new->tb.flags & TASK_FLAG_VFORK_CHILD) != 0) {
         struct task *pt = tasklist_get(&tasks_idling, new->tb.ppid);
         if (!pt)
             pt = tasklist_get(&tasks_running, new->tb.ppid);
@@ -1293,7 +1294,7 @@ static void task_create_real(struct task *new, void *arg, unsigned int nice)
             secure_swap_stack(pt->tb.pid, new->tb.pid);
             task_resume_vfork(pt);
         }
-        new->tb.flags &= (~TASK_FLAG_VFORK);
+        new->tb.flags &= (~TASK_FLAG_VFORK_CHILD);
     } else {
         new->stack = secure_mmap_stack(SCHEDULER_STACK_SIZE, new->tb.pid);
     }
@@ -1331,6 +1332,8 @@ int task_create(struct task_exec_info *exec_info, void *arg, unsigned int nice)
     int i;
     struct filedesc_table *ft;
 
+    irq_off();
+
     new = task_space_alloc();
     if (!new) {
         return -ENOMEM;
@@ -1366,6 +1369,7 @@ int task_create(struct task_exec_info *exec_info, void *arg, unsigned int nice)
     secure_mempool_chown(new->tb.exec_info.mmap_base, new->tb.pid, 0);
     task_create_real(new, arg, nice);
     new->tb.state = TASK_RUNNABLE;
+    irq_on();
     return new->tb.pid;
 }
 
@@ -1377,7 +1381,7 @@ int scheduler_exec(struct task_exec_info *info, void *args)
     task_create_real(t, (void *)args, t->tb.nice);
     asm volatile("msr " PSP ", %0" ::"r"(_cur_task->tb.sp));
     t->tb.state = TASK_RUNNING;
-    mpu_task_on(_cur_task->tb.pid);
+    mpu_task_on(_cur_task->tb.pid, 0);
     return 0;
 }
 
@@ -1407,7 +1411,7 @@ int sys_vfork_hdlr(void)
     new->tb.filedesc_table = NULL;
     new->tb.arg = NULL;
     memcpy(&new->tb.exec_info, &_cur_task->tb.exec_info, sizeof(struct task_exec_info));
-    new->tb.flags = TASK_FLAG_VFORK;
+    new->tb.flags = TASK_FLAG_VFORK_CHILD;
     new->tb.cwd = task_getcwd();
     new->tb.timer_id = -1;
     new->tb.specifics = NULL;
@@ -1422,7 +1426,7 @@ int sys_vfork_hdlr(void)
         /* Inherit signal mask */
         new->tb.sigmask = _cur_task->tb.sigmask;
     }
-    
+
 
     new->tb.next = NULL;
     tasklist_add(&tasks_running, new);
@@ -1430,8 +1434,8 @@ int sys_vfork_hdlr(void)
 
     /* Set parent's vfork retval by writing on stacked r0 */
     *((uint32_t *)(_cur_task->tb.sp + EXTRA_FRAME_SIZE)) = vpid;
-    
-    /* Create a new stack space for the process, but 
+
+    /* Create a new stack space for the process, but
      * attach it to the parent's stack temporarily, until
      * we're done exec'ing or exiting
      */
@@ -2176,21 +2180,28 @@ void __naked pend_sv_handler(void)
         asm volatile("isb");
         restore_kernel_context();
         runnable = RUN_KERNEL;
-        mpu_task_on(0);
+        mpu_task_on(0, 0);
+        asm volatile("msr CONTROL, %0" ::"r"(0x00));
     } else {
         asm volatile("msr " PSP ", %0" ::"r"(_cur_task->tb.sp));
         asm volatile("isb");
         restore_task_context();
         runnable = RUN_USER;
-        mpu_task_on(_cur_task->tb.pid);
+        if (_cur_task->tb.flags & TASK_FLAG_VFORK_CHILD)
+            mpu_task_on(_cur_task->tb.pid, _cur_task->tb.ppid);
+        else
+            mpu_task_on(_cur_task->tb.pid, 0);
+        asm volatile("msr CONTROL, %0" ::"r"(0x01));
     }
 
+#if 0
     /* Set control bit for non-kernel threads */
     if (_cur_task->tb.pid != 0) {
         asm volatile("msr CONTROL, %0" ::"r"(0x01));
     } else {
         asm volatile("msr CONTROL, %0" ::"r"(0x00));
     }
+#endif
     asm volatile("isb");
 
     /* Set return value selected by the restore procedure;
@@ -2389,7 +2400,7 @@ void task_terminate(struct task *t)
             struct task *pt = tasklist_get(&tasks_idling, t->tb.ppid);
             if (!pt)
                 pt = tasklist_get(&tasks_running, t->tb.ppid);
-            if (t->tb.flags & TASK_FLAG_VFORK) {
+            if (t->tb.flags & TASK_FLAG_VFORK_CHILD) {
                 /* Restore parent's stack copy */
                 if (pt) {
                     memcpy(t->stack, pt->stack, SCHEDULER_STACK_SIZE);
@@ -3118,21 +3129,28 @@ return_from_syscall:
         asm volatile("isb");
         restore_kernel_context();
         runnable = RUN_KERNEL;
-        mpu_task_on(0);
+        mpu_task_on(0, 0);
+        asm volatile("msr CONTROL, %0" ::"r"(0x00));
     } else {
         asm volatile("msr " PSP ", %0" ::"r"(_cur_task->tb.sp));
         asm volatile("isb");
         restore_task_context();
         runnable = RUN_USER;
-        mpu_task_on(_cur_task->tb.pid);
+        if (_cur_task->tb.flags & TASK_FLAG_VFORK_CHILD)
+            mpu_task_on(_cur_task->tb.pid, _cur_task->tb.ppid);
+        else
+            mpu_task_on(_cur_task->tb.pid, 0);
+        asm volatile("msr CONTROL, %0" ::"r"(0x01));
     }
 
+#if 0
     /* Set control bit for non-kernel threads */
     if (_cur_task->tb.pid != 0) {
         asm volatile("msr CONTROL, %0" ::"r"(0x01));
     } else {
         asm volatile("msr CONTROL, %0" ::"r"(0x00));
     }
+#endif
     asm volatile("isb");
 
     /* Set return value selected by the restore procedure */

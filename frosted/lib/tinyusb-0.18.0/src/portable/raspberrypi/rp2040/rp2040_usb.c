@@ -153,7 +153,6 @@ static uint32_t __tusb_irq_path_func(prepare_ep_buffer)(struct hw_endpoint* ep, 
 
 // Prepare buffer control register value
 void __tusb_irq_path_func(hw_endpoint_start_next_buffer)(struct hw_endpoint* ep) {
-  uint32_t ep_ctrl = *ep->endpoint_control;
 
   // always compute and start with buffer 0
   uint32_t buf_ctrl = prepare_ep_buffer(ep, 0) | USB_BUF_CTRL_SEL;
@@ -166,6 +165,10 @@ void __tusb_irq_path_func(hw_endpoint_start_next_buffer)(struct hw_endpoint* ep)
   bool const is_host = is_host_mode();
   bool const force_single = (!is_host && !tu_edpt_dir(ep->ep_addr)) ||
                             (is_host && tu_edpt_number(ep->ep_addr) != 0);
+  uint32_t ep_ctrl = 0;
+  
+  if (ep->endpoint_control)
+      ep_ctrl = *ep->endpoint_control;
 
   if (ep->remaining_len && !force_single) {
     // Use buffer 1 (double buffered) if there is still data
@@ -182,7 +185,8 @@ void __tusb_irq_path_func(hw_endpoint_start_next_buffer)(struct hw_endpoint* ep)
     ep_ctrl |= EP_CTRL_INTERRUPT_PER_BUFFER;
   }
 
-  *ep->endpoint_control = ep_ctrl;
+  if (ep->endpoint_control)
+      *ep->endpoint_control = ep_ctrl;
 
   TU_LOG(3, "  Prepare BufCtrl: [0] = 0x%04x  [1] = 0x%04x\r\n", tu_u32_low16(buf_ctrl), tu_u32_high16(buf_ctrl));
 
@@ -263,7 +267,7 @@ static void __tusb_irq_path_func(_hw_endpoint_xfer_sync)(struct hw_endpoint* ep)
   uint16_t buf0_bytes = sync_ep_buffer(ep, 0);
 
   // sync buffer 1 if double buffered
-  if ((*ep->endpoint_control) & EP_CTRL_DOUBLE_BUFFERED_BITS) {
+  if ((ep->endpoint_control) && ((*ep->endpoint_control) & EP_CTRL_DOUBLE_BUFFERED_BITS)) {
     if (buf0_bytes == ep->wMaxPacketSize) {
       // sync buffer 1 if not short packet
       sync_ep_buffer(ep, 1);
