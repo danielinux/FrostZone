@@ -354,63 +354,18 @@ int secure_getrandom(void *buf, int size)
         size -= take;
     }
     return ret;
-    //return trng_getrandom(buf, size);
 }
 
 
-#define USB_MAIN *((volatile uint32_t *)(USBCTRL_BASE + 0x40))
-#define USB_MAIN_PHY_ISO (1 << 2)
-#define USB_MAIN_CONTROLLER_EN (1 << 0)
 
 void machine_init(void)
 {
     set_sys_clock_khz(120000, true);
-
-    USB_MAIN |= USB_MAIN_PHY_ISO; // PHY isolation
-    USB_MAIN &= (~USB_MAIN_CONTROLLER_EN); // Disable controller
-
-    gpio_set_function(24, GPIO_FUNC_USB);          // DM
-    gpio_set_function(25, GPIO_FUNC_USB);          // DP
-    gpio_disable_pulls(24);
-    gpio_disable_pulls(25);
+    stdio_init_all();
+    sleep_ms(100);
+    printf("Hello from microkernel\n");
+    sleep_ms(200);
     rp2350_configure_access_control();
-#if 0
-
-    pll_init(pll_usb, 1, 480 * MHZ, 5, 2);  // VCO=480MHz -> 480/(5*2)=48MHz
-
-    clock_configure(clk_usb,
-            0,  // no glitchless mux for clk_usb
-            CLOCKS_CLK_USB_CTRL_AUXSRC_VALUE_CLKSRC_PLL_USB,
-            48 * MHZ,   // src_freq (PLL_USB out)
-            48 * MHZ);  // target freq
-                        //
-    // Reset -> unreset USBCTRL
-    reset_block(RESETS_RESET_USBCTRL_BITS);
-    unreset_block_wait(RESETS_RESET_USBCTRL_BITS);
-
-    // Clear DPRAM
-    memset(usb_dpram, 0, sizeof(*usb_dpram));
-
-    // Route controller to on-chip PHY, force VBUS present
-    usb_hw->muxing = USB_USB_MUXING_TO_PHY_BITS | USB_USB_MUXING_SOFTCON_BITS;
-    usb_hw->pwr    = USB_USB_PWR_VBUS_DETECT_BITS | USB_USB_PWR_VBUS_DETECT_OVERRIDE_EN_BITS;
-
-    // Clear PHY isolation (RP2350) and enable controller
-    hw_clear_bits(&usb_hw->main_ctrl, USB_MAIN_CTRL_PHY_ISO_BITS);
-    hw_set_bits(&usb_hw->main_ctrl, USB_MAIN_CTRL_CONTROLLER_EN_BITS);
-
-    // Optional: per-transaction EP0 IRQ (kept disabled until NS takes over)
-#ifdef USB_SIE_CTRL_EP0_INT_1BUF_BITS
-    hw_set_bits(&usb_hw->sie_ctrl, USB_SIE_CTRL_EP0_INT_1BUF_BITS);
-#endif
-
-    // DO NOT enable device pull-up yet; DO NOT enable block interrupts yet
-    hw_clear_bits(&usb_hw->sie_ctrl, USB_SIE_CTRL_PULLUP_EN_BITS);
-    usb_hw->inte = 0;
-#endif
-
     trng_init();
-
     rp2350_configure_nvic();
-
 }

@@ -15,7 +15,7 @@
  *      along with frostzone.  If not, see <http://www.gnu.org/licenses/>.
  *
  *      Authors: Daniele Lacamera
- * 
+ *
  */
 #include <stdint.h>
 
@@ -25,7 +25,7 @@
 #include "mempool.h"
 
 #include "pico/stdlib.h"
-    
+
 #define NS_START_ADDR     0x10010000U               /* Base of NS Flash */
 #define SCB_VTOR_NS       (*(volatile uint32_t *)0xE002ED08)
 #define SCB_VTOR          (*(volatile uint32_t *)0xE000ED08)
@@ -85,7 +85,7 @@ static void sau_init(void)
 
     /* RAM: non-secure area (managed via MPU) */
     sau_init_region(5, 0x20010000, 0x2007FFFF, 0);
-    
+
     /* RAM: secure area for supervisor's stack */
     sau_init_region(6, 0x20080000, 0x20081FFF, 1);
 
@@ -106,7 +106,9 @@ void machine_init(void)
 {
 }
 
-
+#define USB_MAIN *((volatile uint32_t *)(USBCTRL_BASE + 0x40))
+#define USB_MAIN_PHY_ISO (1 << 2)
+#define USB_MAIN_CONTROLLER_EN (1 << 0)
 
 void main(void) {
     uint32_t ivt_ns_reset = (NS_RESET_VECTOR) + 1;
@@ -135,6 +137,17 @@ void main(void) {
 
     /* Configure Non-Secure vector table */
     SCB_VTOR_NS = NS_START_ADDR;
+
+    /* detach USB (rp2350) */
+    stdio_flush();
+    stdio_deinit_all();
+    USB_MAIN |= USB_MAIN_PHY_ISO; // PHY isolation
+    USB_MAIN &= (~USB_MAIN_CONTROLLER_EN); // Disable controller
+
+    gpio_set_function(24, GPIO_FUNC_USB);          // DM
+    gpio_set_function(25, GPIO_FUNC_USB);          // DP
+    gpio_disable_pulls(24);
+    gpio_disable_pulls(25);
 
     /* Set Non-Secure MSP */
     asm volatile ( "msr msp_ns, %0\n" : : "r" (NS_MSP_INIT));

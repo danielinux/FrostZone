@@ -17,7 +17,7 @@ set(PICO_PLATFORM=rp2350)
 set(PICO_BOARD=pico2_w)
 set(PICO_CYW43_SUPPORTED=1)
 set(CYW43_CONFIG_FILE="cyw43_configport.h")
-set(PICO_NO_SHARED_INTERRUPT_TABLE)
+#set(PICO_NO_SHARED_INTERRUPT_TABLE)
 
 # initialize the Raspberry Pi Pico SDK
 pico_sdk_init()

@@ -53,7 +53,9 @@ SECTIONS
 
     .text : {
         __logical_binary_start = .;
-        KEEP (*(.custom_ivt))
+        KEEP (*(.vectors))
+        /* KEEP (*(.custom_ivt)) */
+
         KEEP (*(.binary_info_header))
         __binary_info_header_end = .;
         KEEP (*(.embedded_block))
@@ -104,11 +106,6 @@ SECTIONS
         . = ALIGN(4);
     } > FLASH
    
-/*
-    /DISCARD/ : {
-        *(.vectors)
-    }
-        */
 
     .gnu.sgstubs :
     {

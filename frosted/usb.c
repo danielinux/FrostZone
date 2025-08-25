@@ -168,13 +168,9 @@ void frosted_usbdev_init(void)
     };
 
     now = jiffies;
-    USB_MAIN &= ~USB_MAIN_PHY_ISO;
-
     reset_block(RESETS_RESET_USBCTRL_BITS);
-    
     while (jiffies < now + 10)
         schedule();
-
     unreset_block_wait(RESETS_RESET_USBCTRL_BITS);
 
     // init device stack on configured roothub port
