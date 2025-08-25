@@ -27,7 +27,7 @@
 #include <unistd.h>
 
 char FRESH_BIN[] = "/bin/fresh";
-char * const fresh_args[2] = {FRESH_BIN, NULL};
+char * const fresh_args[2] = {"fresh", NULL};
 
 int main(int argc, char *argv[])
 {
@@ -62,6 +62,8 @@ int main(int argc, char *argv[])
         socklen_t cli_len = sizeof(struct sockaddr_in);
         asd = accept(lsd, (struct sockaddr *)&client, &cli_len);
         if (asd >= 0) {
+            printf("Accepted connection (socket = %d)\r\n", asd);
+            fflush(stdout);
             pid = vfork();
             if (pid == 0) {
                 close(lsd);

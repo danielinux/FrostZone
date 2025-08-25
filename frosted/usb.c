@@ -433,9 +433,9 @@ static int ll_usb_send(struct ll *dev, void *frame, uint32_t sz) {
                     return (int)sz16;
                 }
             }
-            sem_post(&sem_usb);
-            return 0;
         }
+        tusb_int_handler(0, false);
+        tud_task();
     }
 }
 
