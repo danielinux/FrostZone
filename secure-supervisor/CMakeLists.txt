@@ -46,6 +46,7 @@ add_compile_definitions(PICO_STDIO_USB_SUPPORT_CHARS_AVAILABLE_CALLBACK=0
     CYW43_PIN_WL_DYNAMIC=0
     PICO_CXX_DISABLE_ALLOCATION_OVERRIDES=1
     PICO_RP2350
+    TARGET_RP2350
 )
 
 # Add cflags
@@ -73,7 +74,7 @@ target_include_directories(secure PRIVATE
 )
 
 target_link_libraries(secure pico_stdlib hardware_flash pico_multicore pico_rand hardware_flash)
-pico_set_linker_script(secure ../secure-supervisor.ld)
+pico_set_linker_script(secure ../rp2350.ld)
 pico_enable_stdio_usb(secure 1)
 pico_enable_stdio_uart(secure 0)
 

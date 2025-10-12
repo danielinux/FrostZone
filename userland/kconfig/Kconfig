@@ -37,11 +37,17 @@ default y
 config APP_CAT
     tristate "cat"
 
+config APP_CP
+    tristate "cp"
+
 config APP_ECHO
     tristate "echo"
     default m
 config APP_LS
     tristate "ls"
+
+config APP_MV
+    tristate "mv"
 config APP_TOUCH
     tristate "touch"
 config APP_RM
@@ -56,12 +62,17 @@ config APP_LN
     tristate "ln"
 config APP_DIRNAME
     tristate "dirname"
+config APP_DU
+    tristate "du"
 config APP_MKDIR
     tristate "mkdir"
 config APP_MOUNT
     tristate "mount"
 config APP_PS
     tristate "ps"
+
+config APP_STAT
+    tristate "stat"
 config APP_PLAY
     tristate "play"
 config APP_WC
@@ -100,21 +111,27 @@ config APP_STERM
     tristate "sterm"
 config APP_PWRCTL
     tristate "pwrctl - suspend and sleep"
+
+config APP_HEXDUMP
+    tristate "hexdump"
+
+config APP_XXD
+    tristate "xxd"
 endmenu
 
 menu "Networking utils"
 config APP_IFCONFIG
-    bool "ifconfig"
+    tristate "ifconfig"
 config APP_ROUTE
-    bool "route"
+    tristate "route"
 config APP_PING
-    bool "ping"
+    tristate "ping"
 config APP_HOST
-    bool "host"
+    tristate "host"
 config APP_TELNETD
-    bool "telnetd"
+    tristate "telnetd"
 config APP_NETCAT
-    bool "netcat"
+    tristate "netcat"
 #config APP_HTTPD
 #    bool "httpd"
 #    depends on LIB_WOLFSSL
@@ -122,9 +139,9 @@ config APP_SSHD
     bool "sshd"
     depends on LIB_WOLFSSL
 config APP_NTPC
-    bool "ntpc"
+    tristate "ntpc"
 config APP_STARWARS
-    bool "starwars"
+    tristate "starwars"
 endmenu
 
 menu "Interpreters"
@@ -163,6 +180,8 @@ config APP_GROOVY
     bool "groovy - bytebeat positional generator"
 config APP_CMATRIX
     bool "cmatrix - shows matrix on the screen"
+config APP_LIFE
+    bool "life - Conway's game of life"
 endmenu
 
 menu "Test suites"

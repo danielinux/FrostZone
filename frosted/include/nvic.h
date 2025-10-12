@@ -83,10 +83,17 @@ static inline void nvic_enable_memfault(void)
     SCB_SHPR[0] |= 0x80;
 }
 
+static inline void nvic_enable_busfault(void)
+{
+    SCB_SHCSR |= (1 << 17);
+    SCB_SHPR[1] |= 0x80;
+}
+
+#define nvic_enable_secure_violation() nvic_enable_irq(4)
+
 
 void empty_handler(void);
 
 #define default_irq_handler empty_handler
 
 #endif /* _NVIC_H */
-

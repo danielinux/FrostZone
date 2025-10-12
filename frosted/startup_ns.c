@@ -19,7 +19,7 @@
  */
 #include <stdint.h>
 #include "frosted.h"
-#include <tusb.h>
+/* Disable TinyUSB for STM32U585 – terminal will use standard USART. */
 
 extern void frosted_main(void);
 extern unsigned long _ns_sidata[], _ns_sdata[], _ns_edata[], _sbss[], _ebss[], _estack[];
@@ -54,10 +54,16 @@ extern void usage_fault_handler(void);
 extern int sv_call_handler(void);
 extern void pend_sv_handler(void);
 extern void sys_tick_handler(void);
+extern void secure_violation_handler(void);
 
 void debug_mon_handler(void) { while (1); }
 
 void usb_irq_handler(void);
+#if defined(TARGET_stm32h563)
+void usart3_irq_handler(void);
+#else
+void usart2_irq_handler(void);
+#endif
 
 __attribute__((section(".vectors")))
 void (* const vector_table[])(void) = {
@@ -78,7 +84,7 @@ void (* const vector_table[])(void) = {
     empty_handler, /* 1 */
     empty_handler, /* 2 */
     empty_handler, /* 3 */
-    empty_handler, /* 4 */
+    secure_violation_handler, /* 4: TAMP used as Illegal access to secure mode via  doorbell*/
     empty_handler, /* 5 */
     empty_handler, /* 6 */
     empty_handler, /* 7 */
@@ -88,7 +94,11 @@ void (* const vector_table[])(void) = {
     empty_handler, /* 11 */
     empty_handler, /* 12 */
     empty_handler, /* 13 */
+#if defined(TARGET_rp2350)
     usb_irq_handler, /* 14 */
+#else
+    empty_handler, /* 14 */
+#endif
     empty_handler, /* 15 */
     empty_handler, /* 16 */
     empty_handler, /* 17 */
@@ -132,11 +142,19 @@ void (* const vector_table[])(void) = {
     empty_handler, /* 55 */
     empty_handler, /* 56 */
     empty_handler, /* 57 */
+#if defined(TARGET_stm32h563)
+    empty_handler, /* 58 */
+    empty_handler, /* 59 */
+    usart3_irq_handler, /* 60 */
+    empty_handler, /* 61 */
+    empty_handler, /* 62 */
+#else
     empty_handler, /* 58 */
     empty_handler, /* 59 */
     empty_handler, /* 60 */
     empty_handler, /* 61 */
-    empty_handler, /* 62 */
+    usart2_irq_handler, /* 62 */
+#endif
     empty_handler, /* 63 */
     empty_handler, /* 64 */
     empty_handler, /* 65 */
@@ -147,8 +165,13 @@ void (* const vector_table[])(void) = {
     empty_handler, /* 70 */
     empty_handler, /* 71 */
     empty_handler, /* 72 */
+#if defined(TARGET_stm32h563)
+    empty_handler, /* 73 */
+    usb_irq_handler, /* 74 */
+#else
     empty_handler, /* 73 */
     empty_handler, /* 74 */
+#endif
     empty_handler, /* 75 */
     empty_handler, /* 76 */
     empty_handler, /* 77 */

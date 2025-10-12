@@ -9,4 +9,8 @@ typedef int ssize_t;
 
 #define NULL ((void *)0)
 
+#ifndef offsetof
+#define offsetof(type, member) __builtin_offsetof(type, member)
+#endif
+
 #endif /* _STDDEF_H */

@@ -7,13 +7,13 @@
 // make conway && ./conway
 // change X and Y for display area
 typedef struct {
-  void* cur;
-  void* nxt;
+  int* cur;
+  int* nxt;
 } game_t;
-void fmt_tick (void* board) {
-  register int* bd = (int*) board;
+void fmt_tick (const int* board) {
+  const int* bd = board;
+  int i, j;
   printf("\033[2J\033[1;1H");
-  register int i, j, v;
   for (j = 1; j < Y; j++) {
     printf("\n");
     for (i = 0; i < X; i++) {
@@ -21,20 +21,21 @@ void fmt_tick (void* board) {
     }
   }
 }
-void clearboard (void* board) {
-  int* bd = (int*) board;
-  int i, j, v;
-  for (j = 0; j <= Y; j++) {
-    for (i = 0; i <= X; i++) {
+void clearboard (int* board) {
+  int* bd = board;
+  int i, j;
+  for (j = 0; j < Y; j++) {
+    for (i = 0; i < X; i++) {
       bd[j*X+i] = 0;
     }
   }
 }
 void tick (game_t* game) {
-  int* cur = (int*)game->cur;
-  clearboard((void*)game->nxt);
-  int* nxt = (int*)game->nxt;
+  int* cur = game->cur;
+  int* nxt;
   int i, j, s;
+  clearboard(game->nxt);
+  nxt = game->nxt;
   s = 0;
   for (j = 1; j < (Y-1); j++) {
     for (i = 1; i < (X-1); i++) {
@@ -58,12 +59,12 @@ void tick (game_t* game) {
       }
     }
   }
-  fmt_tick((void*)nxt);
-  game->cur = (void*)nxt;
-  game->nxt = (void*)cur;
+  fmt_tick(nxt);
+  game->cur = nxt;
+  game->nxt = cur;
 }
-void seed (void* board) {
-  int* bd = (int*) board;
+void seed (int* board) {
+  int* bd = board;
   int i, j, v;
   for (j = 1; j < Y; j++) {
     for (i = 1; i < X; i++) {
@@ -73,12 +74,20 @@ void seed (void* board) {
   }
 }
 int main () {
-  printf("\033[2J\033[1;1H");
   game_t gm;
   game_t* game = &gm;
-  void* seedboard = malloc(X*Y*4);
+  size_t boardsz = X * Y * sizeof(int);
+  int* seedboard = malloc(boardsz);
+  int* gameboard = malloc(boardsz);
+  printf("\033[2J\033[1;1H");
+  if (seedboard == NULL || gameboard == NULL) {
+    printf("life: failed to allocate %lu bytes for boards\n",
+           (unsigned long)(boardsz * 2));
+    free(seedboard);
+    free(gameboard);
+    return 1;
+  }
   seed(seedboard);
-  void* gameboard = malloc(X*Y*4);
   clearboard(gameboard);
   game->cur = seedboard;
   game->nxt = gameboard;
@@ -91,4 +100,3 @@ int main () {
   free(gameboard);
   return 0;
 }
-

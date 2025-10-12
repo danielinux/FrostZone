@@ -29,7 +29,11 @@
 char FRESH_BIN[] = "/bin/fresh";
 char * const fresh_args[2] = {"fresh", NULL};
 
+#ifndef APP_TELNETD_MODULE
 int main(int argc, char *argv[])
+#else
+int icebox_telnetd(int argc, char *argv[])
+#endif
 {
     int lsd;
     struct sockaddr_in all = {};

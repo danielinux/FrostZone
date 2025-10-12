@@ -23,82 +23,83 @@
 #include "task.h"
 #include "limits.h"
 #include "mempool.h"
+#include "../frosted/include/nvic.h"
 
-#include "pico/stdlib.h"
-
-#define NS_START_ADDR     0x10010000U               /* Base of NS Flash */
-#define SCB_VTOR_NS       (*(volatile uint32_t *)0xE002ED08)
-#define SCB_VTOR          (*(volatile uint32_t *)0xE000ED08)
-
-#define NS_RESET_VECTOR   (*(uint32_t *)(NS_START_ADDR + 4))
-#define NS_MSP_INIT       (*(uint32_t *)(NS_START_ADDR))
-
-#define NVIC_ICER0 (*(volatile uint32_t *)(0xE000E180))
-#define NVIC_ICPR0 (*(volatile uint32_t *)(0xE000E280))
-#define NVIC_ITNS0 (*(volatile uint32_t *)(0xE000EF00))
-#define NVIC_ITNS1 (*(volatile uint32_t *)(0xE000EF04))
-#define NVIC_ITNS2 (*(volatile uint32_t *)(0xE000EF08))
-
-
-#define NSACR (*(volatile uint32_t *)(0xE000ED8C))
-#define CPACR (*(volatile uint32_t *)(0xE000ED88))
-
-#define SHCSR (*(volatile uint32_t *)(0xE000ED24))
-#define SHCSR_MEMFAULTENA (1 << 16)
-#define SHCSR_BUSFAULTENA (1 << 17)
-#define SHCSR_USGFAULTENA (1 << 18)
-
-
-
-#ifdef CONFIG_FPU
-static void fpu_enable(void)
-{
-    /* CP10 and CP11 full access */
-    CPACR |= (0xF << 20);
-    __asm__ volatile ("dsb");
-    __asm__ volatile ("isb");
-}
+/* Include target‑specific headers
+ *  - Pico SDK for rp2350 builds
+ *  - ST HAL for stm32u585 builds
+ */
+#if defined(TARGET_STM32U585)
+#   include "stm32u5xx-hal-driver/Inc/stm32u5xx_hal.h"
+#   include "stm32u5xx-hal-driver/Inc/stm32u5xx_hal_cortex.h"
+#   include "stm32u5xx-hal-driver/Inc/stm32u5xx_hal_gpio.h"
+#elif defined(TARGET_RP2350)
+#   include "pico/stdlib.h"
+#   include "pico/stdio.h"
+#elif defined(TARGET_STM32H563)
+#   include "stm32h563.h"
 #endif
 
-
-
+#include "random.h"
 
 static void sau_init(void)
 {
-    /* Enable secure fault handler */
-    SCB_SHCSR |= SCB_SHCSR_SECUREFAULT_EN;
 
+#if defined(TARGET_STM32H563) || defined(TARGET_STM32U585)
     /* Secure supervisor flash */
-    sau_init_region(0, 0x10000000, 0x10007FFF, 1);
+    sau_init_region(0, SAU_FLASH_SECURE_START, SAU_FLASH_SECURE_END, 1<<1);
 
     /* NSC area: supervisor flash callables */
-    sau_init_region(1, 0x10008000, 0x1000FFFF, 1);
+    sau_init_region(1, SAU_FLASH_NSC_START, SAU_FLASH_NSC_END, 1<<1);
+
+    /* Non-secure frosted scheduler + Userland (contiguous) */
+    sau_init_region(2, SAU_FLASH_NS_START, SAU_FLASH_NS_END, 0);
+
+    /* Secure RAM */
+    sau_init_region(4, SAU_RAM_SECURE_START, SAU_RAM_SECURE_END, 1<<1);
+
+    /* Non-secure RAM (mempool / kernel data) */
+    sau_init_region(5, SAU_RAM_NS_START, SAU_RAM_NS_END, 0);
+
+    /* Non-secure peripheral space */
+    sau_init_region(6, SAU_PERIPH_START, SAU_PERIPH_END, 0);
+
+#else
+    /* Secure supervisor flash */
+    sau_init_region(0, SAU_FLASH_SECURE_START, SAU_FLASH_SECURE_END, 1);
+
+    /* NSC area: supervisor flash callables */
+    sau_init_region(1, SAU_FLASH_NSC_START, SAU_FLASH_NSC_END, 1);
 
     /* Non-secure frosted scheduler */
-    sau_init_region(2, 0x10010000, 0x1001FFFF, 0);
+    sau_init_region(2, SAU_FLASH_NS_START, SAU_FLASH_NS_END, 0);
 
     /* XIPfs */
-    sau_init_region(3, 0x10020000, 0x101FFFFF, 0);
+    sau_init_region(3, SAU_FLASH_XIP_START, SAU_FLASH_XIP_END, 0);
 
     /* RAM: secure area stack */
-    sau_init_region(4, 0x20000000, 0x20003FFF, 1);
+    sau_init_region(4, SAU_RAM_SECURE_START, SAU_RAM_SECURE_END, 1);
 
     /* RAM: non-secure area (managed via MPU) */
-    sau_init_region(5, 0x20010000, 0x2007FFFF, 0);
+    sau_init_region(5, SAU_RAM_NS_START, SAU_RAM_NS_END, 0);
 
     /* RAM: secure area for supervisor's stack */
-    sau_init_region(6, 0x20080000, 0x20081FFF, 1);
+    sau_init_region(6, SAU_RAM_SECURE_START, SAU_RAM_SECURE_START + 0x1FFFU, 1);
 
     /* USB DRAM: NS */
-    sau_init_region(7, 0x50100000, 0x5011FFFF, 0);
+    sau_init_region(7, SAU_USB_RAM_START, SAU_USB_RAM_END, 0);
+#endif
 
     SAU_CTRL = SAU_INIT_CTRL_ENABLE;
 
-    /* Enable MemFault, BusFault and UsageFault */
-    SHCSR |= SHCSR_MEMFAULTENA | SHCSR_BUSFAULTENA | SHCSR_USGFAULTENA;
+    /* Enable SecureFault, MemFault, BusFault and UsageFault in Secure mode */
+    SCB_SHCSR |= SCB_SHCSR_SECUREFAULT_EN;
+
+    /* Enable faults in Non-secure mode */
+    SCB_SHCSR_NS |= SCB_SHCSR_MEMFAULT_EN | SCB_SHCSR_BUSFAULT_EN | SCB_SHCSR_USGFAULT_EN;
 
     /* Add flag to trap misaligned accesses */
-    *((volatile uint32_t *)0xE000ED14) |= 0x00000008;
+    //*((volatile uint32_t *)0xE000ED14) |= 0x00000008;
 }
 
 __attribute__((weak))
@@ -111,10 +112,7 @@ void machine_init(void)
 #define USB_MAIN_CONTROLLER_EN (1 << 0)
 
 void main(void) {
-    uint32_t ivt_ns_reset = (NS_RESET_VECTOR) + 1;
-    volatile uint8_t pword[16] = "Hello world!!";
-
-    /* Machine-specific code */
+    /* Machine‑specific code */
     machine_init();
 
 #ifdef CONFIG_FPU
@@ -122,22 +120,28 @@ void main(void) {
     fpu_enable();
 #endif
 
+    /* Initialize shared SRAM before reprogramming TZ attributes. */
+    mempool_init();
+
+#if defined(TARGET_STM32H563)
+    stm32h5_gtzc_setup();
+    stm32h5_configure_gpio_security();
+#endif
+
     /* SAU */
     sau_init();
 
 
-    /* Mem pool init */
-    mempool_init();
-
     /* Secure tasks table init */
     secure_task_table_init();
 
-    /* MPU */
-    mpu_init();
+    /* TRNG */
+    trng_init();
 
     /* Configure Non-Secure vector table */
     SCB_VTOR_NS = NS_START_ADDR;
 
+    #ifdef TARGET_RP2350
     /* detach USB (rp2350) */
     stdio_flush();
     stdio_deinit_all();
@@ -148,12 +152,13 @@ void main(void) {
     gpio_set_function(25, GPIO_FUNC_USB);          // DP
     gpio_disable_pulls(24);
     gpio_disable_pulls(25);
+    #endif
 
     /* Set Non-Secure MSP */
-    asm volatile ( "msr msp_ns, %0\n" : : "r" (NS_MSP_INIT));
+    asm volatile ( "msr msp_ns, %0\n" : : "r" (*((volatile uint32_t *) NS_START_ADDR)));
 
     /* Transition to Non-Secure domain kernel */
-    asm volatile( "bxns %0\n" : : "r"(ivt_ns_reset) );
+    asm volatile( "bxns %0\n" : : "r"(*((volatile uint32_t *)(NS_START_ADDR + 4)) + 1) );
 
     /* Idle loop - Never reached */
     while (1) {

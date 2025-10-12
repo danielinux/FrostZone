@@ -29,7 +29,7 @@ typedef struct {
 
 
 #ifndef CONFIG_MEMPOOL_SEGMENTS_PER_TASK
-#define CONFIG_MEMPOOL_SEGMENTS_PER_TASK 3
+#define CONFIG_MEMPOOL_SEGMENTS_PER_TASK 4
 #endif /* CONFIG_MEMPOOL_SEGMENTS */
 
 /* Task structure in secure domain */

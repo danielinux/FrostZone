@@ -12,6 +12,7 @@
 #include <time.h>
 #include <sys/time.h>
 
+#include "net_compat.h"
 #define DEFAULT_LEN (64)
 
 struct icmp_hdr {
@@ -97,7 +98,11 @@ int ping(struct sockaddr_in *dst, int count, int len)
 }
 
 
+#ifndef APP_PING_MODULE
 int main(int argc, char *argv[])
+#else
+int icebox_ping(int argc, char *argv[])
+#endif
 {
     struct sockaddr_in dst;
     memset(&dst, 0, sizeof(struct sockaddr_in));

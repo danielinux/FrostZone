@@ -22,7 +22,6 @@
 #include <stdint.h>
 #include <string.h>
 #include "frosted.h"
-#include "mempool.h"
 
 #define PAGE_SIZE 4096
 #define ALIGNMENT 8
@@ -33,8 +32,8 @@
 
 struct __attribute__((__packed__)) page {
     void *base;
-    uint16_t offset;
-    uint16_t capacity;
+    uint32_t offset;
+    uint32_t capacity;
 };
 
 static struct page pages[MAX_PAGES];
@@ -46,39 +45,51 @@ void *krealloc(void *ptr, uint32_t size);
 void kfree(void *ptr);
 
 static void *alloc_from_pages(uint32_t size);
-static void try_merge_blocks(uint8_t *base, uint16_t *offset, uint32_t capacity);
+static void try_merge_blocks(uint8_t *base, uint32_t *offset, uint32_t capacity);
 
 static int add_new_page(uint32_t page_size)
 {
-    void *mem;
-    if (page_count >= MAX_PAGES)
+    uint32_t irq_state = irq_save();
+    if (page_count >= MAX_PAGES) {
+        irq_restore(irq_state);
         return -1;
-    mem = secure_mmap(page_size, 0, 0);
+    }
+    irq_restore(irq_state);
+
+    void *mem = secure_mmap(page_size, 0, 0);
     if (!mem)
         return -1;
+
+    irq_state = irq_save();
+    if (page_count >= MAX_PAGES) {
+        irq_restore(irq_state);
+        secure_munmap(mem, 0);
+        return -1;
+    }
     pages[page_count].base = mem;
     pages[page_count].offset = 0;
     pages[page_count].capacity = page_size;
     page_count++;
+    irq_restore(irq_state);
     return 0;
 }
 
 void *kalloc(uint32_t size)
 {
     uint32_t total = ALIGN_UP(size + sizeof(uint32_t), ALIGNMENT);
-    void *ptr = alloc_from_pages(total);
-    if (ptr == 0) {
+    while (1) {
+        uint32_t irq_state = irq_save();
+        void *ptr = alloc_from_pages(total);
+        if (ptr) {
+            irq_restore(irq_state);
+            return (uint8_t *)ptr + sizeof(uint32_t);
+        }
+        irq_restore(irq_state);
         uint32_t page_size = ALIGN_UP(total, PAGE_SIZE);
         if (add_new_page(page_size) != 0) {
             return 0;
         }
-        ptr = alloc_from_pages(total);
     }
-    if (ptr) {
-        *((uint32_t *)ptr) = total;
-        return (uint8_t *)ptr + sizeof(uint32_t);
-    }
-    return 0;
 }
 
 void *kcalloc(uint32_t nmemb, uint32_t size)
@@ -109,6 +120,7 @@ void *krealloc(void *ptr, uint32_t size)
 void kfree(void *ptr)
 {
     if (!ptr) return;
+    uint32_t irq_state = irq_save();
     uint8_t *block = (uint8_t *)ptr - sizeof(uint32_t);
     uint32_t size = *((uint32_t *)block) & BLOCK_SIZE_MASK;
     *((uint32_t *)block) = size | BLOCK_FREE;
@@ -116,9 +128,10 @@ void kfree(void *ptr)
         uint8_t *base = (uint8_t *)pages[i].base;
         if (block >= base && block < base + pages[i].capacity) {
             try_merge_blocks(base, &pages[i].offset, pages[i].capacity);
-            return;
+            break;
         }
     }
+    irq_restore(irq_state);
 }
 
 static void *alloc_from_pages(uint32_t size)
@@ -126,15 +139,17 @@ static void *alloc_from_pages(uint32_t size)
     for (uint32_t i = 0; i < page_count; i++) {
         struct page *pg = &pages[i];
         uint8_t *ptr = (uint8_t *)pg->base;
-        uint16_t off = 0;
-        while (off + sizeof(uint32_t) <= pg->offset) {
+        uint32_t off = 0;
+        while (off < pg->offset) {
             uint32_t *hdr = (uint32_t *)(ptr + off);
             uint32_t blk_size = *hdr & BLOCK_SIZE_MASK;
+            if (blk_size == 0)
+                break;
             if ((*hdr & BLOCK_FREE) && blk_size >= size) {
-                *hdr = size;
+                *hdr = blk_size;
                 return (void *)hdr;
             }
-            off += blk_size + sizeof(uint32_t);
+            off += blk_size;
         }
         if ((uint32_t)(pg->capacity - pg->offset) >= size) {
             void *p = ptr + pg->offset;
@@ -147,39 +162,46 @@ static void *alloc_from_pages(uint32_t size)
 }
 
 
-static void try_merge_blocks(uint8_t *base, uint16_t *offset, uint32_t capacity)
+static void try_merge_blocks(uint8_t *base, uint32_t *offset, uint32_t capacity)
 {
-    uint16_t off = 0, max_used = 0;
-    while (off + sizeof(uint32_t) <= *offset) {
+    uint32_t off = 0;
+    uint32_t max_used = 0;
+    while (off < *offset && off + sizeof(uint32_t) <= capacity) {
         uint32_t *hdr = (uint32_t *)(base + off);
         uint32_t size = *hdr & BLOCK_SIZE_MASK;
         if (!size)
             break;
+        uint32_t next_off = off + size;
         if (!(*hdr & BLOCK_FREE)) {
-            max_used = off + size;
-        } else {
-            uint32_t *next = (uint32_t *)(base + off + size);
-            if ((uint8_t *)next < base + *offset && (*next & BLOCK_FREE)) {
-                uint32_t next_size = *next & BLOCK_SIZE_MASK;
+            max_used = next_off;
+        } else if (next_off < *offset) {
+            uint32_t *next = (uint32_t *)(base + next_off);
+            uint32_t next_size = *next & BLOCK_SIZE_MASK;
+            if ((*next & BLOCK_FREE) && next_size) {
                 *hdr = (size + next_size) | BLOCK_FREE;
                 continue;
             }
         }
-        off += size;
+        off = next_off;
     }
+    if (max_used > capacity)
+        max_used = capacity;
     *offset = max_used;
 }
 
 void *sys_mmap_hdlr(uint32_t len, uint16_t pid, uint32_t flags)
 {
+    uint32_t size = PAGE_SIZE;
     pid = this_task_getpid();
     flags = 0;
-    return secure_mmap(PAGE_SIZE, pid, flags);
+
+    while (size < len)
+        size += PAGE_SIZE;
+    return secure_mmap(size, pid, flags);
 }
 
 int sys_munmap_hdlr(void *addr, uint16_t pid)
 {
-    return secure_munmap(addr, pid);
+    secure_munmap(addr, pid);
+    return 0;
 }
-
-

@@ -3,6 +3,7 @@
 #define FROSTED_INTERRUPTS_H
 
 extern void __set_BASEPRI(int);
+#include <stdint.h>
 
 #ifdef DEBUG
     static void irq_off(void)
@@ -19,6 +20,16 @@ extern void __set_BASEPRI(int);
     
     static void irq_clearmask(void)
     {
+    }
+
+    static inline uint32_t irq_save(void)
+    {
+        return 0;
+    }
+
+    static inline void irq_restore(uint32_t primask)
+    {
+        (void)primask;
     }
 #else
     /* Inline kernel utils */
@@ -41,6 +52,26 @@ extern void __set_BASEPRI(int);
     static inline void irq_on(void)
     {
         asm volatile ("cpsie i                \n");
+    }
+
+    static inline uint32_t irq_save(void)
+    {
+        uint32_t primask;
+        asm volatile ("mrs %0, primask        \n"
+                      "cpsid i                \n"
+                      : "=r"(primask)
+                      :
+                      : "memory");
+        return primask;
+    }
+
+    static inline void irq_restore(uint32_t primask)
+    {
+        if (primask & 0x1u) {
+            asm volatile ("cpsid i            \n" ::: "memory");
+        } else {
+            asm volatile ("cpsie i            \n" ::: "memory");
+        }
     }
 #endif
 

@@ -30,6 +30,9 @@
 #include <unistd.h>
 #include <string.h>
 #include <poll.h>
+
+#include "net_compat.h"
+
 #ifndef htonl
 #define htonl(x) __builtin_bswap32(x)
 #define ntohl(x) __builtin_bswap32(x)
@@ -45,7 +48,11 @@
 
 #define BUFSIZE (16 * 1024)
 
+#ifndef APP_STARWARS_MODULE
 int main(int argc, char *argv[])
+#else
+int icebox_starwars(int argc, char *argv[])
+#endif
 {
 
     int sd;

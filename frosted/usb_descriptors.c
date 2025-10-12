@@ -40,6 +40,8 @@
  *
  */
 
+#if (CONFIG_TUD_ENABLED)
+
 #include "bsp/board_api.h"
 #include "tusb.h"
 
@@ -100,14 +102,14 @@ enum
   ITF_NUM_CDC_0_DATA,
   ITF_NUM_CDC_1,
   ITF_NUM_CDC_1_DATA,
-#ifdef CONFIG_USB_NET
+#if CONFIG_USB_NET
   ITF_NUM_CDC_2,
   ITF_NUM_CDC_2_DATA,
 #endif
   ITF_NUM_TOTAL
 };
 
-#ifdef CONFIG_USB_NET
+#if CONFIG_USB_NET
 #define USB_NET_DESC_LEN TUD_CDC_NCM_DESC_LEN
 #else
 #define USB_NET_DESC_LEN 0
@@ -123,7 +125,7 @@ enum
 #define EPNUM_CDC_1_OUT     0x04
 #define EPNUM_CDC_1_IN      0x84
 
-#ifdef CONFIG_USB_NET
+#if CONFIG_USB_NET
 #define EPNUM_NET_NOTIF   0x85
 #define EPNUM_NET_OUT     0x06
 #define EPNUM_NET_IN      0x86
@@ -140,7 +142,7 @@ enum {
   STRID_PRODUCT,
   STRID_SERIAL,
   STRID_INTERFACE,
-#ifdef CONFIG_USB_NET
+#if CONFIG_USB_NET
   STRID_MAC,
 #endif
 };
@@ -157,7 +159,7 @@ uint8_t const desc_fs_configuration[] =
   // 2nd CDC: Interface number, string index, EP notification address and size, EP data address (out, in) and size.
   TUD_CDC_DESCRIPTOR(ITF_NUM_CDC_1, 4, EPNUM_CDC_1_NOTIF, 8, EPNUM_CDC_1_OUT, EPNUM_CDC_1_IN, 64),
 
-#ifdef CONFIG_USB_NET
+#if CONFIG_USB_NET
   // NCM
   TUD_CDC_NCM_DESCRIPTOR(ITF_NUM_CDC_2, STRID_INTERFACE, STRID_MAC, EPNUM_NET_NOTIF, 64, EPNUM_NET_OUT, EPNUM_NET_IN, 64, 1514),
 #endif
@@ -187,7 +189,7 @@ char const *string_desc_arr[] =
   "Insane Adding Machines",                     // 1: Manufacturer
   "Frosted OS",              // 2: Product
   NULL,                          // 3: Serials will use unique ID if possible
- #ifdef CONFIG_USB_NET
+ #if CONFIG_USB_NET
   "Frosted CDC ACM-NCM",  // 4: CDC Interface
   "0202846A9609"   // 5: macaddr
  #else
@@ -202,8 +204,10 @@ static const uint8_t mac_address[6] = {0x02, 0x02, 0x84, 0x6A, 0x96, 0x00};
 // Invoked when received GET STRING DESCRIPTOR request
 // Application return pointer to descriptor, whose contents must exist long enough for transfer to complete
 uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
+  size_t chr_count = 0;
+  const char *str = NULL;
+  size_t max_count = 0;
   (void) langid;
-  size_t chr_count;
 
   switch ( index ) {
     case STRID_LANGID:
@@ -231,11 +235,11 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
 
       if ( !(index < sizeof(string_desc_arr) / sizeof(string_desc_arr[0])) ) return NULL;
 
-      const char *str = string_desc_arr[index];
+      str = string_desc_arr[index];
 
       // Cap at max char
       chr_count = strlen(str);
-      size_t const max_count = sizeof(_desc_str) / sizeof(_desc_str[0]) - 1; // -1 for string type
+      max_count = sizeof(_desc_str) / sizeof(_desc_str[0]) - 1; // -1 for string type
       if ( chr_count > max_count ) chr_count = max_count;
 
       // Convert ASCII string into UTF-16
@@ -250,3 +254,4 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
 
   return _desc_str;
 }
+#endif /* CONFIG_TUD_ENABLED */

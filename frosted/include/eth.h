@@ -10,12 +10,12 @@ struct eth_config {
     const int has_phy_reset;
 };
 
-#ifdef CONFIG_DEVETH
+#if CONFIG_ETH
 int ethernet_init(const struct eth_config *conf);
-int pico_eth_start(void);
+void stm32_eth_enable_loopback(int enable);
 #else
-#  define ethernet_init(x) ((-ENOENT))
-#  define pico_eth_start() ((-ENOENT))
+#  define ethernet_init(x) ((int)(-2))
+#  define stm32_eth_enable_loopback(x) ((void)0)
 #endif
 
 #endif

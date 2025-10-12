@@ -1,0 +1,28 @@
+mainmenu "Secure Supervisor Configuration"
+
+choice
+    prompt "Target platform"
+    default TARGET_STM32H563
+
+config TARGET_STM32H563
+    bool "STM32H563"
+
+config TARGET_STM32U585
+    bool "STM32U585"
+
+config TARGET_RP2350
+    bool "RP2350 / Pico 2"
+
+endchoice
+
+config ETH
+    bool "Enable Ethernet controller bring-up"
+    default y if TARGET_STM32U585
+    default n
+
+config FLASHFS_VERIFY
+    bool "Verify FlashFS writes"
+    default y
+    help
+      When enabled, every secure-world FlashFS operation is immediately
+      verified with a read-back compare.

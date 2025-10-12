@@ -7,7 +7,7 @@ int ksprintf(char *out, const char *format, ...);
 int kprintf(const char *format, ...);
 #else
 #   define klog_init() (0)
-#   define kprintf
+#   define kprintf(...) do { } while (0)
 #endif
 
 

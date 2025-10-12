@@ -4,15 +4,15 @@
 #define ETHERNET
 #define LINK_MTU 1514
 
-#define MAX_TCPSOCKETS 2
+#define MAX_TCPSOCKETS 3
 #define MAX_UDPSOCKETS 1
 #define RXBUF_SIZE LINK_MTU * 4
-#define TXBUF_SIZE LINK_MTU * 4
+#define TXBUF_SIZE LINK_MTU * 3
 
 #define MAX_NEIGHBORS 4
 
-/* Linux test configuration */
-#define WOLFIP_IP "10.10.10.2"
-#define LINUX_IP "10.10.10.1"
+#define WOLFIP_ENABLE_LOOPBACK 1
+#define WOLFIP_MAX_INTERFACES 4
+#define WOLFIP_NOSTATIC 1
 
 #endif

@@ -5,7 +5,22 @@
 FROSTED?=..
 PREFIX:=$(PWD)/build
 
--include kconfig/.config
+KERNEL_CONFIG ?= ../frosted/.config
+APP_CONFIG ?= kconfig/.config
+
+ifeq ($(wildcard $(KERNEL_CONFIG)),)
+$(error Kernel configuration missing ($(KERNEL_CONFIG)). Run 'make menuconfig' inside frosted/.)
+endif
+include $(KERNEL_CONFIG)
+
+ifeq ($(wildcard $(APP_CONFIG)),)
+$(error Userland configuration missing ($(APP_CONFIG)). Run 'make menuconfig' inside userland/.)
+endif
+include $(APP_CONFIG)
+
+ifndef SYS_CLOCK
+$(error SYS_CLOCK not defined in $(KERNEL_CONFIG))
+endif
 # TOOLCHAIN CONFIG
 CROSS_COMPILE?=arm-frosted-eabi-
 CC:=$(CROSS_COMPILE)gcc
@@ -31,18 +46,19 @@ ifeq ($(ARCH),)
 else
 	CFLAGS+=-mcpu=$(ARCH)
 endif
-CFLAGS+=-DCORE_M33 -D__frosted__ -DHAVE_MMAP=1
+CFLAGS+=-DCORE_M33 -D__frosted__ -DHAVE_MMAP=1 -O0
 # COMPILER FLAGS -- No gcc libraries
 CFLAGS+=-nostartfiles
 # COMPILER FLAGS -- GOT/PIC
-CFLAGS+=-fPIC -mlong-calls -fno-common -msingle-pic-base -mno-pic-data-is-text-relative -Wstack-usage=1024 -DSYS_CLOCK=$(SYS_CLOCK)
+CFLAGS+=-fPIC -mlong-calls -fno-common -msingle-pic-base -mno-pic-data-is-text-relative -Wstack-usage=4096 -DSYS_CLOCK=$(SYS_CLOCK)
 # Debugging
 CFLAGS+=-ggdb
 CFLAGS+=-I../lib/include -I../lib
+CFLAGS+=-Wdeclaration-after-statement -Werror
 CFLAGS+=$(CFLAGS-y)
 
 # LINKER FLAGS
-LDFLAGS+=-fPIC -mlong-calls -fno-common -Wl,-elf2flt -lc -lgloss
+LDFLAGS+=-fPIC -mlong-calls -fno-common -Wl,-elf2flt -Wl,--start-group,-lc,-lgloss,--end-group
 
 all: userspace.bin
 	cp userspace.bin $(FROSTED)/

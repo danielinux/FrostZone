@@ -19,10 +19,14 @@
  */
 
 #include <stdint.h>
+#include "limits.h"
+#include "task.h"
 
 void Reset_Handler(void);
 void Default_Handler(void)        { while (1); }
 void NMI_Handler(void)            { while (1); }
+
+#if 0
 void HardFault_Handler(void)
 {
     /* Assign values for debugging; place a bkpt */
@@ -35,6 +39,16 @@ void HardFault_Handler(void)
     volatile uint32_t pc;
     volatile uint32_t psr;
 
+    (void)r0;
+    (void)r1;
+    (void)r2;
+    (void)r3;
+    (void)r12;
+    (void)lr;
+    (void)pc;
+    (void)psr;
+
+
     asm volatile ("TST lr, #4 \n"
                  "ITE EQ \n"
                  "MRSEQ r0, MSP \n"
@@ -44,6 +58,16 @@ void HardFault_Handler(void)
         ;
 
 }
+#else
+
+void HardFault_Handler(void)
+{
+    asm volatile ("BKPT #0");
+    while(1)
+        ;
+}
+
+#endif
 
 void MemManage_Handler(void)
 {
@@ -55,6 +79,26 @@ void BusFault_Handler(void)
     while(1)
         ;
 }
+
+#define DOORBELL_ILLEGAL_INSTRUCTION_IRQn (4u) /* Using TAMP IRQ as doorbell for illegal instruction */
+#define NVIC_ISPR0 (*(volatile uint32_t *)0xE000E200)
+
+void SecureFault_Handler(void)
+{
+    uint32_t sp = 0;
+    secure_task_t *offending_task;
+
+    __asm volatile ("MRS %0, PSP_NS" : "=r" (sp));
+
+    offending_task = get_secure_task_by_addr(sp);
+    if (!offending_task) {
+        while (1) {
+        }
+    }
+
+    NVIC_ISPR0 |= (1 << DOORBELL_ILLEGAL_INSTRUCTION_IRQn);
+}
+
 void UsageFault_Handler(void)
 {
     while(1)
@@ -97,7 +141,10 @@ void (* const g_pfnVectors[])(void) = {
     MemManage_Handler,
     BusFault_Handler,
     UsageFault_Handler,
-    0, 0, 0, 0,
+    SecureFault_Handler,
+    0,
+    0,
+    0,
     SVC_Handler,
     DebugMon_Handler,
     0,
@@ -137,4 +184,3 @@ void (* const g_pfnVectors[])(void) = {
     Default_Handler, /* IRQ 30 */
     Default_Handler, /* IRQ 31 */
 };
-

@@ -26,9 +26,15 @@
 
 secure_task_t secure_tasks[MAX_SECURE_TASKS];
 
+static void memzero(void *ptr, size_t len) {
+    volatile char *vptr = (volatile char *)ptr;
+    for (size_t i = 0; i < len; i++)
+        vptr[i] = 0;
+}
+
 /* Initialize secure task table */
 void secure_task_table_init(void) {
-    memset(secure_tasks, 0, sizeof(secure_tasks));
+    memzero(secure_tasks, sizeof(secure_tasks));
     for (int i = 0; i < MAX_SECURE_TASKS; ++i) {
         secure_tasks[i].task_id = 0xFFFF; /* Invalid ID */
     }
@@ -71,6 +77,30 @@ int unregister_secure_task(uint16_t task_id) {
 secure_task_t *get_secure_task(uint16_t task_id) {
     for (int i = 0; i < MAX_SECURE_TASKS; ++i) {
         if (secure_tasks[i].task_id == task_id) {
+            return &secure_tasks[i];
+        }
+    }
+    return NULL;
+}
+
+/* Lookup a task by address in its stack memory region 
+ * Returns the task associated to the memory region. Allows to look up tasks by stack pointers.
+ */
+secure_task_t *get_secure_task_by_addr(uint32_t addr)
+{
+    uintptr_t address = (uintptr_t)addr;
+
+    for (int i = 0; i < MAX_SECURE_TASKS; ++i) {
+        uintptr_t stack_base;
+        uintptr_t stack_end;
+
+        if (secure_tasks[i].task_id == 0xFFFF)
+            continue;
+
+        stack_base = (uintptr_t)secure_tasks[i].stack_segment.base;
+        stack_end = stack_base + secure_tasks[i].stack_segment.size;
+
+        if ((address >= stack_base) && (address < stack_end)) {
             return &secure_tasks[i];
         }
     }

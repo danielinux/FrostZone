@@ -30,6 +30,8 @@
 #include <unistd.h>
 #include <string.h>
 #include <poll.h>
+
+#include "net_compat.h"
 #ifndef htonl
 #define htonl(x) __builtin_bswap32(x)
 #define ntohl(x) __builtin_bswap32(x)
@@ -126,7 +128,11 @@ static int parse_conf(struct netcat_conf *conf, int argc, char *argv[])
     return 0;
 }
 
+#ifndef APP_NETCAT_MODULE
 int main(int argc, char *argv[])
+#else
+int icebox_nc(int argc, char *argv[])
+#endif
 {
 
     struct netcat_conf conf;

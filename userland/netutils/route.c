@@ -101,7 +101,11 @@ void usage(void)
 }
 
 static char host_netmask[] = "255.255.255.255";
+#ifndef APP_ROUTE_MODULE
 int main(int argc, char *argv[])
+#else
+int icebox_route(int argc, char *argv[])
+#endif
 {
     int i;
     int fd;

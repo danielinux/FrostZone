@@ -61,26 +61,23 @@ To build both kernels, pico-sdk is needed. The scripts assume that you have
 a clone of the repository in `~/src/pico-sdk`. If pico-sdk is in a different
 directory, adjust build.sh accordingly.
 
-Use `build.sh` scripts. Build the supervisor first:
+For legacy RP2350 builds, the helper scripts live under `scripts/`:
 
 ```
-cd secure-supervisor
-./build.sh
-``` 
-
-This also generates the `frosted/nsc_kernel.o`, which is the interface used by Frosted
-to interact with the secure supervisor, and must be included in the Frosted build.
-
-Build Frosted afterwards:
-
-```
-cd frosted
-./build.sh
+./scripts/build_supervisor_rp2350.sh
+./scripts/build_frosted_rp2350.sh
 ```
 
-To install both kernels, since they are separate binaries, you will need a debugger connected
-to the SWD pins on your raspberry pi pico device. The scripts `install.sh` in both directories will automatically
-flash the two kernels in the assigned partitions.
+Each install step regenerates its artifacts and then uses the matching `install_*_rp2350.sh` script, which expects `JLinkExe` and a connected Pico 2.
+
+Current STM32 targets rely on the component Makefiles. Build the secure supervisor before the kernel:
+
+```
+make -C secure-supervisor TARGET=stm32h563 clean all
+make -C frosted TARGET=stm32h563 clean all
+```
+
+`make TARGET=stm32h563` from the repository root orchestrates this sequence automatically and produces the required `secure-supervisor/secure.bin` and `frosted/kernel.bin` images.
 
 
 ## Building and installing userspace
@@ -118,4 +115,16 @@ Including the following in-kernel libraries:
 FrostZone RTOS kernel is a port of Frosted OS (c) 2015 insane-adding-machines
 Cortex-M33 port (c) 2025 @danielinux
 
+## Secure Design Notes
 
+- Secure supervisor programs SAU/GTZC/MPU before dropping into the non-secure kernel, keeping TrustZone state confined to audited secure code (`secure-supervisor/include/stm32h563.h`).
+- Frosted kernel runs non-secure but privileged; it alone drives MMIO via syscalls while the MPU marks the peripheral window as privileged-only.
+- Userland tasks remain non-secure/unprivileged ELF/bFLT apps and rely on the kernel for device access; direct MMIO probes fault immediately.
+- GTZC privilege registers are now programmed so every exposed peripheral demands privileged access (`GTZC1_TZSC_PRIVCFGR[1..3]`), matching the kernel’s privilege level.
+- RCC stays non-secure visible for clock gating, but the supervisor enables `RCC_PRIVCFGR` so only privileged code can reconfigure clocks.
+
+## Userspace Guard Demo
+
+- `userland/tests/tz_guard_demo.c` provides canned scenarios (`periph-read`, `periph-write`, `secure-ram`, etc.) plus a manual `poke` helper to demonstrate fault behavior from user mode.
+- `make -C userland` drops the binary into `userland/out/`; flash with `scripts/flash_all_stm32h5.sh`, connect to `ttyACM1` (115200 8N1), and run the scenarios to observe MPU/TZ traps versus allowed accesses.
+- `scripts/run_tz_guard_demo.py` drives the same scenarios over `/dev/ttyACM1` and handles expected secure-fault resets for CI-style automation.

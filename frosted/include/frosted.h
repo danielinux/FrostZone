@@ -3,9 +3,12 @@
 #include "frosted_api.h"
 #include "malloc.h"
 #include "interrupts.h"
+typedef char wint_t;
 #include "errno.h"
 #include "kprintf.h"
 #include "mpu.h"
+#include "time.h"
+#include "taskmem.h"
 #ifndef FROSTED_INCLUDED_H
 #define FROSTED_INCLUDED_H
 
@@ -124,6 +127,8 @@ void task_wakeup(struct task *t);
 /* Called by FPB when a task hits a breakpoint */
 void task_hit_breakpoint(struct task *t);
 
+/* Fill in task info structure */
+int task_meminfo(uint16_t pid, struct task_meminfo *info);
 
 /* Functions targeting the Current (Running) task
  * */
@@ -137,7 +142,11 @@ uint32_t task_fd_get_flags(int fd);
 uint32_t task_fd_set_off(struct fnode *fno, uint32_t off);
 uint32_t task_fd_get_off(struct fnode *fno);
 struct fnode *task_filedesc_get(int fd);
-int task_segfault(uint32_t addr, uint32_t instr, int flags);
+#define FAULT_TYPE_MPU 0x01
+#define FAULT_TYPE_BUS 0x02
+#define FAULT_TYPE_USAGE 0x03
+#define FAULT_TYPE_SECURE 0x04
+int task_segfault(uint32_t fault_type);
 int task_fd_readable(int fd);
 int task_fd_writable(int fd);
 int task_filedesc_del(int fd);
@@ -216,6 +225,7 @@ void fno_use(struct fnode *f);
 #define FL_INUSE  0x08
 #define FL_TTY    0x10
 #define FL_BLK    0x20
+#define FL_NONBLOCK 0x4000
 
 #define FL_EXEC   0x40
 #define FL_LINK   0x80
@@ -260,7 +270,7 @@ struct fnode {
 };
 
 #define FNO_MOD_PRIV(fno,mod) (((fno == NULL)?NULL:((mod != fno->owner)?NULL:(fno->priv))))
-#define FNO_BLOCKING(f) ((f->flags & O_NONBLOCK) == 0)
+#define FNO_BLOCKING(f) ((f->flags & FL_NONBLOCK) == 0)
 
 struct mountpoint
 {
@@ -284,6 +294,7 @@ int register_addr_family(struct module *m, uint16_t family);
 #define FAMILY_UNIX     0x0001
 #define FAMILY_INET     0x0002
 #define FAMILY_NETLINK  0x0010
+#define FAMILY_NETDEV   0x0DE0
 #define FAMILY_DEV      0x0DEF
 #define FAMILY_FILE     0xFFFF
 
@@ -391,5 +402,16 @@ void pico_unlock(void);
 void frost(uint32_t interval);
 void defrost(void);
 
-#endif /* BSP_INCLUDED_H */
+#if CONFIG_TCPIP
+void tcpip_lock_init(void);
+void tcpip_lock(void);
+void tcpip_unlock(void);
+int tcpip_trylock(void);
+#else
+static inline void tcpip_lock_init(void) {}
+static inline void tcpip_lock(void) {}
+static inline void tcpip_unlock(void) {}
+static inline int tcpip_trylock(void) { return 0; }
+#endif
 
+#endif /* BSP_INCLUDED_H */

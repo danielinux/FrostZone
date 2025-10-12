@@ -32,10 +32,11 @@
 int inputline(char *input, int size)
 {
     int len;
+    int out;
+    int i;
     while (1 < 2) {
         len = 0;
-        int out = 1;
-        int i;
+        out = 1;
         memset(input, 0, size);
         while (len < size) {
             const char del = 0x08;
@@ -147,11 +148,11 @@ int icebox_cut(int argc, char *args[])
     int c, start, end, i, j, len, flags, slot;
     int b = 0;
     int mode = O_RDONLY;
+    char delim = '\t';
+    int fdfn[MAXFILES];
     opterr = 0;
     optind = 0;
     j = 0;
-    char delim = '\t';
-    int fdfn[MAXFILES];
     while ((c = getopt(argc, (char **)args, "d:c:f:")) != -1) {
         switch (c) {
         case 'f':

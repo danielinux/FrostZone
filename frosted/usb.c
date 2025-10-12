@@ -17,14 +17,28 @@
  *      Authors: Daniele Lacamera
  *
  */
+
+#if CONFIG_TUD_ENABLED
 #include "tusb.h"
 #include "frosted.h"
 #include "device.h"
-#include "pico.h"
 #include "poll.h"
 #include "cirbuf.h"
 #include "locks.h"
-#include "stdint.h"
+#include "nvic.h"
+#include "sys/frosted-io.h"
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
+
+#if defined(TARGET_rp2350)
+#include "pico.h"
+#endif
+#if defined(TARGET_stm32h563)
+#include "stm32h5xx.h"
+#define STM32_RCC_BASE RCC_BASE
+#include "stm32x5_board_common.h"
+#endif
 
 int ttyusb_init(void);
 #define MAX_TTYUSB_DEV 2
@@ -50,6 +64,22 @@ static void ttyusb_tty_attach(struct fnode *fno, int pid);
 
 static sem_t sem_usb;
 
+#if defined(TARGET_stm32h563)
+#define USB_KEEPALIVE_INTERVAL_MS 2U
+static void usb_keepalive_timer_cb(uint32_t now, void *arg);
+
+#define USB_IRQ_TRACE_LEN 16
+struct usb_irq_record {
+    uint32_t jif;
+    uint32_t istr_before;
+    uint32_t istr_after;
+    uint32_t cntr;
+    uint32_t chep0;
+    uint32_t daddr;
+};
+static struct usb_irq_record usb_irq_trace[USB_IRQ_TRACE_LEN];
+static volatile uint32_t usb_irq_trace_wr;
+#endif
 
 static struct module mod_devttyusb = {
     .family = FAMILY_FILE,
@@ -62,12 +92,11 @@ static struct module mod_devttyusb = {
 };
 
 
-#ifdef CONFIG_USB_NET
+#if CONFIG_USB_NET && CONFIG_TCPIP
 #include "net.h"
 
-
 static struct module mod_devusbnet = {
-    .family = FAMILY_DEV,
+    .family = FAMILY_NETDEV,
     .name = "usb_net",
 };
 #endif
@@ -142,6 +171,22 @@ void usb_tasklet(void *arg) {
     last_poll = jiffies;
 }
 
+#if defined(TARGET_stm32h563)
+static void usb_keepalive_timer_cb(uint32_t now, void *arg)
+{
+    (void)now;
+    (void)arg;
+
+    if (tusb_inited()) {
+        tusb_int_handler(0, false);
+        sem_post(&sem_usb);
+        tasklet_add(usb_tasklet, NULL);
+    }
+
+    ktimer_add(USB_KEEPALIVE_INTERVAL_MS, usb_keepalive_timer_cb, NULL);
+}
+#endif
+#if defined(TARGET_rp2350)
 #define USBCTRL_BASE 0x50110000
 #define USB_MAIN *((volatile uint32_t *)(USBCTRL_BASE + 0x40))
 #define USB_SIE_CTRL *((volatile uint32_t *)(USBCTRL_BASE + 0x4C))
@@ -156,32 +201,194 @@ void usb_tasklet(void *arg) {
 #define USB_SIE_CTRL_EP0_INT_1BUF (1 << 29)
 #define USB_SIE_CTRL_PU_EN (1 << 16)
 
-
 void rp2040_usb_init(void);
+#endif
+#if defined(TARGET_stm32h563)
+#define STM32H5_TYPEC_ATTACH_TIMEOUT_MS 250U
+
+static inline void stm32h5_typec_configure_analog(uint32_t base, uint8_t pin)
+{
+    stm32x5_gpio_write_mode(base, pin, GPIO_MODE_ANALOG);
+    stm32x5_gpio_write_pull(base, pin, IOCTL_GPIO_PUPD_NONE);
+    stm32x5_gpio_write_speed(base, pin, GPIO_SPEED_LOW);
+}
+
+static void stm32h5_typec_gpio_init(void)
+{
+    stm32h5_typec_configure_analog(GPIOB_BASE, 13U); /* CC1 */
+    stm32h5_typec_configure_analog(GPIOB_BASE, 14U); /* CC2 */
+    stm32h5_typec_configure_analog(GPIOA_BASE, 9U);  /* Dead-battery pin */
+    stm32h5_typec_configure_analog(GPIOA_BASE, 4U);  /* VBUS sense */
+
+    /* Fault indication pin idles high – keep a defined level while unused. */
+    stm32x5_gpio_write_mode(GPIOG_BASE, 7U, GPIO_MODE_INPUT);
+    stm32x5_gpio_write_pull(GPIOG_BASE, 7U, IOCTL_GPIO_PUPD_PULLUP);
+    stm32x5_gpio_write_speed(GPIOG_BASE, 7U, GPIO_SPEED_LOW);
+}
+
+static int stm32h5_typec_wait_for_attach(uint32_t timeout_ms)
+{
+    uint32_t deadline = jiffies + timeout_ms;
+    uint32_t last_sr = 0U;
+
+    UCPD1->IMR = UCPD_IMR_TYPECEVT1IE | UCPD_IMR_TYPECEVT2IE;
+
+    while (1) {
+        uint32_t sr = UCPD1->SR;
+        uint32_t v_cc1 = (sr & UCPD_SR_TYPEC_VSTATE_CC1_Msk) >> UCPD_SR_TYPEC_VSTATE_CC1_Pos;
+        uint32_t v_cc2 = (sr & UCPD_SR_TYPEC_VSTATE_CC2_Msk) >> UCPD_SR_TYPEC_VSTATE_CC2_Pos;
+        bool cc1_evt = (sr & UCPD_SR_TYPECEVT1) && (v_cc1 == 3U);
+        bool cc2_evt = (sr & UCPD_SR_TYPECEVT2) && (v_cc2 == 3U);
+
+        if (cc1_evt || cc2_evt) {
+            uint32_t cr = UCPD1->CR;
+            cr &= ~(UCPD_CR_PHYCCSEL | UCPD_CR_CCENABLE_BOTH);
+            cr |= UCPD_CR_PHYRXEN;
+
+            if (cc2_evt) {
+                cr |= UCPD_CR_PHYCCSEL | UCPD_CR_CCENABLE_1;
+            } else {
+                cr |= UCPD_CR_CCENABLE_0;
+            }
+
+            UCPD1->CR = cr;
+            UCPD1->ICR = UCPD_ICR_TYPECEVT1CF | UCPD_ICR_TYPECEVT2CF;
+            return 1;
+        }
+
+        if ((int32_t)(deadline - jiffies) <= 0)
+            return 0;
+
+        if (sr != last_sr) {
+            last_sr = sr;
+            UCPD1->ICR = UCPD_ICR_TYPECEVT1CF | UCPD_ICR_TYPECEVT2CF;
+        }
+
+        schedule();
+    }
+}
+
+static void stm32h5_typec_sink_enable(void)
+{
+    uint32_t cfg1;
+
+    stm32h5_typec_gpio_init();
+
+    RCC_APB1HENR |= RCC_APB1HENR_UCPDEN;
+    RCC_APB1HRSTR |= RCC_APB1HRSTR_UCPDRST;
+    RCC_APB1HRSTR &= ~RCC_APB1HRSTR_UCPDRST;
+
+    cfg1 = (13U << UCPD_CFGR1_HBITCLKDIV_Pos) |
+           (0x10U << UCPD_CFGR1_IFRGAP_Pos) |
+           (0x07U << UCPD_CFGR1_TRANSWIN_Pos) |
+           (0x01U << UCPD_CFGR1_PSC_Pos) |
+           UCPD_CFGR1_RXORDSETEN_Msk;
+    UCPD1->CFGR1 = cfg1 | UCPD_CFGR1_UCPDEN;
+
+    /* Advertise Rd on both CC pins so the port-protection IC can request VBUS. */
+    UCPD1->CR = UCPD_CR_ANAMODE | UCPD_CR_CCENABLE_BOTH;
+
+    /* Hand over the CC resistors to the UCPD once it is configured. */
+    PWR_UCPDR |= PWR_UCPDR_DBDIS;
+
+    (void)stm32h5_typec_wait_for_attach(STM32H5_TYPEC_ATTACH_TIMEOUT_MS);
+}
+
+static void stm32h5_usb_hw_init(void)
+{
+    const struct gpio_config usb_pins[] = {
+        {
+            .base = GPIOA_BASE,
+            .pin = 11,
+            .mode = GPIO_MODE_AF,
+            .pullupdown = IOCTL_GPIO_PUPD_NONE,
+            .speed = GPIO_SPEED_HIGH,
+            .optype = GPIO_OTYPE_PP,
+            .af = 10,
+        },
+        {
+            .base = GPIOA_BASE,
+            .pin = 12,
+            .mode = GPIO_MODE_AF,
+            .pullupdown = IOCTL_GPIO_PUPD_NONE,
+            .speed = GPIO_SPEED_HIGH,
+            .optype = GPIO_OTYPE_PP,
+            .af = 10,
+        },
+    };
+
+    stm32h5_typec_sink_enable();
+
+    RCC_CR |= RCC_CR_HSI48ON;
+    while ((RCC_CR & RCC_CR_HSI48RDY) == 0)
+        ;
+
+    RCC_CCIPR4 = (RCC_CCIPR4 & ~RCC_CCIPR4_USBFSSEL_Msk) | RCC_CCIPR4_USBFSSEL_HSI48;
+
+    /* Clock Recovery System keeps HSI48 in spec for USB without an external crystal. */
+    RCC_APB1LENR |= RCC_APB1LENR_CRSEN;
+    CRS_CR = 0;
+    CRS_CFGR = ((47999U << CRS_CFGR_RELOAD_Pos) & CRS_CFGR_RELOAD_Msk) |
+               ((34U << CRS_CFGR_FELIM_Pos) & CRS_CFGR_FELIM_Msk) |
+               CRS_CFGR_SYNCSRC_USB;
+    CRS_ICR = 0xFFFFFFFFU;
+    CRS_CR = CRS_CR_AUTOTRIMEN | CRS_CR_CEN | (32U << CRS_CR_TRIM_Pos);
+
+    PWR_USBSCR |= PWR_USBSCR_USB33DEN | PWR_USBSCR_USB33SV;
+    while ((PWR_VMSR & PWR_VMSR_USB33RDY) == 0)
+        ;
+
+    RCC_APB2ENR |= RCC_APB2ENR_USBFSEN;
+    RCC_APB2RSTR |= RCC_APB2RSTR_USBFSRST;
+    RCC_APB2RSTR &= ~RCC_APB2RSTR_USBFSRST;
+
+    stm32x5_gpio_config_alt(&usb_pins[0]);
+    stm32x5_gpio_config_alt(&usb_pins[1]);
+}
+#endif
+
 void frosted_usbdev_init(void)
 {
-    uint32_t now;
-    sem_init(&sem_usb, 0);
     tusb_rhport_init_t dev_init = {
         .role = TUSB_ROLE_DEVICE,
         .speed = TUSB_SPEED_AUTO
     };
+    sem_init(&sem_usb, 0);
 
-    now = jiffies;
+#if defined(TARGET_rp2350)
+    uint32_t now = jiffies;
     reset_block(RESETS_RESET_USBCTRL_BITS);
     while (jiffies < now + 10)
         schedule();
     unreset_block_wait(RESETS_RESET_USBCTRL_BITS);
-
-    // init device stack on configured roothub port
     rp2040_usb_init();
+#elif defined(TARGET_stm32h563)
+    stm32h5_usb_hw_init();
+#else
+#error "USB device init not defined for this target"
+#endif
+
     tusb_init(BOARD_TUD_RHPORT, &dev_init);
     ttyusb_init();
     tud_connect();
+
+    /* Prime control endpoint before the host issues the first SETUP. */
+    tusb_int_handler(BOARD_TUD_RHPORT, false);
+    tud_task();
+
 #ifndef CONFIG_USB_POLLING
-    nvic_set_pending(1u << 14);
-    nvic_set_priority(14, 1 << 5);
-    nvic_enable_irq(1u << 14);
+#if defined(TARGET_rp2350)
+    nvic_set_pending(USBCTRL_IRQ);
+    nvic_set_priority(USBCTRL_IRQ, 1 << 5);
+    nvic_enable_irq(USBCTRL_IRQ);
+#elif defined(TARGET_stm32h563)
+    nvic_set_priority(USB_DRD_FS_IRQn, 1 << 5);
+    nvic_enable_irq(USB_DRD_FS_IRQn);
+#endif
+#endif
+
+#if defined(TARGET_stm32h563)
+    ktimer_add(USB_KEEPALIVE_INTERVAL_MS, usb_keepalive_timer_cb, NULL);
 #endif
 }
 
@@ -381,8 +588,33 @@ static int ttyusb_fno_init(uint8_t itf)
 
 void usb_irq_handler(void)
 {
+#if defined(TARGET_stm32h563)
+    uint32_t sticky_istr;
+    uint32_t trace_idx = usb_irq_trace_wr;
+    if (trace_idx < USB_IRQ_TRACE_LEN) {
+        usb_irq_trace[trace_idx].jif = jiffies;
+        usb_irq_trace[trace_idx].istr_before = USB_DRD_FS->ISTR;
+        usb_irq_trace[trace_idx].cntr = USB_DRD_FS->CNTR;
+        usb_irq_trace[trace_idx].chep0 = USB_DRD_FS->CHEP[0];
+        usb_irq_trace[trace_idx].daddr = USB_DRD_FS->DADDR;
+    }
+#endif
     //dcd_int_handler(0);
     tusb_int_handler(0, true);
+#if defined(TARGET_stm32h563)
+    if (trace_idx < USB_IRQ_TRACE_LEN) {
+        usb_irq_trace[trace_idx].istr_after = USB_DRD_FS->ISTR;
+        usb_irq_trace_wr = trace_idx + 1;
+    }
+    /* TinyUSB ignores SOF/ESOF when no listeners are registered.
+     * Ack them here so the IRQ line deasserts and higher-priority
+     * USB events can keep flowing.
+     */
+    sticky_istr = USB_DRD_FS->ISTR & (USB_ISTR_SOF | USB_ISTR_ESOF);
+    if (sticky_istr) {
+        USB_DRD_FS->ISTR = (uint32_t)~sticky_istr;
+    }
+#endif
     sem_post(&sem_usb);
     tasklet_add(usb_tasklet, NULL);
     //asm volatile("sev");
@@ -399,19 +631,45 @@ int ttyusb_init(void)
 }
 
 
-#ifdef CONFIG_USB_NET
+#if CONFIG_USB_NET && CONFIG_TCPIP
 #include "wolfip.h"
 
 /* Two static buffers for RX frames from USB host */
-uint8_t tusb_net_rxbuf[LINK_MTU][2];
+__attribute__((section(".usb_tud"))) uint8_t tusb_net_rxbuf[LINK_MTU][2];
 uint8_t tusb_net_rxbuf_used[2] =  {0, 0};
 
 /* Two static buffers for TX frames to USB host */
-uint8_t tusb_net_txbuf[LINK_MTU][4];
+__attribute__((section(".usb_tud"))) uint8_t tusb_net_txbuf[LINK_MTU][4];
 uint16_t tusb_net_txbuf_sz[4] = {0, 0, 0, 0};
 
+static int ll_usb_send(struct wolfIP_ll_dev *dev, void *frame, uint32_t sz);
+int ll_usb_poll(struct wolfIP_ll_dev *dev, void *frame, uint32_t sz);
 
-static int ll_usb_send(struct ll *dev, void *frame, uint32_t sz) {
+static int usb_netdev_attach(struct wolfIP *stack, struct wolfIP_ll_dev *ll, unsigned int if_idx)
+{
+    const uint8_t usb_macaddr[6] = { 0x02, 0x02, 0x84, 0x6A, 0x96, 0x07 };
+
+    memcpy(ll->mac, usb_macaddr, sizeof(usb_macaddr));
+    strncpy(ll->ifname, "usb", sizeof(ll->ifname) - 1);
+    ll->ifname[sizeof(ll->ifname) - 1] = '\0';
+    ll->poll = ll_usb_poll;
+    ll->send = ll_usb_send;
+
+    wolfIP_ipconfig_set_ex(stack, if_idx,
+                           atoip4("192.168.7.2"),
+                           atoip4("255.255.255.0"),
+                           atoip4("192.168.7.1"));
+    return 0;
+}
+
+static struct netdev_driver usb_net_driver = {
+    .name = "usb_net",
+    .is_present = NULL,
+    .attach = usb_netdev_attach,
+};
+
+
+static int ll_usb_send(struct wolfIP_ll_dev *dev, void *frame, uint32_t sz) {
     uint16_t sz16 = (uint16_t)sz;
     uint32_t i;
     (void) dev;
@@ -487,7 +745,7 @@ bool tud_network_recv_cb(const uint8_t *src, uint16_t size) {
  *
  * Frames copied in tusb_net_push_rx are processed here and sent to the stack.
  */
-int  ll_usb_poll(struct ll *dev, void *frame, uint32_t sz) {
+int  ll_usb_poll(struct wolfIP_ll_dev *dev, void *frame, uint32_t sz) {
     int i;
     (void) dev;
     if (sz < 64)
@@ -504,22 +762,8 @@ int  ll_usb_poll(struct ll *dev, void *frame, uint32_t sz) {
 
 
 int netusb_init(void) {
-    const uint8_t usb_macaddr[6] = { 0x02, 0x02, 0x84, 0x6A, 0x96, 0x07 };
-    struct ll *tusb_netdev;
     register_module(&mod_devusbnet);
-    socket_in_init();
-
-    tusb_netdev = wolfIP_getdev(IPStack);
-    memcpy(tusb_netdev->mac, usb_macaddr, 6);
-    strcpy(tusb_netdev->ifname, "usb");
-    tusb_netdev->poll = ll_usb_poll;
-    tusb_netdev->send = ll_usb_send;
-
-    /* set the IP address, netmask, and gateway */
-    /* 192.168.7.2/24, gateway 192.168.7.1 */
-    wolfIP_ipconfig_set(IPStack, atoip4("192.168.7.2"),
-            atoip4("255.255.255.0"), atoip4("192.168.7.1"));
-    return 0;
+    return netdev_register(&usb_net_driver);
 }
 
 #else
@@ -541,10 +785,6 @@ void tud_network_init_cb(void)
 
 
 int secure_getrandom(void *buf, unsigned size);
-uint32_t wolfIP_getrandom(void)
-{
-    uint32_t r;
-    secure_getrandom(&r, sizeof(r));
-    return r;
-}
+uint32_t wolfIP_getrandom(void);
 
+#endif /* CONFIG_TUD_ENABLED */

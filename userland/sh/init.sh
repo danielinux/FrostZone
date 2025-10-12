@@ -1,2 +1,3 @@
 #!/bin/fresh
-/bin/fresh -t /dev/ttyUSB0
+/bin/telnetd &
+/bin/fresh -t /dev/ttyS0

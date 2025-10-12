@@ -43,7 +43,11 @@
 # define STDERR_FILENO 2
 #endif
 
+#ifndef APP_HOST_MODULE
 int main(int argc, char *argv[])
+#else
+int icebox_host(int argc, char *argv[])
+#endif
 {
 
     struct addrinfo *res;

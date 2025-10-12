@@ -32,12 +32,15 @@ typedef void * _PTR;
 #include "sys/fcntl.h"
 #include "fpb.h"
 #include "frosted.h"
-#include "mempool.h"
+#include "taskmem.h"
 
 /* Minimal libc */
 #include "string.h"
 #include "stdint.h"
 #include "stddef.h"
+#ifndef INT_MAX
+#define INT_MAX 2147483647
+#endif
 
 /* generics */
 volatile unsigned int rt_offset;
@@ -47,6 +50,10 @@ struct module *MODS;
 
 #define __inl inline
 #define __naked __attribute__((naked))
+
+extern int sys_open_hdlr(char *rel_path, uint32_t flags, uint32_t perm);
+extern int sys_close_hdlr(int fd);
+extern int sys_write_hdlr(int fd, void *buf, int len);
 
 
 #ifndef NULL
@@ -59,9 +66,9 @@ struct module *MODS;
 #define MSP "msp"
 #define PSP "psp"
 #define RUN_KERNEL (0xffffffb8u)
-#define RUN_USER (0xffffffbcu)
+#define RUN_USER   (0xffffffbcu)
 
-#define SV_CALL_SIGRETURN 0xFFFFFFF8
+#define SV_CALL_SIGRETURN 0xFFFFFFF9U
 #define STACK_THRESHOLD 64
 
 /* TOP to Bottom: EXTRA | NVIC | T_EXTRA | T_NVIC */
@@ -86,26 +93,6 @@ volatile struct strace Strace[STRACE_SIZE];
 volatile int StraceTop = 0;
 #endif
 
-#ifdef CONFIG_EXTENDED_MEMFAULT
-static char _my_x_str[11] = "";
-static char *x_str(uint32_t x)
-{
-    int i;
-    uint8_t val;
-    _my_x_str[0] = '0';
-    _my_x_str[1] = 'x';
-    for (i = 0; i < 8; i++) {
-        val = (((x >> ((7 - i) << 2)) & 0x0000000F));
-        if (val < 10)
-            _my_x_str[i + 2] = val + '0';
-        else
-            _my_x_str[i + 2] = (val - 10) + 'A';
-    }
-    _my_x_str[10] = 0;
-    return _my_x_str;
-}
-
-/* Global for printing segfault info */
 static char _my_pid_str[6];
 static char *pid_str(uint16_t p)
 {
@@ -130,7 +117,6 @@ static char *pid_str(uint16_t p)
     _my_pid_str[i] = 0;
     return _my_pid_str;
 }
-#endif
 
 /* Array of syscalls */
 static void *sys_syscall_handlers[_SYSCALLS_NR] = {
@@ -158,7 +144,7 @@ int sys_register_handler(uint32_t n, int (*_sys_c)(uint32_t arg1, uint32_t arg2,
 #define TIMESLICE(x) BASE_TIMESLICE
 #define INIT_SCHEDULER_STACK_SIZE (256)
 
-struct __attribute__((packed)) nvic_stack_frame {
+struct nvic_stack_frame {
     uint32_t r0;
     uint32_t r1;
     uint32_t r2;
@@ -189,7 +175,7 @@ struct __attribute__((packed)) nvic_stack_frame {
 #endif
 };
 /* In order to keep the code efficient, the stack layout of armv6 and armv7 do NOT match! */
-struct __attribute__((packed)) extra_stack_frame {
+struct extra_stack_frame {
     uint32_t r4;
     uint32_t r5;
     uint32_t r6;
@@ -202,6 +188,112 @@ struct __attribute__((packed)) extra_stack_frame {
 
 #define NVIC_FRAME_SIZE ((sizeof(struct nvic_stack_frame)))
 #define EXTRA_FRAME_SIZE ((sizeof(struct extra_stack_frame)))
+
+#if CONFIG_CORE_DUMP
+#define ELF_NIDENT 16
+#define ELFCLASS32 1
+#define ELFDATA2LSB 1
+#define EV_CURRENT 1
+#define ET_CORE 4
+#define EM_ARM 40
+#define PT_LOAD 1
+#define PT_NOTE 4
+#define PF_X 0x1
+#define PF_W 0x2
+#define PF_R 0x4
+#define NT_PRSTATUS 1
+#define CORE_NOTE_NAME "CORE"
+#define CORE_ALIGN4(v) (((v) + 3u) & ~3u)
+#define CORE_NOTE_NAME_SZ (sizeof(CORE_NOTE_NAME))
+#define CORE_NOTE_DESC_SZ (sizeof(struct elf_prstatus))
+#define CORE_NOTE_BUF_SIZE                                                          \
+    (sizeof(struct elf32_nhdr) + CORE_ALIGN4(CORE_NOTE_NAME_SZ) +                   \
+     CORE_ALIGN4(CORE_NOTE_DESC_SZ))
+
+enum {
+    ARM_R0 = 0,
+    ARM_R1,
+    ARM_R2,
+    ARM_R3,
+    ARM_R4,
+    ARM_R5,
+    ARM_R6,
+    ARM_R7,
+    ARM_R8,
+    ARM_R9,
+    ARM_R10,
+    ARM_R11,
+    ARM_R12,
+    ARM_SP,
+    ARM_LR,
+    ARM_PC,
+    ARM_CPSR,
+    ARM_ORIG_R0
+};
+
+struct elf32_ehdr {
+    uint8_t e_ident[ELF_NIDENT];
+    uint16_t e_type;
+    uint16_t e_machine;
+    uint32_t e_version;
+    uint32_t e_entry;
+    uint32_t e_phoff;
+    uint32_t e_shoff;
+    uint32_t e_flags;
+    uint16_t e_ehsize;
+    uint16_t e_phentsize;
+    uint16_t e_phnum;
+    uint16_t e_shentsize;
+    uint16_t e_shnum;
+    uint16_t e_shstrndx;
+} __attribute__((packed));
+
+struct elf32_phdr {
+    uint32_t p_type;
+    uint32_t p_offset;
+    uint32_t p_vaddr;
+    uint32_t p_paddr;
+    uint32_t p_filesz;
+    uint32_t p_memsz;
+    uint32_t p_flags;
+    uint32_t p_align;
+} __attribute__((packed));
+
+struct elf32_nhdr {
+    uint32_t n_namesz;
+    uint32_t n_descsz;
+    uint32_t n_type;
+} __attribute__((packed));
+
+struct elf_siginfo {
+    int32_t si_signo;
+    int32_t si_code;
+    int32_t si_errno;
+};
+
+struct elf_timeval {
+    int32_t tv_sec;
+    int32_t tv_usec;
+};
+
+struct elf_prstatus {
+    struct elf_siginfo pr_info;
+    int16_t pr_cursig;
+    uint16_t pad;
+    uint32_t pr_sigpend;
+    uint32_t pr_sighold;
+    int32_t pr_pid;
+    int32_t pr_ppid;
+    int32_t pr_pgrp;
+    int32_t pr_sid;
+    struct elf_timeval pr_utime;
+    struct elf_timeval pr_stime;
+    struct elf_timeval pr_cutime;
+    struct elf_timeval pr_cstime;
+    uint32_t pr_reg[18];
+    int32_t pr_fpvalid;
+};
+#endif
 
 static void *_top_stack;
 #define TASK_FLAG_VFORK_PARENT 0x01
@@ -245,12 +337,12 @@ struct thread_group {
     uint16_t max_tid;
     pthread_key_t max_key;
 };
+static void destroy_thread_group(struct thread_group *group, uint16_t tid);
 #else
 struct thread_group {
     uint32_t _off;
 };
 #endif
-static void destroy_thread_group(struct thread_group *group, uint16_t tid);
 
 
 struct __attribute__((packed)) task_block {
@@ -332,7 +424,6 @@ static int tasklist_del(struct task **list, struct task *togo)
 static int tasklist_len(struct task **list)
 {
     struct task *t = *list;
-    struct task *p = NULL;
     int len = 0;
     while (t) {
         len++;
@@ -391,7 +482,9 @@ static void task_destroy(void *arg)
     struct task *t = arg;
     int i;
     struct filedesc_table *ft;
+#ifdef CONFIG_PTHREADS
     struct thread_group *grp;
+#endif
     if (!t)
         return;
     tasklist_del(&tasks_running, t);
@@ -623,6 +716,7 @@ static int task_filedesc_del_from_task(struct task *t, int fd)
             fno->owner->ops.close(fno);
     }
     ft->fdesc[fd].fno = NULL;
+    return 0;
 }
 
 int task_filedesc_del(int fd)
@@ -689,7 +783,6 @@ uint32_t task_fd_set_flags(int fd, uint32_t flags)
 
 uint32_t task_fd_get_flags(int fd)
 {
-    struct fnode *fno;
     struct filedesc_table *ft;
     struct filedesc *fdesc;
     ft = _cur_task->tb.filedesc_table;
@@ -708,7 +801,6 @@ uint32_t task_fd_get_flags(int fd)
 uint32_t task_fd_set_off(struct fnode *fno, uint32_t off)
 {
     struct filedesc_table *ft;
-    struct filedesc *fdesc;
     int fd;
     int found = 0;
     ft = _cur_task->tb.filedesc_table;
@@ -730,7 +822,6 @@ uint32_t task_fd_set_off(struct fnode *fno, uint32_t off)
 uint32_t task_fd_get_off(struct fnode *fno)
 {
     struct filedesc_table *ft;
-    struct filedesc *fdesc;
     int fd;
     ft = _cur_task->tb.filedesc_table;
     if (!ft)
@@ -789,7 +880,6 @@ int task_fd_writable(int fd)
 
 int sys_dup_hdlr(int fd)
 {
-    struct task *t = _cur_task;
     struct fnode *f = task_filedesc_get(fd);
     int newfd = -1;
     if (!f)
@@ -840,7 +930,6 @@ static void sig_trampoline(struct task *t, struct task_handler *h, int signo);
 int sys_kill_hdlr(uint32_t pid, uint32_t sig);
 static int catch_signal(struct task *t, int signo, sigset_t orig_mask)
 {
-    int i;
     struct task_handler *sighdlr;
     struct task_handler *h = NULL;
 
@@ -851,9 +940,9 @@ static int catch_signal(struct task *t, int signo, sigset_t orig_mask)
         (t->tb.state == TASK_FORKED))
         return -ESRCH;
 
-    if (((1 << signo) & t->tb.sigmask) && (h->hdlr != SIG_IGN)) {
-        /* Signal is blocked via t->tb.sigmask */
-        t->tb.sigpend |= (1 << signo);
+    if ((t->tb.sigmask & (1 << signo)) != 0u) {
+        /* Signal is blocked via sigmask; mark pending. */
+        t->tb.sigpend |= (1u << signo);
         return 0;
     }
 
@@ -865,11 +954,11 @@ static int catch_signal(struct task *t, int signo, sigset_t orig_mask)
     /* Reset signal, if pending, as it's going to be handled. */
     t->tb.sigpend &= ~(1 << signo);
 
-    sighdlr = t->tb.sighdlr;
-    while (sighdlr) {
-        if (signo == sighdlr->signo)
+    for (sighdlr = t->tb.sighdlr; sighdlr; sighdlr = sighdlr->next) {
+        if (signo == sighdlr->signo) {
             h = sighdlr;
-        sighdlr = sighdlr->next;
+            break;
+        }
     }
 
     if ((h) && (signo != SIGKILL) && (signo != SIGSEGV)) {
@@ -930,31 +1019,6 @@ static int add_handler(struct task *t, int signo, void (*hdlr)(int),
     return 0;
 }
 
-static int del_handler(struct task *t, int signo)
-{
-    struct task_handler *sighdlr;
-    struct task_handler *prev = NULL;
-    if (!t || (t->tb.pid < 1))
-        return -EINVAL;
-
-    sighdlr = t->tb.sighdlr;
-    while (sighdlr) {
-        if (sighdlr->signo == signo) {
-            if (prev == NULL) {
-                t->tb.sighdlr = sighdlr->next;
-            } else {
-                prev->next = sighdlr->next;
-            }
-            kfree(sighdlr);
-            check_pending_signals(t);
-            return 0;
-        }
-        prev = sighdlr;
-        sighdlr = sighdlr->next;
-    }
-    return -ESRCH;
-}
-
 static void sig_hdlr_return(uint32_t arg)
 {
     /* XXX: In order to use per-sigaction sa_mask, we need to set
@@ -985,7 +1049,7 @@ static void sig_trampoline(struct task *t, struct task_handler *h, int signo)
     memcpy((void *)tramp_extra, (void *)cur_extra, EXTRA_FRAME_SIZE);
     memset((void *)tramp_nvic, 0, NVIC_FRAME_SIZE);
     tramp_nvic->pc = (uint32_t)h->hdlr | 1; /* enforce thumb */
-    tramp_nvic->lr = (uint32_t)sig_hdlr_return;
+    tramp_nvic->lr = (uint32_t)sig_hdlr_return | 1;
     tramp_nvic->r0 = (uint32_t)signo;
     tramp_nvic->psr = cur_nvic->psr | (1 << 24); /* enforce T bit */
     t->tb.sp = (t->tb.osp - (EXTRA_FRAME_SIZE + NVIC_FRAME_SIZE));
@@ -1170,8 +1234,26 @@ char *scheduler_task_name(int pid)
         char **argv = t->tb.arg;
         if (argv)
             return argv[0];
-    } else
-        return NULL;
+    }
+    return NULL;
+}
+
+int task_meminfo(uint16_t pid, struct task_meminfo *info)
+{
+    struct task *t;
+    if (!info)
+        return -1;
+    t  = tasklist_get(&tasks_running, pid);
+    if (!t)
+        t = tasklist_get(&tasks_idling, pid);
+    if ((t) && (t->tb.pid != 0) && ((uintptr_t)t->tb.exec_info.init != 0)) {
+        /* Add information about flash execution segment in xipfs */
+        info->xip_base = (uintptr_t)t->tb.exec_info.init;
+        info->xip_size = t->tb.exec_info.text_size;
+        /* Fill all RAM segments in secure mode */
+        return secure_meminfo(pid, info);
+    }
+    return -1;
 }
 
 static uint16_t scheduler_get_cur_pid(void)
@@ -1185,14 +1267,17 @@ uint16_t this_task_getpid(void)
 {
     return scheduler_get_cur_pid();
 }
+
 int task_running(void)
 {
     return (_cur_task->tb.state == TASK_RUNNING);
 }
+
 int task_timeslice(void)
 {
     return (--_cur_task->tb.timeslice);
 }
+
 void task_end(void)
 {
     /* We have to set the stack pointer because we jumped here
@@ -1229,7 +1314,6 @@ static void task_resume_vfork(struct task *t);
 static void *task_pass_args(void *_args, uint16_t pid, uint8_t **sp)
 {
     char **args = (char **)_args;
-    char **new = NULL;
     int i = 0, n = 0;
     uintptr_t *ptr;
     if (!_args)
@@ -1239,6 +1323,8 @@ static void *task_pass_args(void *_args, uint16_t pid, uint8_t **sp)
     }
     if (n == 0)
         return NULL;
+    while (((uintptr_t)(*sp) & 0x07) != 0)
+        (*sp)--;
     /* Allocate space for pointers to each argument */
     *sp -= (sizeof(uintptr_t) * (n + 1));
     ptr = (uintptr_t *)(*sp);
@@ -1246,16 +1332,14 @@ static void *task_pass_args(void *_args, uint16_t pid, uint8_t **sp)
     ptr[n] = 0;
     for (i = 0; i < n; i++) {
         uint32_t l = strlen(args[i]);
-        if (l > 0) {
-            uint32_t off;
-            /* Push the argument string in the process' stack */
-            *sp -= (l + 1);
-            off = ((uintptr_t)(*sp)) % sizeof(uintptr_t);
-            *sp -= off;
-            memcpy(*sp, args[i], l + 1);
-            /* Save the pointer in the table on top of the stack */
-            ptr[i] = *sp;
-        }
+        uint32_t off;
+        /* Push the argument string in the process' stack */
+        *sp -= (l + 1);
+        off = ((uintptr_t)(*sp)) % (2 * sizeof(uintptr_t));
+        *sp -= off;
+        memcpy(*sp, args[i], l + 1);
+        /* Save the pointer in the table on top of the stack */
+        ptr[i] = (uintptr_t)*sp;
     }
     return ptr;
 }
@@ -1288,7 +1372,6 @@ static void task_create_real(struct task *new, void *arg, unsigned int nice)
         if (!pt)
             pt = tasklist_get(&tasks_running, new->tb.ppid);
         if (pt) {
-            uint32_t stack_size = SCHEDULER_STACK_SIZE;
             /* Restore parent's stack and put it back in the schedule */
             memcpy(pt->stack, new->stack, SCHEDULER_STACK_SIZE);
             secure_swap_stack(pt->tb.pid, new->tb.pid);
@@ -1303,18 +1386,23 @@ static void task_create_real(struct task *new, void *arg, unsigned int nice)
 
     /* Base/Top of the stack memory */
     new->tb.cur_stack = new->stack;
-    sp = (((uint8_t *)(new->stack)) + SCHEDULER_STACK_SIZE - 32);
+    sp = (((uint8_t *)(new->stack)) + SCHEDULER_STACK_SIZE - 72);
+
 
     /* Push the arguments at the top */
     new->tb.arg = task_pass_args(arg, new->tb.pid, &sp);
+
+    while(((uintptr_t)sp & 0x07) != 0)
+        sp--;
+
 
     /* Push the NVIC stack frame */
     sp -= NVIC_FRAME_SIZE;
     nvic_frame = (struct nvic_stack_frame *)sp;
     memset(nvic_frame, 0, NVIC_FRAME_SIZE);
     nvic_frame->r0 = (uint32_t) new->tb.arg;
-    nvic_frame->pc = (uint32_t) new->tb.start;
-    nvic_frame->lr = (uint32_t)task_end;
+    nvic_frame->pc = ((uint32_t)new->tb.start) | 1 ;
+    nvic_frame->lr = ((uint32_t)task_end) | 1 ;
     nvic_frame->psr = 0x01000000u;
 
     /* Push the extra frame */
@@ -1456,6 +1544,7 @@ int sys_vfork_hdlr(void)
 
     return vpid;
 }
+
 /********************************/
 /*         POSIX threads        */
 /********************************/
@@ -1464,7 +1553,6 @@ int sys_vfork_hdlr(void)
 /**/
 /**/
 /**/
-
 #ifdef CONFIG_PTHREADS
 
 static struct task *pthread_get_task(int pid, int tid)
@@ -1611,8 +1699,8 @@ static inline void thread_create(struct task *new,
     nvic_frame = (struct nvic_stack_frame *)sp;
     memset(nvic_frame, 0, NVIC_FRAME_SIZE);
     nvic_frame->r0 = (uint32_t) new->tb.arg;
-    nvic_frame->pc = (uint32_t) new->tb.start;
-    nvic_frame->lr = (uint32_t)pthread_end;
+    nvic_frame->pc = ((uint32_t) new->tb.start) | 1;
+    nvic_frame->lr = ((uint32_t)pthread_end) | 1;
     nvic_frame->psr = 0x01000000u;
     sp -= EXTRA_FRAME_SIZE;
     extra_frame = (struct extra_stack_frame *)sp;
@@ -2093,7 +2181,7 @@ static __naked void save_task_context(void)
     asm volatile("bx lr                 ");
 }
 
-static uint32_t runnable = RUN_HANDLER;
+static volatile uint32_t runnable = RUN_HANDLER;
 
 static __naked void restore_kernel_context(void)
 {
@@ -2115,7 +2203,6 @@ static __naked void restore_task_context(void)
 
 static __inl void task_switch(void)
 {
-    int i;
     struct task *t;
     if (forced_task) {
         _cur_task = forced_task;
@@ -2181,7 +2268,8 @@ void __naked pend_sv_handler(void)
         restore_kernel_context();
         runnable = RUN_KERNEL;
         mpu_task_on(0, 0);
-        asm volatile("msr CONTROL, %0" ::"r"(0x00));
+        asm volatile("msr control, %0" ::"r"(0x00) : "memory");
+        asm volatile("isb");
     } else {
         asm volatile("msr " PSP ", %0" ::"r"(_cur_task->tb.sp));
         asm volatile("isb");
@@ -2191,17 +2279,11 @@ void __naked pend_sv_handler(void)
             mpu_task_on(_cur_task->tb.pid, _cur_task->tb.ppid);
         else
             mpu_task_on(_cur_task->tb.pid, 0);
-        asm volatile("msr CONTROL, %0" ::"r"(0x01));
+        asm volatile("msr control, %0" ::"r"(0x03) : "memory");
+        asm volatile("isb");
     }
 
-#if 0
-    /* Set control bit for non-kernel threads */
-    if (_cur_task->tb.pid != 0) {
-        asm volatile("msr CONTROL, %0" ::"r"(0x01));
-    } else {
-        asm volatile("msr CONTROL, %0" ::"r"(0x00));
-    }
-#endif
+    asm volatile("cpsie i");
     asm volatile("isb");
 
     /* Set return value selected by the restore procedure;
@@ -2213,7 +2295,6 @@ void __naked pend_sv_handler(void)
        execution.  */
     asm volatile("mov lr, %0" ::"r"(runnable));
 
-    asm volatile("cpsie i");
     /* return (function is naked) */
     asm volatile("bx lr          \n");
 }
@@ -2365,9 +2446,9 @@ void task_deliver_sigtrap(void *arg)
 }
 
 
+#ifdef CONFIG_PTHREADS
 static void destroy_thread_group(struct thread_group *group, uint16_t tid)
 {
-#ifdef CONFIG_PTHREADS
     int i;
     /* Destroy the entire thread family */
     for (i = 0; i < group->n_threads; i++) {
@@ -2383,14 +2464,13 @@ static void destroy_thread_group(struct thread_group *group, uint16_t tid)
             }
         }
     }
-#endif
 }
+#endif
 
 
 
 void task_terminate(struct task *t)
 {
-    int i;
     if (t) {
         running_to_idling(t);
         t->tb.state = TASK_ZOMBIE;
@@ -2460,13 +2540,10 @@ void sleepy_task_wakeup(uint32_t now, void *arg)
 
 int sys_sleep_hdlr(uint32_t arg1, uint32_t arg2)
 {
-    uint32_t timeout;
     if (arg1 < 0)
         return -EINVAL;
     if (!arg2)
         return -EINVAL;
-
-    timeout = jiffies + arg1;
 
     if ((_cur_task->tb.flags & TASK_FLAG_TIMEOUT) != 0) {
         _cur_task->tb.flags &= (~TASK_FLAG_TIMEOUT);
@@ -2500,10 +2577,11 @@ void alarm_task(uint32_t now, void *arg)
 
 int sys_alarm_hdlr(uint32_t arg1)
 {
+    int ret = 0;
+
     if (arg1 < 0)
         return -EINVAL;
 
-    int ret = 0;
     if (_cur_task->tb.timer_id >= 0) {
         ktimer_del(_cur_task->tb.timer_id);
         ret = 1;
@@ -2515,10 +2593,11 @@ int sys_alarm_hdlr(uint32_t arg1)
 
 int sys_ualarm_hdlr(uint32_t arg1, uint32_t arg2)
 {
+    int ret = 0;
+
     if (arg1 < 0)
         return -EINVAL;
 
-    int ret = 0;
     if (_cur_task->tb.timer_id >= 0) {
         ktimer_del(_cur_task->tb.timer_id);
         ret = 1;
@@ -2922,12 +3001,14 @@ int task_kill(int pid, int signal)
     if (pid > 0) {
         return sys_kill_hdlr(pid, signal);
     }
+    return -EINVAL;
 }
 
 int sys_exit_hdlr(int val)
 {
     _cur_task->tb.exitval = val;
     task_terminate(_cur_task);
+    return 0;
 }
 
 int sys_setsid_hdlr(void)
@@ -2950,34 +3031,247 @@ int sys_setsid_hdlr(void)
             }
         }
     }
+    return -1;
 }
 
-int task_segfault(uint32_t address, uint32_t instruction, int flags)
+static char __hexstr_ret[12];
+static char *hex_str(uint32_t val)
+{
+    int i;
+    char *p = __hexstr_ret;
+    *p++ = '0';
+    *p++ = 'x';
+    for (i = 7; i >= 0; i--) {
+        uint8_t c = (val >> (i * 4)) & 0xf;
+        if (c < 10)
+            *p++ = '0' + c;
+        else
+            *p++ = 'a' + c - 10;
+    }
+    *p = 0;
+    return __hexstr_ret;
+}
+
+#if CONFIG_CORE_DUMP
+static int core_write_full(int fd, const void *buf, size_t len)
+{
+    const uint8_t *ptr = buf;
+    while (len > 0) {
+        int chunk = (len > INT_MAX) ? INT_MAX : (int)len;
+        int written = sys_write_hdlr(fd, (void *)ptr, chunk);
+        if (written < 0)
+            return written;
+        ptr += written;
+        len -= written;
+    }
+    return 0;
+}
+
+static void core_dump_task(struct task *task, uint32_t fault_type,
+                           struct nvic_stack_frame *nvic,
+                           struct extra_stack_frame *extra)
+{
+    struct elf_prstatus prstatus;
+    struct elf32_ehdr ehdr;
+    struct elf32_phdr phdrs[3];
+    uint8_t note_buf[CORE_NOTE_BUF_SIZE];
+    uint32_t image_size =
+        task->tb.exec_info.text_size + task->tb.exec_info.data_size;
+    void *image_base = task->tb.exec_info.mmap_base;
+    uint8_t *stack_base = task->tb.cur_stack;
+    uint32_t stack_size = SCHEDULER_STACK_SIZE;
+    size_t phnum = 0;
+    size_t offset;
+    size_t note_offset;
+    size_t note_size = sizeof(struct elf32_nhdr) +
+                       CORE_ALIGN4(CORE_NOTE_NAME_SZ) +
+                       CORE_ALIGN4(CORE_NOTE_DESC_SZ);
+    size_t image_offset = 0;
+    size_t stack_offset = 0;
+    int fd;
+    struct task *saved = _cur_task;
+    struct task *kernel_task = get_kernel();
+    char core_path[] = "/var/core";
+
+    memset(&prstatus, 0, sizeof(prstatus));
+    prstatus.pr_info.si_signo = SIGSEGV;
+    prstatus.pr_info.si_code = fault_type;
+    prstatus.pr_cursig = SIGSEGV;
+    prstatus.pr_sigpend = task->tb.sigpend;
+    prstatus.pr_sighold = task->tb.sigmask;
+    prstatus.pr_pid = task->tb.pid;
+    prstatus.pr_ppid = task->tb.ppid;
+    prstatus.pr_reg[ARM_R0] = nvic->r0;
+    prstatus.pr_reg[ARM_R1] = nvic->r1;
+    prstatus.pr_reg[ARM_R2] = nvic->r2;
+    prstatus.pr_reg[ARM_R3] = nvic->r3;
+    prstatus.pr_reg[ARM_R4] = extra->r4;
+    prstatus.pr_reg[ARM_R5] = extra->r5;
+    prstatus.pr_reg[ARM_R6] = extra->r6;
+    prstatus.pr_reg[ARM_R7] = extra->r7;
+    prstatus.pr_reg[ARM_R8] = extra->r8;
+    prstatus.pr_reg[ARM_R9] = extra->r9;
+    prstatus.pr_reg[ARM_R10] = extra->r10;
+    prstatus.pr_reg[ARM_R11] = extra->r11;
+    prstatus.pr_reg[ARM_R12] = nvic->r12;
+    prstatus.pr_reg[ARM_SP] =
+        (uint32_t)((uint8_t *)nvic + NVIC_FRAME_SIZE);
+    prstatus.pr_reg[ARM_LR] = nvic->lr;
+    prstatus.pr_reg[ARM_PC] = nvic->pc;
+    prstatus.pr_reg[ARM_CPSR] = nvic->psr;
+    prstatus.pr_reg[ARM_ORIG_R0] = nvic->r0;
+
+    memset(&ehdr, 0, sizeof(ehdr));
+    ehdr.e_ident[0] = 0x7f;
+    ehdr.e_ident[1] = 'E';
+    ehdr.e_ident[2] = 'L';
+    ehdr.e_ident[3] = 'F';
+    ehdr.e_ident[4] = ELFCLASS32;
+    ehdr.e_ident[5] = ELFDATA2LSB;
+    ehdr.e_ident[6] = EV_CURRENT;
+    ehdr.e_type = ET_CORE;
+    ehdr.e_machine = EM_ARM;
+    ehdr.e_version = EV_CURRENT;
+    ehdr.e_ehsize = sizeof(struct elf32_ehdr);
+    ehdr.e_phentsize = sizeof(struct elf32_phdr);
+
+    phnum = 1;
+    if (image_base && image_size)
+        phnum++;
+    if (stack_base && stack_size)
+        phnum++;
+    ehdr.e_phnum = phnum;
+    ehdr.e_phoff = sizeof(struct elf32_ehdr);
+
+    offset = sizeof(struct elf32_ehdr) +
+             (ehdr.e_phnum * sizeof(struct elf32_phdr));
+    note_offset = offset;
+    offset += note_size;
+
+    if (image_base && image_size) {
+        image_offset = offset;
+        offset += image_size;
+    }
+    if (stack_base && stack_size) {
+        stack_offset = offset;
+        offset += stack_size;
+    }
+
+    memset(phdrs, 0, sizeof(phdrs));
+    phdrs[0].p_type = PT_NOTE;
+    phdrs[0].p_offset = note_offset;
+    phdrs[0].p_filesz = note_size;
+    phdrs[0].p_align = 1;
+
+    phnum = 1;
+    if (image_base && image_size) {
+        phdrs[phnum].p_type = PT_LOAD;
+        phdrs[phnum].p_offset = image_offset;
+        phdrs[phnum].p_vaddr = (uint32_t)image_base;
+        phdrs[phnum].p_paddr = (uint32_t)image_base;
+        phdrs[phnum].p_filesz = image_size;
+        phdrs[phnum].p_memsz = image_size;
+        phdrs[phnum].p_flags = PF_R | PF_W | PF_X;
+        phdrs[phnum].p_align = 4;
+        phnum++;
+    }
+    if (stack_base && stack_size) {
+        phdrs[phnum].p_type = PT_LOAD;
+        phdrs[phnum].p_offset = stack_offset;
+        phdrs[phnum].p_vaddr = (uint32_t)stack_base;
+        phdrs[phnum].p_paddr = (uint32_t)stack_base;
+        phdrs[phnum].p_filesz = stack_size;
+        phdrs[phnum].p_memsz = stack_size;
+        phdrs[phnum].p_flags = PF_R | PF_W;
+        phdrs[phnum].p_align = 4;
+    }
+
+    memset(note_buf, 0, sizeof(note_buf));
+    {
+        struct elf32_nhdr nhdr;
+        nhdr.n_namesz = CORE_NOTE_NAME_SZ;
+        nhdr.n_descsz = sizeof(struct elf_prstatus);
+        nhdr.n_type = NT_PRSTATUS;
+        memcpy(note_buf, &nhdr, sizeof(nhdr));
+        memcpy(note_buf + sizeof(nhdr), CORE_NOTE_NAME,
+               CORE_NOTE_NAME_SZ);
+        memcpy(note_buf + sizeof(nhdr) +
+                   CORE_ALIGN4(CORE_NOTE_NAME_SZ),
+               &prstatus, sizeof(prstatus));
+    }
+
+    _cur_task = kernel_task;
+    fd = sys_open_hdlr(core_path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
+    if (fd >= 0) {
+        if (core_write_full(fd, &ehdr, sizeof(ehdr)) == 0 &&
+            core_write_full(fd, phdrs,
+                            sizeof(struct elf32_phdr) * ehdr.e_phnum) == 0 &&
+            core_write_full(fd, note_buf, note_size) == 0) {
+            if (image_base && image_size)
+                core_write_full(fd, image_base, image_size);
+            if (stack_base && stack_size)
+                core_write_full(fd, stack_base, stack_size);
+        }
+        sys_close_hdlr(fd);
+    }
+    _cur_task = saved;
+}
+#endif
+
+int task_segfault(uint32_t fault_type)
 {
     struct filedesc_table *ft;
+    uint32_t psp_ns;
+    struct extra_stack_frame *extra;
+    struct nvic_stack_frame *nvic;
+    uint32_t stacked_pc;
     if (in_kernel())
         return -1;
     if (_cur_task->tb.state == TASK_ZOMBIE)
         return 0;
 
+    save_task_context();
+    asm volatile("mrs %0, psp" : "=r"(psp_ns));
+    extra = (struct extra_stack_frame *)psp_ns;
+    nvic = (struct nvic_stack_frame *)(psp_ns + EXTRA_FRAME_SIZE);
+#if CONFIG_CORE_DUMP
+    core_dump_task(_cur_task, fault_type, nvic, extra);
+#endif
+
     ft = _cur_task->tb.filedesc_table;
     if (ft && (ft->n_files > 2) && ft->fdesc[2].fno->owner->ops.write) {
-#ifdef CONFIG_EXTENDED_MEMFAULT
-        char segv_msg[128] = "Memory fault: process (pid=";
+        char segv_msg[1024] = "";
+        char segv_msg0[] = ">_< -- Segmentation Fault! -- >_<\n\n";
+
+        stacked_pc = nvic->pc;
+
+        strcat(segv_msg, "Memory fault: process (pid=");
         strcat(segv_msg, pid_str(_cur_task->tb.pid));
-        if (flags == MEMFAULT_ACCESS) {
-            strcat(segv_msg, ") attempted access to memory at ");
-            strcat(segv_msg, x_str(address));
+        strcat(segv_msg, ") ");
+        switch (fault_type) {
+            case FAULT_TYPE_MPU:
+                strcat(segv_msg, "MPU region violation, ");
+                break;
+            case FAULT_TYPE_BUS:
+                strcat(segv_msg, "BUS access violation, ");
+                break;
+            case FAULT_TYPE_USAGE:
+                strcat(segv_msg, "Usage fault, ");
+                break;
+            case FAULT_TYPE_SECURE:
+                strcat(segv_msg, "TrustZone violation, ");
+                break;
+            default:
+                strcat(segv_msg, "Unknown fault type, ");
+                break;
         }
-        if (flags == MEMFAULT_DOUBLEFREE) {
-            strcat(segv_msg, ") attempted double free");
-        }
-        strcat(segv_msg, ". Killed.\r\n");
-#else
-        char segv_msg[] = ">_< -- Segfault -- >_<";
-#endif
+        strcat(segv_msg, " offending instruction at address: ");
+        strcat(segv_msg, hex_str(stacked_pc));
+        strcat(segv_msg, ". Process Killed by SIGSEGV.\r\n");
         ft->fdesc[2].fno->owner->ops.write(ft->fdesc[2].fno, segv_msg,
                                            strlen(segv_msg));
+        ft->fdesc[2].fno->owner->ops.write(ft->fdesc[2].fno, segv_msg0,
+                                           strlen(segv_msg0));
     }
     task_terminate(_cur_task);
     return 0;
@@ -2989,7 +3283,6 @@ static int task_ptr_valid_for_task(const void *ptr, const struct task *t)
     uint8_t *stack_start = (uint8_t *)t->tb.cur_stack;
     uint8_t *stack_end = stack_start + SCHEDULER_STACK_SIZE;
     uint8_t *data_start;
-    uint8_t *data_end;
 
     if (!ptr)
         return 0; /* NULL is a permitted value */
@@ -3036,6 +3329,9 @@ static uint32_t n_syscall = 0xFFFFFFFF;
 
 int __naked sv_call_handler(void)
 {
+    int (*call)(uint32_t arg1, uint32_t arg2, uint32_t arg3, uint32_t arg4,
+                uint32_t arg5) = NULL;
+
     irq_off();
 
     save_task_context();
@@ -3091,13 +3387,9 @@ int __naked sv_call_handler(void)
 #endif
 
     /* Execute syscall */
-    int (*call)(uint32_t arg1, uint32_t arg2, uint32_t arg3, uint32_t arg4,
-                uint32_t arg5) = NULL;
-
     _cur_task->tb.flags |= TASK_FLAG_IN_SYSCALL;
     call = sys_syscall_handlers[n_syscall];
     if (!call) {
-        irq_on();
         goto return_from_syscall;
     }
     call(*a1, *a2, *a3, *a4, *a5);
@@ -3115,7 +3407,6 @@ int __naked sv_call_handler(void)
 
     /* out of syscall */
     _cur_task->tb.flags &= (~TASK_FLAG_IN_SYSCALL);
-    irq_on();
 
     if (_cur_task->tb.state != TASK_RUNNING) {
         task_switch();
@@ -3130,7 +3421,8 @@ return_from_syscall:
         restore_kernel_context();
         runnable = RUN_KERNEL;
         mpu_task_on(0, 0);
-        asm volatile("msr CONTROL, %0" ::"r"(0x00));
+        asm volatile("msr control, %0" ::"r"(0x00) : "memory");
+        asm volatile("isb");
     } else {
         asm volatile("msr " PSP ", %0" ::"r"(_cur_task->tb.sp));
         asm volatile("isb");
@@ -3140,17 +3432,11 @@ return_from_syscall:
             mpu_task_on(_cur_task->tb.pid, _cur_task->tb.ppid);
         else
             mpu_task_on(_cur_task->tb.pid, 0);
-        asm volatile("msr CONTROL, %0" ::"r"(0x01));
+        asm volatile("msr control, %0" ::"r"(0x03) : "memory");
+        asm volatile("isb");
     }
 
-#if 0
-    /* Set control bit for non-kernel threads */
-    if (_cur_task->tb.pid != 0) {
-        asm volatile("msr CONTROL, %0" ::"r"(0x01));
-    } else {
-        asm volatile("msr CONTROL, %0" ::"r"(0x00));
-    }
-#endif
+    asm volatile("cpsie i");
     asm volatile("isb");
 
     /* Set return value selected by the restore procedure */

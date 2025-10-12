@@ -25,19 +25,43 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <sys/types.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <sys/user.h>
-#include <sys/ptrace.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <errno.h>
 
 #include "gdb-remote.h"
 #include "gdb-server.h"
+
+enum frosted_ptrace_request {
+    PTRACE_TRACEME = 0,
+    PTRACE_PEEKTEXT = 1,
+    PTRACE_PEEKDATA = 2,
+    PTRACE_PEEKUSER = 3,
+    PTRACE_POKETEXT = 4,
+    PTRACE_POKEDATA = 5,
+    PTRACE_POKEUSER = 6,
+    PTRACE_CONT = 7,
+    PTRACE_KILL = 8,
+    PTRACE_SINGLESTEP = 9,
+    PTRACE_GETREGS = 12,
+    PTRACE_SETREGS = 13,
+    PTRACE_ATTACH = 16,
+    PTRACE_DETACH = 17,
+    PTRACE_SYSCALL = 24,
+    PTRACE_SEIZE = 0x4206
+};
+
+int ptrace(enum frosted_ptrace_request request, uint16_t pid, void *addr, void *data);
+
+struct user {
+    uint32_t regs[16];
+};
+
 
 static int pid = -1;
 static int client = -1;
@@ -76,12 +100,16 @@ int main(int argc, char *argv[])
     uint32_t text_size;
     struct sigaction sigtrap = {};
     struct sigaction sigchld = {};
+    char **child_argv = NULL;
+    int child_argc = 0;
 
     sigtrap.sa_handler = TrapHandler;
     sigchld.sa_handler = TrapHandler;
     sigaction(SIGTRAP, &sigtrap, NULL);
-    sigaction(SIGCHLD, &sigtrap, NULL);
+    sigaction(SIGCHLD, &sigchld, NULL);
 
+    if (argc < 2)
+        usage(argv[0]);
 
     if ((argc == 3) && (strcmp(argv[1], "-p") == 0)) {
         pid = atoi(argv[2]);
@@ -92,13 +120,20 @@ int main(int argc, char *argv[])
             fprintf(stderr, "Cannot vfork(): %s\r\n", strerror(errno));
             exit(1);
         }
+    } else if (strcmp(argv[1], "-p") == 0) {
+        usage(argv[0]);
     } else {
         struct stat st;
-        char **arg_aux = malloc(argc * sizeof(char*)); /* argc -1 + 1 (NULL) at the end */
-        memcpy(arg_aux, argv + 1, argc - 1);
-        arg_aux[argc - 1] = NULL;
-        if (stat(argv[2], &st) < 0) {
-            fprintf(stderr, "Cannot execute %s: %s\r\n", argv[2], strerror(errno));
+        child_argc = argc - 1;
+        child_argv = calloc(child_argc + 1, sizeof(char *));
+        if (!child_argv) {
+            perror("calloc");
+            exit(1);
+        }
+        memcpy(child_argv, argv + 1, child_argc * sizeof(char *));
+        child_argv[child_argc] = NULL;
+        if (stat(child_argv[0], &st) < 0) {
+            fprintf(stderr, "Cannot execute %s: %s\r\n", child_argv[0], strerror(errno));
             exit(1);
         }
         pid = vfork();
@@ -108,7 +143,7 @@ int main(int argc, char *argv[])
         }
         if (pid == 0) { 
             ptrace(PTRACE_TRACEME, 0, NULL, NULL);
-            execvp(argv[2], arg_aux);
+            execvp(child_argv[0], child_argv);
             exit(1);
         }
     }
@@ -161,6 +196,7 @@ static struct code_hw_watchpoint data_watches[DATA_WATCH_NUM];
 
 static void init_data_watchpoints(void) {
     uint32_t data;
+    int i;
     printf("init watchpoints\n");
 
     //stlink_read_debug32(sl, 0xE000EDFC, &data);
@@ -169,7 +205,7 @@ static void init_data_watchpoints(void) {
     // stlink_write_debug32(sl, 0xE000EDFC, data);
 
     // make sure all watchpoints are cleared
-    for(int i = 0; i < DATA_WATCH_NUM; i++) {
+    for(i = 0; i < DATA_WATCH_NUM; i++) {
         data_watches[i].fun = WATCHDISABLED;
         // TODO: Clear watchpoint
         //stlink_write_debug32(sl, 0xe0001028 + i * 16, 0);
@@ -256,8 +292,9 @@ static struct code_hw_breakpoint code_breaks[CODE_BREAK_NUM_MAX];
 
 static void init_code_breakpoints(void) {
     unsigned int val;
+    int i;
     printf("Support for 8 hw breakpoint registers\n");
-    for(int i = 0; i < 8; i++) {
+    for(i = 0; i < 8; i++) {
         code_breaks[i].type = 0;
         ptrace(PTRACE_POKEUSER, pid, USER_BKPT(i), NULL);
     }
@@ -265,7 +302,8 @@ static void init_code_breakpoints(void) {
 
 static int has_breakpoint(uint32_t addr)
 {
-    for(int i = 0; i < code_break_num; i++) {
+    int i;
+    for(i = 0; i < code_break_num; i++) {
         if (code_breaks[i].addr == addr) {
             return 1;
         }
@@ -274,15 +312,18 @@ static int has_breakpoint(uint32_t addr)
 }
 
 static int update_code_breakpoint(uint32_t addr, int set) {
-    uint32_t fpb_addr;
+    uint32_t fpb_addr = addr;
     uint32_t mask;
+    int id = -1;
+    struct code_hw_breakpoint* brk;
+    int i;
 
     if(addr & 1) {
         printf("update_code_breakpoint: unaligned address %08x\n", addr);
         return -1;
     }
-    int id = -1;
-    for(int i = 0; i < code_break_num; i++) {
+
+    for(i = 0; i < code_break_num; i++) {
         if(fpb_addr == code_breaks[i].addr ||
                 (set && code_breaks[i].type == 0)) {
             id = i;
@@ -295,7 +336,7 @@ static int update_code_breakpoint(uint32_t addr, int set) {
         else	return 0;  // Breakpoint is already removed
     }
 
-    struct code_hw_breakpoint* brk = &code_breaks[id];
+    brk = &code_breaks[id];
 
     brk->addr = addr;
 
@@ -312,16 +353,18 @@ static int update_code_breakpoint(uint32_t addr, int set) {
 }
 
 int serve(void) {
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    int sock;
+    unsigned int val = 1;
+    struct sockaddr_in serv_addr;
+
+    sock = socket(AF_INET, SOCK_STREAM, 0);
     if(sock < 0) {
         perror("socket");
         return 1;
     }
 
-    unsigned int val = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char *)&val, sizeof(val));
 
-    struct sockaddr_in serv_addr;
     memset(&serv_addr,0,sizeof(struct sockaddr_in));
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_addr.s_addr = INADDR_ANY;
@@ -352,15 +395,9 @@ int serve(void) {
 
     printf("GDB connected.\n");
 
-    /*
-     * To allow resetting the chip from GDB it is required to
-     * emulate attaching and detaching to target.
-     */
-    unsigned int attached = 1;
-
     while(1) {
         char* packet;
-
+        char* reply = NULL;
         int status = gdb_recv_packet(client, &packet);
         if(status < 0) {
             printf("cannot recv: %d\n", status);
@@ -369,24 +406,27 @@ int serve(void) {
 
         printf("recv: %s\n", packet);
 
-        char* reply = NULL;
-
         switch(packet[0]) {
             case 'q': {
+                char *separator;
+                char *params = "";
+                unsigned queryNameLength;
+                char* queryName;
+
                 if(packet[1] == 'P' || packet[1] == 'L') {
                     reply = strdup("");
                     break;
                 }
 
-                char *separator = strstr(packet, ":"), *params = "";
+                separator = strstr(packet, ":");
                 if(separator == NULL) {
                     separator = packet + strlen(packet);
                 } else {
                     params = separator + 1;
                 }
 
-                unsigned queryNameLength = (unsigned) (separator - &packet[1]);
-                char* queryName = calloc(queryNameLength + 1, 1);
+                queryNameLength = (unsigned) (separator - &packet[1]);
+                queryName = calloc(queryNameLength + 1, 1);
                 strncpy(queryName, &packet[1], queryNameLength);
 
                 printf("query: %s;%s\n", queryName, params);
@@ -416,9 +456,16 @@ int serve(void) {
                     reply = calloc(30,1);
                     snprintf(reply,30,"TextSeg=%x",text);
                 } else if(!strcmp(queryName, "Xfer")) {
-                    char *type, *op, *__s_addr, *s_length;
+                    char *type;
+                    char *op;
+                    char *__s_addr;
+                    char *s_length;
                     char *tok = params;
                     char *annex __attribute__((unused));
+                    unsigned addr;
+                    unsigned length;
+                    const char* data = NULL;
+                    unsigned data_length;
 
                     type     = strsep(&tok, ":");
                     op       = strsep(&tok, ":");
@@ -426,19 +473,17 @@ int serve(void) {
                     __s_addr   = strsep(&tok, ",");
                     s_length = tok;
 
-                    unsigned addr = (unsigned) strtoul(__s_addr, NULL, 16),
-                             length = (unsigned) strtoul(s_length, NULL, 16);
+                    addr = (unsigned) strtoul(__s_addr, NULL, 16);
+                    length = (unsigned) strtoul(s_length, NULL, 16);
 
                     printf("Xfer: type:%s;op:%s;annex:%s;addr:%d;length:%d\n",
                                 type, op, annex, addr, length);
-
-                    const char* data = NULL;
 
                     if(!strcmp(type, "features") && !strcmp(op, "read"))
                         data = target_description;
 
                     if(data) {
-                        unsigned data_length = (unsigned) strlen(data);
+                        data_length = (unsigned) strlen(data);
                         if(addr + length > data_length)
                             length = data_length - addr;
 
@@ -538,10 +583,11 @@ int serve(void) {
 
             case 'g': {
                     struct user u;
+                    int i;
                     ptrace(PTRACE_GETREGS, pid, NULL, &u);
 
                     reply = calloc(8 * 16 + 1, 1);
-                    for(int i = 0; i < 16; i++)
+                    for(i = 0; i < 16; i++)
                         sprintf(&reply[i * 8], "%08x", htonl(u.regs[i]));
                     break;
                 }
@@ -573,15 +619,18 @@ int serve(void) {
                 break;
             }
 
-            case 'G':
-                for(int i = 0; i < 13; i++) {
+            case 'G': {
+                int i;
+                for(i = 0; i < 13; i++) {
                     char str[9] = {0};
+                    uint32_t reg;
                     strncpy(str, &packet[1 + i * 8], 8);
-                    uint32_t reg = (uint32_t) strtoul(str, NULL, 16);
+                    reg = (uint32_t) strtoul(str, NULL, 16);
                     ptrace(PTRACE_POKEUSER, pid, (void *)(i * 4), (void *)reg);
                 }
                 reply = strdup("OK");
                 break;
+            }
 
             case 'm': {
                 int i;
@@ -601,9 +650,12 @@ int serve(void) {
                     memcpy(mbuf + i, &res, sizeof(uint32_t));
                 }
                 reply = calloc(count * 2 + 1, 1);
-                for(unsigned int i = 0; i < count; i++) {
-                    reply[i * 2 + 0] = hex[mbuf[i + adj_start] >> 4];
-                    reply[i * 2 + 1] = hex[mbuf[i + adj_start] & 0xf];
+                {
+                    unsigned int idx;
+                    for(idx = 0; idx < count; idx++) {
+                        reply[idx * 2 + 0] = hex[mbuf[idx + adj_start] >> 4];
+                        reply[idx * 2 + 1] = hex[mbuf[idx + adj_start] & 0xf];
+                    }
                 }
                 break;
             }
