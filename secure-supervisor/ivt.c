@@ -23,6 +23,8 @@
 void Reset_Handler(void);
 void Default_Handler(void)        { while (1); }
 void NMI_Handler(void)            { while (1); }
+
+#if 0
 void HardFault_Handler(void)
 {
     /* Assign values for debugging; place a bkpt */
@@ -35,6 +37,16 @@ void HardFault_Handler(void)
     volatile uint32_t pc;
     volatile uint32_t psr;
 
+    (void)r0;
+    (void)r1;
+    (void)r2;
+    (void)r3;
+    (void)r12;
+    (void)lr;
+    (void)pc;
+    (void)psr;
+
+
     asm volatile ("TST lr, #4 \n"
                  "ITE EQ \n"
                  "MRSEQ r0, MSP \n"
@@ -44,6 +56,16 @@ void HardFault_Handler(void)
         ;
 
 }
+#else
+
+void HardFault_Handler(void)
+{
+    asm volatile ("BKPT #0");
+    while(1)
+        ;
+}
+
+#endif
 
 void MemManage_Handler(void)
 {
@@ -52,6 +74,8 @@ void MemManage_Handler(void)
 }
 void BusFault_Handler(void)
 {
+    /* Trigger a breakpoint for gdb to catch the fault immediately */
+    asm volatile("bkpt #0\n");
     while(1)
         ;
 }
@@ -137,4 +161,3 @@ void (* const g_pfnVectors[])(void) = {
     Default_Handler, /* IRQ 30 */
     Default_Handler, /* IRQ 31 */
 };
-

@@ -3,9 +3,11 @@
 #include "frosted_api.h"
 #include "malloc.h"
 #include "interrupts.h"
+typedef char wint_t;
 #include "errno.h"
 #include "kprintf.h"
 #include "mpu.h"
+#include "time.h"
 #ifndef FROSTED_INCLUDED_H
 #define FROSTED_INCLUDED_H
 

@@ -19,19 +19,40 @@
  */
 
 #include <stdint.h>
+#include <stddef.h>
 
-#define MPU_BASE        (0xE002ED90UL)   /* MPU register block base address in non-secure domain */
+#define MPU_BASE        (0xE000ED90UL)   /* MPU register block base address in non-secure domain */
 
 #include "mpu_struct.h"
 #include "mpu_armv8.h"
+
+/*
+ * By default, the MPU is enabled for all builds to provide isolation.
+ * Define CONFIG_MPU to 0 on the compiler command line to disable MPU
+ * initialization and task‑specific MPU configuration. This is useful for
+ * testing the scheduler without memory protection.
+ */
+#ifndef CONFIG_MPU
+#define CONFIG_MPU 1
+#endif
 #include "limits.h"
+
+#define __DSB() __asm volatile ("dsb")
+#define __ISB() __asm volatile ("isb")
+
+
+
 
 volatile MPU_Type *volatile MPU = (MPU_Type *)MPU_BASE;
 
 
-
+#ifdef TARGET_STM32H563
+#define NS_FILESYSTEM_START  (0x08030000)
+#define NS_FILESYSTEM_END    (0x081FFFFF)
+#elif defined(TARGET_RP2350)
 #define NS_FILESYSTEM_START (0x10010000UL)
 #define NS_FILESYSTEM_END   (0x10200000UL - 1)
+#endif
 
 #define NS_RAM_START      (0x20010000UL )
 #define NS_RAM_END        (0x20080000UL - 1)
@@ -39,182 +60,188 @@ volatile MPU_Type *volatile MPU = (MPU_Type *)MPU_BASE;
 #define DEV_START        (0x40000000UL)
 #define DEV_END          (0x60000000UL - 1)
 
-#define REG_START        (0xE0000000UL)
-#define REG_END          (0xE0100000UL - 1)
+// ---- MAIR attribute slot indices ----
+// We make the mapping explicit to avoid mismatches with other headers.
+#define IDX_NORMAL_WBWA 0u // 0xFF: Normal, WB/WA, Non-shareable
+#define IDX_NORMAL_WT 1u // 0x44: Normal, WT, Non-shareable (good for XIP)
+#define IDX_DEVICE_nGnRE 2u // 0x04: Device nGnRE
+#define IDX_DEVICE_nGnRnE 3u // 0x00: Device nGnRnE (Strongly-ordered)
 
 
-enum attr_layout {
-  ATTR_NORMAL_WBWA = 0,  /* Normal, WB/WA (inner+outer) */
-  ATTR_NORMAL_NC   = 1,  /* Normal, Non-cacheable (inner+outer) */
-  ATTR_DEV_nGnRE   = 2,  /* Device nGnRE */
-  ATTR_DEV_nGnRnE  = 3   /* Device nGnRnE */
-};
+// MAIR encodings (ARM ARM):
+#define MAIR_NORMAL_WBWA 0xFFu
+#define MAIR_NORMAL_WT 0x44u
+#define MAIR_DEVICE_nGnRE 0x04u
+#define MAIR_DEVICE_nGnRnE 0x00u
+
+
+// Helpers for RBAR/RLAR (ARMv8-M)
+// RBAR: [31:5]=BASE, [4:3]=SH, [2:1]=AP, [0]=XN
+// RLAR: [31:5]=LIMIT, [4:1]=AttrIdx, [0]=EN
+#define RBAR(base, sh, ap, xn) ( ((uint32_t)(base) & 0xFFFFFFE0UL) | (((uint32_t)(sh) & 0x3u) << 3) | (((uint32_t)(ap) & 0x3u) << 1) | ((uint32_t)(xn) & 0x1u) )
+#define RLAR(limit, idx) ( ((uint32_t)(limit) & 0xFFFFFFE0UL) | (((uint32_t)(idx) & 0xFu) << 1) | 0x1u )
+
+
+// Shareability (SH) encodings for RBAR
+#define SH_NON_SHAREABLE 0u
+#define SH_INNER_SHAREABLE 1u
+#define SH_OUTER_SHAREABLE 2u
+
+
+// Access permission (AP) encodings for RBAR (ARMv8-M):
+// 0b00 = RW, privileged only; 0b01 = RW, privileged & unprivileged
+// 0b10 = RO, privileged only; 0b11 = RO, privileged & unprivileged
+#define AP_RW_PRIVONLY 0u
+#define AP_RW_FULL 1u
+#define AP_RO_PRIVONLY 2u
+#define AP_RO_FULL 3u
+
+
+// eXecute Never bit
+#define XN_EXECUTE 0u
+#define XN_NEVER 1u
+
 
 
 void mpu_init(void)
 {
-    uint32_t mair0, o, b, i;
-    MPU->CTRL = 0U; /* Disable */
-    /* Fill attribute tables */
-    /* Slot 0: normal WB/WA (out = in = 0xF) */
-    mair0 = 0;
-    o = ARM_MPU_ATTR_MEMORY_(1U, 1U, 1U, 1U);
-    b = ARM_MPU_ATTR(o, o);
-    mair0 = (mair0 & ~(0xFFU << (ATTR_NORMAL_WBWA * 8))) |
-        (b << (ATTR_NORMAL_WBWA * 8));
+#if CONFIG_MPU
+
+    // Disable MPU during configuration
+    MPU->CTRL = 0U;
+
+
+    // ---- Program MAIR0 with our 4 attribute slots ----
+    uint32_t mair0 = 0u;
+    mair0 |= ((uint32_t)MAIR_NORMAL_WBWA << (IDX_NORMAL_WBWA * 8));
+    mair0 |= ((uint32_t)MAIR_NORMAL_WT << (IDX_NORMAL_WT * 8));
+    mair0 |= ((uint32_t)MAIR_DEVICE_nGnRE << (IDX_DEVICE_nGnRE * 8));
+    mair0 |= ((uint32_t)MAIR_DEVICE_nGnRnE << (IDX_DEVICE_nGnRnE * 8));
     MPU->MAIR0 = mair0;
 
-    /* Slot 1: Normal Non-cacheable (0x44) */
-    mair0 = MPU->MAIR0;
-    b = ARM_MPU_ATTR(ARM_MPU_ATTR_NON_CACHEABLE, ARM_MPU_ATTR_NON_CACHEABLE);
-    mair0 = (mair0 & ~(0xFFU << (ATTR_NORMAL_NC * 8))) |
-        (b << (ATTR_NORMAL_NC * 8));
-    MPU->MAIR0 = mair0;
 
-    /* Slot 2: Device memory (nGnRE) */
-    mair0 = MPU->MAIR0;
-    b = ARM_MPU_ATTR(ARM_MPU_ATTR_DEVICE, ARM_MPU_ATTR_DEVICE_nGnRE);
-    mair0 = (mair0 & ~(0xFFU << (ATTR_DEV_nGnRE * 8))) |
-        (b << (ATTR_DEV_nGnRE * 8));
-    MPU->MAIR0 = mair0;
+    // ---- Region 0: Peripherals (Device), RW, Privileged, XN ----
+    // Covers 0x4000_0000 .. 0x5FFF_FFFF
+    MPU->RNR = 0u;
+    MPU->RBAR = RBAR(DEV_START, SH_OUTER_SHAREABLE, AP_RW_PRIVONLY, XN_NEVER);
+    MPU->RLAR = RLAR(DEV_END, IDX_DEVICE_nGnRE);
 
-    /* Slot 3: Strongly ordered memory (nGnRnE) */
-    mair0 = MPU->MAIR0;
-    b = ARM_MPU_ATTR(ARM_MPU_ATTR_DEVICE, ARM_MPU_ATTR_DEVICE_nGnRnE);
-    mair0 = (mair0 & ~(0xFFU << (ATTR_DEV_nGnRnE * 8))) |
-        (b << (ATTR_DEV_nGnRnE * 8));
-    MPU->MAIR0 = mair0;
 
-    /* NS blanket regions */
-    /* Access is denied by default via PRIVDEFENA=0 */
+    // ---- Region 1: USERLAND XIP window in flash, RO, unprivileged, Executable ----
+    // Map as Normal WT (good for XIP on MCUs w/o caches). If you need WBWA, switch to IDX_NORMAL_WBWA.
+    MPU->RNR = 1u;
+    MPU->RBAR = RBAR(NS_FILESYSTEM_START, SH_NON_SHAREABLE, AP_RO_FULL, XN_EXECUTE);
+    MPU->RLAR = RLAR(NS_FILESYSTEM_END, IDX_NORMAL_WT);
 
-    /* Region 0: Device + PPB space. Read-write. Privileged. Non-executable. */
-    MPU->RNR = 0;
-    MPU->RBAR = ARM_MPU_RBAR(DEV_START, ARM_MPU_SH_OUTER,
-            0U, /* RW */
-            0U, /* P */
-            1U /* XN */
-            );
-    MPU->RLAR = ARM_MPU_RLAR(REG_END, ATTR_DEV_nGnRnE); /* Ends after registers. */
-
-    /* Region 1: Kernel and processes: Non-secure flash. Read-only. Non-privileged. Executable. */
-    MPU->RNR = 1;
-    MPU->RBAR = ARM_MPU_RBAR(NS_FILESYSTEM_START, ARM_MPU_SH_NON,
-            1U, /* RO */
-            1U, /* NP */
-            0U /* X */
-            );
-    MPU->RLAR = ARM_MPU_RLAR(NS_FILESYSTEM_END, ATTR_NORMAL_NC);
-
-    /* Regions 2-7: Disable */
-    for (i = 2; i < 8; i++) {
+    // Disable the remaining regions (2..7) just to be explicit
+    for (uint32_t i = 2u; i < 8u; i++) {
         MPU->RNR = i;
-        MPU->RBAR = 0;
-        MPU->RLAR = 0;
+        MPU->RBAR = 0u;
+        MPU->RLAR = 0u;
     }
 
-    /* Go! */
+    // Enable MPU with background map so addresses not covered by a region use the default memory map.
     MPU->CTRL = MPU_CTRL_ENABLE_Msk | MPU_CTRL_PRIVDEFENA_Msk;
-    asm volatile("dsb");
-    asm volatile("isb");
+    __DSB();
+    __ISB();
+#endif
 }
 
 __attribute__((cmse_nonsecure_entry))
 void mpu_task_on(uint16_t pid, uint16_t ppid)
 {
-    secure_task_t *task;
-    uint32_t i;
-    task = get_secure_task(pid);
-    MPU->CTRL = 0;
-    for (i = 2; i < 8; i++) {
+#if CONFIG_MPU
+    secure_task_t *task = get_secure_task(pid);
+
+
+    // Configure with MPU disabled
+    MPU->CTRL = 0u;
+
+
+    // Keep Region 0 (peripherals) and Region 1 (USERLAND XIP) intact from mpu_init().
+    // We program per-task regions starting at R2..
+
+
+    // Clear R2..R7
+    for (uint32_t i = 2u; i < 8u; i++) {
         MPU->RNR = i;
-        MPU->RBAR = 0;
-        MPU->RLAR = 0;
+        MPU->RBAR = 0u;
+        MPU->RLAR = 0u;
     }
 
 
-    if ((pid == 0) || (!task)) {
+    if ((pid == 0u) || (task == 0x0)) {
+        // Kernel context: rely on base regions + background map
         MPU->CTRL = MPU_CTRL_ENABLE_Msk | MPU_CTRL_PRIVDEFENA_Msk;
-        asm volatile("dsb");
-        asm volatile("isb");
+        __DSB(); __ISB();
         return;
     }
 
-    /* Stack space for the task */
-    MPU->RNR = 2;
-    MPU->RBAR = ARM_MPU_RBAR((uintptr_t)task->stack_segment.base, ARM_MPU_SH_INNER,
-            0U, /* RW */
-            1U, /* NP */
-            1U /* XN */
-            );
-    MPU->RLAR = ARM_MPU_RLAR((uintptr_t)task->stack_segment.base + task->stack_segment.size - 1,
-            ATTR_NORMAL_NC);
-    asm volatile("dsb");
-    asm volatile("isb");
+
+    // --- R2: Task stack (NS RAM), RW, unprivileged, XN ---
+    // Inner-shareable makes sense for D-cache-less MCUs too; adjust if needed.
+    if (task->stack_segment.size) {
+        uintptr_t sb = (uintptr_t)(task->stack_segment.base);
+        uintptr_t sl = sb + task->stack_segment.size - 1u;
+        MPU->RNR = 2u;
+        MPU->RBAR = RBAR(sb, SH_INNER_SHAREABLE, AP_RW_FULL, XN_NEVER);
+        MPU->RLAR = RLAR(sl, IDX_NORMAL_WBWA); // Normal memory; XN via RBAR
+    }
 
 
-    if (ppid > 0) {
-        /* This task has just been vforked.
-         * it does not have a valid main space yet, as it's executing from
-         * the parent's memory. Allow accessing parent's stack and data space,
-         * until exec().
-         */
-        secure_task_t *parent;
-        parent = get_secure_task(ppid);
+    if (ppid > 0u) {
+        // vfork(): allow access to parent's RAM while still executing parent's code.
+        secure_task_t *parent = get_secure_task(ppid);
         if (parent) {
-            MPU->RNR = 3;
-            MPU->RBAR = ARM_MPU_RBAR((uintptr_t)parent->stack_segment.base, ARM_MPU_SH_INNER,
-                    0U, /* RW */
-                    1U, /* NP */
-                    1U /* XN */
-                    );
-            MPU->RLAR = ARM_MPU_RLAR((uintptr_t)parent->stack_segment.base + parent->stack_segment.size - 1,
-                    ATTR_NORMAL_NC);
-            MPU->CTRL = MPU_CTRL_ENABLE_Msk | MPU_CTRL_PRIVDEFENA_Msk;
-            asm volatile("dsb");
-            asm volatile("isb");
-            /* Main segment for the parent */
-            MPU->RNR = 4;
-            MPU->RBAR = ARM_MPU_RBAR((uintptr_t)parent->main_segment.base, ARM_MPU_SH_INNER,
-                    0U, /* RW */
-                    1U, /* NP */
-                    0U /* XN */
-                    );
-            MPU->RLAR = ARM_MPU_RLAR((uintptr_t)parent->main_segment.base + parent->main_segment.size - 1,
-                    ATTR_NORMAL_NC);
-            asm volatile("dsb");
-            asm volatile("isb");
+            // R3: Parent stack, RW, XN
+            if (parent->stack_segment.size) {
+                uintptr_t sb = (uintptr_t)parent->stack_segment.base;
+                uintptr_t sl = sb + parent->stack_segment.size - 1u;
+                MPU->RNR = 3u;
+                MPU->RBAR = RBAR(sb, SH_INNER_SHAREABLE, AP_RW_FULL, XN_NEVER);
+                MPU->RLAR = RLAR(sl, IDX_NORMAL_WBWA);
+            }
+            // R4: Parent main segment (code+rodata in flash, maybe data in RAM)
+            // If this lives in flash XIP window: map RO, executable.
+            if (parent->main_segment.size) {
+                uintptr_t mb = (uintptr_t)parent->main_segment.base;
+                uintptr_t ml = mb + parent->main_segment.size - 1u;
+                MPU->RNR = 4u;
+                // If parent->main in flash: RO+Exec; if in RAM: choose RW and set XN as needed.
+                // Here we assume flash XIP: RO, unprivileged, executable
+                MPU->RBAR = RBAR(mb, SH_NON_SHAREABLE, AP_RO_FULL, XN_EXECUTE);
+                MPU->RLAR = RLAR(ml, IDX_NORMAL_WT); // use WT for XIP regions
+            }
         }
         MPU->CTRL = MPU_CTRL_ENABLE_Msk | MPU_CTRL_PRIVDEFENA_Msk;
+        __DSB(); __ISB();
         return;
     }
 
-    /* Main segment for the task */
-    MPU->RNR = 3;
-    MPU->RBAR = ARM_MPU_RBAR((uintptr_t)task->main_segment.base, ARM_MPU_SH_INNER,
-            0U, /* RW */
-            1U, /* NP */
-            0U /* XN */
-            );
-    MPU->RLAR = ARM_MPU_RLAR((uintptr_t)task->main_segment.base + task->main_segment.size - 1,
-            ATTR_NORMAL_NC);
-    asm volatile("dsb");
-    asm volatile("isb");
 
-    /* Up to four heap segments for the task */
-    for (int i = 0; i < task->mempool_count && i < 4; i++) {
-        MPU->RNR = 4 + i;
-        MPU->RBAR = ARM_MPU_RBAR((uintptr_t)task->mempool[i].base, ARM_MPU_SH_INNER,
-                0U, /* RW */
-                1U, /* NP */
-                1U /* XN */
-                );
-        MPU->RLAR = ARM_MPU_RLAR((uintptr_t)task->mempool[i].base + task->mempool[i].size - 1,
-                ATTR_NORMAL_NC);
-        asm volatile("dsb");
-        asm volatile("isb");
+    // --- R3: Task main segment ---
+    if (task->main_segment.size) {
+        uintptr_t mb = (uintptr_t)task->main_segment.base;
+        uintptr_t ml = mb + task->main_segment.size - 1u;
+        MPU->RNR = 3u;
+        // If main lives in flash XIP: map RO+Exec; if it’s RAM, map RW+XN. We assume flash XIP here.
+        MPU->RBAR = RBAR(mb, SH_NON_SHAREABLE, AP_RO_FULL, XN_EXECUTE);
+        MPU->RLAR = RLAR(ml, IDX_NORMAL_WT); // Normal WT attr for XIP
     }
+
+
+    // --- R4..R7: Heaps / extra RAM, RW, XN ---
+    for (uint32_t k = 0u; k < task->mempool_count && k < 4u; k++) {
+        uintptr_t hb = (uintptr_t)task->mempool[k].base;
+        uintptr_t hl = hb + task->mempool[k].size - 1u;
+        MPU->RNR = (4u + k);
+        MPU->RBAR = RBAR(hb, SH_INNER_SHAREABLE, AP_RW_FULL, XN_NEVER);
+        MPU->RLAR = RLAR(hl, IDX_NORMAL_WBWA);
+    }
+
+
+    // Enable MPU with background map
     MPU->CTRL = MPU_CTRL_ENABLE_Msk | MPU_CTRL_PRIVDEFENA_Msk;
-    asm volatile("dsb");
-    asm volatile("isb");
+    __DSB(); __ISB();
+#endif
 }

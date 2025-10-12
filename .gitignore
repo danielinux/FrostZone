@@ -4,7 +4,10 @@
 *.elf
 *.bin
 *.out
+*.map
+*.hex
 secure-supervisor/build
+secure-supervisor/tests/unit_mempool
 frosted/build
 userland/out/*
 userland/gdb/*

@@ -3,5 +3,5 @@
 #include "wolfip.h"
 
 void socket_in_init(void);
-extern volatile struct wolfIP *IPStack; /* Defined in socket_in.c, set by single device modules */
+extern struct wolfIP *IPStack; /* Defined in socket_in.c, set by single device modules */
 #endif

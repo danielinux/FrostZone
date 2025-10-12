@@ -18,6 +18,7 @@
  *
  */
 #include "frosted.h"
+#include "eth.h"
 #include "kprintf.h"
 #include "bflt.h"
 #include "null.h"
@@ -37,20 +38,21 @@
 #include "lowpower.h"
 #include "tty_console.h"
 #include "systick.h"
-#include "tusb.h"
+//#include "tusb.h"
 #include "nvic.h"
+#include "string.h"
+#include "flashfs.h"
 
 
 
 #define IDLE() while(1){do{}while(0);}
 
 static int tcpip_timer_pending = 0;
-static volatile int cpu1_started = 0;
 
 /* The following needs to be defined by
  * the application code
  */
-void (*init)(void *arg) = (void (*)(void*))(CONFIG_APPS_ORIGIN);
+static const char *const xipfs_image = (const char *)CONFIG_APPS_ORIGIN;
 
 void simple_hard_fault_handler(void)
 {
@@ -126,6 +128,8 @@ void hardfault_handler_dbg(unsigned long *sp)
 
 __attribute__((naked)) void hard_fault_handler(void)
 {
+    asm("BKPT #0");
+
     __asm("MOVS R0, #4          \n"
           "MOVS R1, LR          \n"
           "TST R0, R1           \n"
@@ -166,6 +170,8 @@ void usage_fault_handler(void)
     while(1);
 }
 
+
+#if (CONFIG_RELOCATE_VECTORS_TO_RAM)
 extern uintptr_t *_ram_vectors;
 extern uintptr_t *_flash_vectors;
 void relocate_vectors(void)
@@ -175,8 +181,8 @@ void relocate_vectors(void)
     memcpy(ram_iv, flash_iv, 0x200);
     SCB_VTOR = ram_iv;
     asm volatile("dsb");
-
 }
+#endif
 
 
 
@@ -194,49 +200,10 @@ static void hw_init(void)
     frosted_systick_config(CONFIG_SYS_CLOCK);
 }
 
-
-extern unsigned long __core1_ns_ivt;
-extern unsigned long __core1_ns_stack_top;
-
-void cpu1_main(void)
-{
-    nvic_disable_irq(1 << 14);
-    cpu1_started = 1;
-    while(1)
-    {
-        check_tasklets();
-        //asm volatile("wfe");
-    }
-
-}
-
-void core1_ns_reset(void) {
-    cpu1_main();
-    while(1)
-        ;
-}
-
-__attribute__((section(".core1_vectors")))
-const void *core1_ivt[] = {
-     &__core1_ns_stack_top,
-     core1_ns_reset,
-     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-};
-
-
-void secure_core1_start(uint32_t vtor_ns, uint32_t sp_ns, uint32_t entry_ns);
-void cpu1_start(void)
-{
-    secure_core1_start((uintptr_t)&__core1_ns_ivt,
-                       (uintptr_t)&__core1_ns_stack_top,
-                       (uintptr_t)&cpu1_main);
-}
-
 void frosted_usbdev_init(void);
 int vfs_mount(char *source, char *target, char *module, uint32_t flags, void *args);
 int frosted_init(void)
 {
-    extern void * _k__syscall__;
     int xip_mounted;
 
     nvic_enable_memfault();
@@ -247,7 +214,7 @@ int frosted_init(void)
     #define FPCCR_LSPEN    (1u << 30)
     NS_FPU_FPCCR &= ~(FPCCR_ASPEN | FPCCR_LSPEN);
 
-#ifdef CONFIG_RELOCATE_VECTORS_TO_RAM
+#if (CONFIG_RELOCATE_VECTORS_TO_RAM)
     relocate_vectors();
 #endif
     /* ktimers must be enabled before systick */
@@ -263,7 +230,9 @@ int frosted_init(void)
     devnull_init(fno_search("/dev"));
     
     hw_init();
+#ifdef CONFIG_USB
     frosted_usbdev_init();
+#endif
 
     /* Set up system */
 
@@ -280,9 +249,9 @@ int frosted_init(void)
     tty_console_init();
 
     vfs_mount(NULL, "/tmp", "memfs", 0, NULL);
-    xip_mounted = vfs_mount((char *)init, "/bin", "xipfs", 0, NULL);
+    xip_mounted = vfs_mount((char *)xipfs_image, "/bin", "xipfs", 0, NULL);
     vfs_mount(NULL, "/sys", "sysfs", 0, NULL);
-    vfs_mount(NULL, "/var", "flashfs", 0, NULL);
+    //vfs_mount(NULL, "/var", "flashfs", 0, NULL);
 
     klog_init();
 
@@ -290,8 +259,17 @@ int frosted_init(void)
 #ifdef UNIX
     socket_un_init();
 #endif
+
+#ifdef CONFIG_USB
     netusb_init();
-    //cpu1_start();
+#endif
+
+#ifdef CONFIG_ETH
+    /* Initialize Ethernet if enabled.  The driver ignores the config
+     * parameter and only requires the function call to start the
+     * device and IP stack. */
+    ethernet_init(NULL);
+#endif
 
     return xip_mounted;
 }
@@ -334,8 +312,7 @@ void frosted_kernel(int xipfs_mounted)
     frosted_scheduler_on();
 
     while(1) {
-        if (!cpu1_started)
-            check_tasklets();
+        check_tasklets();
         asm volatile ("wfe");
     }
 }
@@ -347,4 +324,3 @@ void frosted_main(void)
     xipfs_mounted = frosted_init();
     frosted_kernel(xipfs_mounted); /* never returns */
 }
-

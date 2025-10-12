@@ -21,18 +21,15 @@ static int sock_check_fd(int fd, struct fnode **fno)
     return 0;
 }
 
-static int sock_poll(int fd, uint16_t events, uint16_t *revents)
+static int sock_poll(struct fnode *fno, uint16_t events, uint16_t *revents)
 {
     *revents = events;
     return 1;
 }
 
 
-static int sock_close(int fd)
+static int sock_close(struct fnode *fno)
 {
-    struct fnode *fno;
-    if (sock_check_fd(fd, &fno))
-        return -1;
     kprintf("## Closed UNIX socket!\n");
     /* TODO */
     return 0;

@@ -20,6 +20,7 @@
 
 #include "frosted.h"
 #include "string.h"
+#include "locks.h"
 
 static struct module mod_flashfs;
 static mutex_t *flashfs_lock;

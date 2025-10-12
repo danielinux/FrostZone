@@ -10,12 +10,10 @@ struct eth_config {
     const int has_phy_reset;
 };
 
-#ifdef CONFIG_DEVETH
+#ifdef CONFIG_ETH
 int ethernet_init(const struct eth_config *conf);
-int pico_eth_start(void);
 #else
-#  define ethernet_init(x) ((-ENOENT))
-#  define pico_eth_start() ((-ENOENT))
+#  define ethernet_init(x) ((int)(-2))
 #endif
 
 #endif

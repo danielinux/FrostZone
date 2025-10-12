@@ -13,6 +13,23 @@ set(BOOT_STAGE2_FILE ${CMAKE_CURRENT_LIST_DIR}/boot2_empty.S)
 
 project(task0)
 
+# Identify target architecture – the top‑level Makefile sets ``TARGET`` via
+# an environment variable when it knows which platform to build.  Default
+# to ``stm32u585`` for backward compatibility.
+if(DEFINED ENV{TARGET})
+  set(FROST_TARGET ${TARGET})
+else()
+  set(FROST_TARGET stm32u585)
+endif()
+
+if(FROST_TARGET STREQUAL "stm32u585")
+  set(SYSTEM_FILE frosted_stm32u585.c)
+elseif(FROST_TARGET STREQUAL "stm32h563")
+  set(SYSTEM_FILE frosted_stm32h563.c)
+else()
+  set(SYSTEM_FILE frosted_rp2350.c)
+endif()
+
 # initialize the Raspberry Pi Pico SDK
 pico_sdk_init()
 
@@ -54,7 +71,7 @@ add_executable(task0
     ./memfs.c
     ./flashfs.c
     
-    ./frosted_rp2350.c
+    ${SYSTEM_FILE}
 
     ./socket_in.c
     ./wolfip.c
@@ -160,13 +177,12 @@ target_link_options(task0 PRIVATE
     -Wl,--no-dynamic-linker
     -Wl,--emit-relocs
     -Wl,--Map=task0.map
-    -Wl,-T../kernel.ld
+    -Wl,-T../rp2350.ld
 )
 
-pico_set_linker_script(task0 ../kernel.ld)
+pico_set_linker_script(task0 ../rp2350.ld)
 # target_link_libraries(task0 pico_stdlib)
 
 # create map/bin/hex/uf2 file etc.
 #pico_add_extra_outputs(task0)
 pico_set_binary_type(task0 hex map bin dis)
-

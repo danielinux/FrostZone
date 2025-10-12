@@ -17,6 +17,8 @@
  *      Authors: Daniele Lacamera
  *
  */
+
+#if CONFIG_TUD_ENABLED
 #include "tusb.h"
 #include "frosted.h"
 #include "device.h"
@@ -548,3 +550,4 @@ uint32_t wolfIP_getrandom(void)
     return r;
 }
 
+#endif /* CONFIG_TUD_ENABLED */

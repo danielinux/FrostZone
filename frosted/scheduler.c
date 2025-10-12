@@ -61,7 +61,7 @@ struct module *MODS;
 #define RUN_KERNEL (0xffffffb8u)
 #define RUN_USER (0xffffffbcu)
 
-#define SV_CALL_SIGRETURN 0xFFFFFFF8
+#define SV_CALL_SIGRETURN 0xFFFFFFF9U
 #define STACK_THRESHOLD 64
 
 /* TOP to Bottom: EXTRA | NVIC | T_EXTRA | T_NVIC */
@@ -985,7 +985,7 @@ static void sig_trampoline(struct task *t, struct task_handler *h, int signo)
     memcpy((void *)tramp_extra, (void *)cur_extra, EXTRA_FRAME_SIZE);
     memset((void *)tramp_nvic, 0, NVIC_FRAME_SIZE);
     tramp_nvic->pc = (uint32_t)h->hdlr | 1; /* enforce thumb */
-    tramp_nvic->lr = (uint32_t)sig_hdlr_return;
+    tramp_nvic->lr = (uint32_t)sig_hdlr_return | 1;
     tramp_nvic->r0 = (uint32_t)signo;
     tramp_nvic->psr = cur_nvic->psr | (1 << 24); /* enforce T bit */
     t->tb.sp = (t->tb.osp - (EXTRA_FRAME_SIZE + NVIC_FRAME_SIZE));
@@ -1239,6 +1239,8 @@ static void *task_pass_args(void *_args, uint16_t pid, uint8_t **sp)
     }
     if (n == 0)
         return NULL;
+    while(((uintptr_t)*sp & 0x07) != 0)
+        *sp--;
     /* Allocate space for pointers to each argument */
     *sp -= (sizeof(uintptr_t) * (n + 1));
     ptr = (uintptr_t *)(*sp);
@@ -1250,11 +1252,11 @@ static void *task_pass_args(void *_args, uint16_t pid, uint8_t **sp)
             uint32_t off;
             /* Push the argument string in the process' stack */
             *sp -= (l + 1);
-            off = ((uintptr_t)(*sp)) % sizeof(uintptr_t);
+            off = ((uintptr_t)(*sp)) % (2 * sizeof(uintptr_t));
             *sp -= off;
             memcpy(*sp, args[i], l + 1);
             /* Save the pointer in the table on top of the stack */
-            ptr[i] = *sp;
+            ptr[i] = (uintptr_t)*sp;
         }
     }
     return ptr;
@@ -1305,16 +1307,21 @@ static void task_create_real(struct task *new, void *arg, unsigned int nice)
     new->tb.cur_stack = new->stack;
     sp = (((uint8_t *)(new->stack)) + SCHEDULER_STACK_SIZE - 32);
 
+
     /* Push the arguments at the top */
     new->tb.arg = task_pass_args(arg, new->tb.pid, &sp);
+
+    while(((uintptr_t)sp & 0x07) != 0)
+        sp--;
+
 
     /* Push the NVIC stack frame */
     sp -= NVIC_FRAME_SIZE;
     nvic_frame = (struct nvic_stack_frame *)sp;
     memset(nvic_frame, 0, NVIC_FRAME_SIZE);
     nvic_frame->r0 = (uint32_t) new->tb.arg;
-    nvic_frame->pc = (uint32_t) new->tb.start;
-    nvic_frame->lr = (uint32_t)task_end;
+    nvic_frame->pc = ((uint32_t)new->tb.start) | 1 ;
+    nvic_frame->lr = ((uint32_t)task_end)  ;
     nvic_frame->psr = 0x01000000u;
 
     /* Push the extra frame */
@@ -1611,8 +1618,8 @@ static inline void thread_create(struct task *new,
     nvic_frame = (struct nvic_stack_frame *)sp;
     memset(nvic_frame, 0, NVIC_FRAME_SIZE);
     nvic_frame->r0 = (uint32_t) new->tb.arg;
-    nvic_frame->pc = (uint32_t) new->tb.start;
-    nvic_frame->lr = (uint32_t)pthread_end;
+    nvic_frame->pc = ((uint32_t) new->tb.start)  |1;
+    nvic_frame->lr = ((uint32_t)pthread_end) | 1;
     nvic_frame->psr = 0x01000000u;
     sp -= EXTRA_FRAME_SIZE;
     extra_frame = (struct extra_stack_frame *)sp;
@@ -2093,7 +2100,7 @@ static __naked void save_task_context(void)
     asm volatile("bx lr                 ");
 }
 
-static uint32_t runnable = RUN_HANDLER;
+static volatile uint32_t runnable = RUN_HANDLER;
 
 static __naked void restore_kernel_context(void)
 {
@@ -2181,7 +2188,7 @@ void __naked pend_sv_handler(void)
         restore_kernel_context();
         runnable = RUN_KERNEL;
         mpu_task_on(0, 0);
-        asm volatile("msr CONTROL, %0" ::"r"(0x00));
+        asm volatile("msr CONTROL_NS, %0" ::"r"(0x02));
     } else {
         asm volatile("msr " PSP ", %0" ::"r"(_cur_task->tb.sp));
         asm volatile("isb");
@@ -2191,17 +2198,9 @@ void __naked pend_sv_handler(void)
             mpu_task_on(_cur_task->tb.pid, _cur_task->tb.ppid);
         else
             mpu_task_on(_cur_task->tb.pid, 0);
-        asm volatile("msr CONTROL, %0" ::"r"(0x01));
+        asm volatile("msr CONTROL_NS, %0" ::"r"(0x03));
     }
 
-#if 0
-    /* Set control bit for non-kernel threads */
-    if (_cur_task->tb.pid != 0) {
-        asm volatile("msr CONTROL, %0" ::"r"(0x01));
-    } else {
-        asm volatile("msr CONTROL, %0" ::"r"(0x00));
-    }
-#endif
     asm volatile("isb");
 
     /* Set return value selected by the restore procedure;
@@ -3130,7 +3129,7 @@ return_from_syscall:
         restore_kernel_context();
         runnable = RUN_KERNEL;
         mpu_task_on(0, 0);
-        asm volatile("msr CONTROL, %0" ::"r"(0x00));
+        asm volatile("msr CONTROL_NS, %0" ::"r"(0x02));
     } else {
         asm volatile("msr " PSP ", %0" ::"r"(_cur_task->tb.sp));
         asm volatile("isb");
@@ -3140,17 +3139,8 @@ return_from_syscall:
             mpu_task_on(_cur_task->tb.pid, _cur_task->tb.ppid);
         else
             mpu_task_on(_cur_task->tb.pid, 0);
-        asm volatile("msr CONTROL, %0" ::"r"(0x01));
+        asm volatile("msr CONTROL_NS, %0" ::"r"(0x03));
     }
-
-#if 0
-    /* Set control bit for non-kernel threads */
-    if (_cur_task->tb.pid != 0) {
-        asm volatile("msr CONTROL, %0" ::"r"(0x01));
-    } else {
-        asm volatile("msr CONTROL, %0" ::"r"(0x00));
-    }
-#endif
     asm volatile("isb");
 
     /* Set return value selected by the restore procedure */

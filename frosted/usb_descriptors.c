@@ -40,6 +40,8 @@
  *
  */
 
+#if (CONFIG_TUD_ENABLED)
+
 #include "bsp/board_api.h"
 #include "tusb.h"
 
@@ -250,3 +252,4 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
 
   return _desc_str;
 }
+#endif /* CONFIG_TUD_ENABLED */

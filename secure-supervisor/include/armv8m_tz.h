@@ -33,4 +33,5 @@ static inline void sau_init_region(uint32_t region, uint32_t start_addr,
         | secure_flag | SAU_REG_ENABLE;
 }
 
+extern void mpu_init(void);
 #endif

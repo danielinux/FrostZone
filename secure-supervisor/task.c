@@ -26,9 +26,15 @@
 
 secure_task_t secure_tasks[MAX_SECURE_TASKS];
 
+static void memzero(void *ptr, size_t len) {
+    volatile char *vptr = (volatile char *)ptr;
+    for (size_t i = 0; i < len; i++)
+        vptr[i] = 0;
+}
+
 /* Initialize secure task table */
 void secure_task_table_init(void) {
-    memset(secure_tasks, 0, sizeof(secure_tasks));
+    memzero(secure_tasks, sizeof(secure_tasks));
     for (int i = 0; i < MAX_SECURE_TASKS; ++i) {
         secure_tasks[i].task_id = 0xFFFF; /* Invalid ID */
     }

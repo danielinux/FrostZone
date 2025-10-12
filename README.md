@@ -61,26 +61,23 @@ To build both kernels, pico-sdk is needed. The scripts assume that you have
 a clone of the repository in `~/src/pico-sdk`. If pico-sdk is in a different
 directory, adjust build.sh accordingly.
 
-Use `build.sh` scripts. Build the supervisor first:
+For legacy RP2350 builds, the helper scripts live under `scripts/`:
 
 ```
-cd secure-supervisor
-./build.sh
-``` 
-
-This also generates the `frosted/nsc_kernel.o`, which is the interface used by Frosted
-to interact with the secure supervisor, and must be included in the Frosted build.
-
-Build Frosted afterwards:
-
-```
-cd frosted
-./build.sh
+./scripts/build_supervisor_rp2350.sh
+./scripts/build_frosted_rp2350.sh
 ```
 
-To install both kernels, since they are separate binaries, you will need a debugger connected
-to the SWD pins on your raspberry pi pico device. The scripts `install.sh` in both directories will automatically
-flash the two kernels in the assigned partitions.
+Each install step regenerates its artifacts and then uses the matching `install_*_rp2350.sh` script, which expects `JLinkExe` and a connected Pico 2.
+
+Current STM32 targets rely on the component Makefiles. Build the secure supervisor before the kernel:
+
+```
+make -C secure-supervisor TARGET=stm32h563 clean all
+make -C frosted TARGET=stm32h563 clean all
+```
+
+`make TARGET=stm32h563` from the repository root orchestrates this sequence automatically and produces the required `secure-supervisor/secure.bin` and `frosted/kernel.bin` images.
 
 
 ## Building and installing userspace
@@ -117,5 +114,4 @@ Including the following in-kernel libraries:
 
 FrostZone RTOS kernel is a port of Frosted OS (c) 2015 insane-adding-machines
 Cortex-M33 port (c) 2025 @danielinux
-
 

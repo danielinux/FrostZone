@@ -38,6 +38,7 @@ void frosted_scheduler_on(void)
     nvic_enable_irq(NVIC_SYSTICK_IRQ);
     systick_counter_enable();
     systick_interrupt_enable();
+    asm volatile ("cpsie i");
     _sched_active = 1;
 }
 

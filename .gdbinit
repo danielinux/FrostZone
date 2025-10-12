@@ -161,14 +161,13 @@ Ps()
 end
 
 
-file secure-supervisor/build/secure.elf
+file secure-supervisor/secure.elf
 target remote :3333
-mon reset init
+mon reset
 break secure_main
-add-symbol-file frosted/build/task0.elf
+add-symbol-file frosted/kernel.elf
 set $mpu = (MPU_Type *)(0xe000ed90)
 focus cmd
-continue
-
+si
 
 

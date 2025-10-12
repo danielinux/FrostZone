@@ -44,12 +44,19 @@ static uint8_t *mempool_pool = NULL;
 
 static mempool_block_t mempool_blocks[MAX_MEMPOOL_BLOCKS];
 
+static void memzero(void *ptr, size_t len) {
+    volatile uint8_t *p = ptr;
+    while(len--) {
+        *p++ = 0;
+    }
+}
+
 void mempool_init(void) {
     if (mempool_pool != NULL)
         return;
     mempool_pool = &__mempool_start__;
-    memset(mempool_pool, 0, MEMPOOL_SIZE);
-    memset(mempool_blocks, 0, sizeof(mempool_blocks));
+    memzero(mempool_pool, MEMPOOL_SIZE);
+    memzero(mempool_blocks, sizeof(mempool_blocks));
     mempool_blocks[0].base = mempool_pool;
     mempool_blocks[0].size = MEMPOOL_SIZE;
 }

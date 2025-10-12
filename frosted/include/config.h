@@ -5,9 +5,9 @@
 #define LINK_MTU 1514
 
 #define MAX_TCPSOCKETS 2
-#define MAX_UDPSOCKETS 1
-#define RXBUF_SIZE LINK_MTU * 4
-#define TXBUF_SIZE LINK_MTU * 4
+#define MAX_UDPSOCKETS 2
+#define RXBUF_SIZE LINK_MTU * 3
+#define TXBUF_SIZE LINK_MTU * 3
 
 #define MAX_NEIGHBORS 4
 

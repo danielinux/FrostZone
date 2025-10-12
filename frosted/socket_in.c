@@ -13,7 +13,7 @@
 
 static struct module mod_socket_in;
 
-volatile struct wolfIP *IPStack;
+struct wolfIP *IPStack;
 static mutex_t *ipstack_mutex;
 int ipstack_timer = -1;
 
@@ -136,7 +136,7 @@ static int sock_close(struct fnode *fno)
         goto out;
     }
 
-    wolfIP_sock_close(IPStack, s->fd);
+    wolfIP_sock_close(IPStack, s->sock_fd);
     kfree((struct fnode *)s->node);
     ret = 0;
 out:
@@ -182,7 +182,7 @@ static int sock_recvfrom(int fd, void *buf, unsigned int len, int flags, struct 
         return -EINVAL;
     while (s->bytes < len) {
         if ((addr) && ((*addrlen) > 0)) {
-            ret = wolfIP_sock_recvfrom(IPStack, s->sock_fd, buf + s->bytes, len - s->bytes, flags, &paddr, &sockaddr_len);
+            ret = wolfIP_sock_recvfrom(IPStack, s->sock_fd, buf + s->bytes, len - s->bytes, flags, (struct wolfIP_sockaddr *)&paddr, &sockaddr_len);
         } else {
             ret = wolfIP_sock_read(IPStack, s->sock_fd, buf + s->bytes, len - s->bytes);
         }
@@ -231,7 +231,7 @@ static int sock_sendto(int fd, const void *buf, unsigned int len, int flags, str
     while (len > s->bytes) {
         if ((addr) && (addrlen >0))
         {
-            ret = wolfIP_sock_sendto(IPStack, s->sock_fd, buf + s->bytes, len - s->bytes, flags, addr, addrlen);
+            ret = wolfIP_sock_sendto(IPStack, s->sock_fd, buf + s->bytes, len - s->bytes, flags, (struct wolfIP_sockaddr*)addr, addrlen);
         } else {
             ret = wolfIP_sock_write(IPStack, s->sock_fd, buf + s->bytes, len - s->bytes);
         }
@@ -272,7 +272,7 @@ static int sock_bind(int fd, struct sockaddr *addr, unsigned int addrlen)
     if (!s) {
         return -EINVAL;
     }
-    ret = wolfIP_sock_bind(IPStack, s->sock_fd, addr, addrlen);
+    ret = wolfIP_sock_bind(IPStack, s->sock_fd, (struct wolfIP_sockaddr *)addr, addrlen);
     return ret;
 }
 
@@ -288,7 +288,7 @@ static int sock_accept(int fd, struct sockaddr *addr, unsigned int *addrlen)
     }
     l->events = CB_EVENT_READABLE;
 
-    sock_fd = wolfIP_sock_accept(IPStack, l->sock_fd, addr, addrlen);
+    sock_fd = wolfIP_sock_accept(IPStack, l->sock_fd, (struct wolfIP_sockaddr *)addr, addrlen);
     if ((sock_fd < 0) && (sock_fd != -11))
         return sock_fd;
     if (sock_fd == -11) {
@@ -333,7 +333,7 @@ static int sock_connect(int fd, struct sockaddr *addr, unsigned int addrlen)
 
     s->events = CB_EVENT_READABLE;
     if ((s->revents & CB_EVENT_READABLE) == 0) {
-        ret = wolfIP_sock_connect(IPStack, s->sock_fd, addr, addrlen);
+        ret = wolfIP_sock_connect(IPStack, s->sock_fd, (struct wolfIP_sockaddr *)addr, addrlen);
         if (SOCK_BLOCKING(s)) {
             s->task = this_task();
             task_suspend();
@@ -711,7 +711,7 @@ static int sock_getsockname(int sd, struct sockaddr *addr, unsigned int *addrlen
     if (*addrlen < sizeof(struct sockaddr_in))
         return -ENOBUFS;
 
-    return wolfIP_sock_getsockname(IPStack, s->sock_fd, addr, addrlen);
+    return wolfIP_sock_getsockname(IPStack, s->sock_fd, (struct wolfIP_sockaddr *)addr, addrlen);
 }
 
 static int sock_getpeername(int sd, struct sockaddr *addr, unsigned int *addrlen)
@@ -724,7 +724,7 @@ static int sock_getpeername(int sd, struct sockaddr *addr, unsigned int *addrlen
 
     if (*addrlen < sizeof(struct sockaddr_in))
         return -ENOBUFS;
-    return wolfIP_sock_getpeername(IPStack, s->sock_fd, addr, addrlen);
+    return wolfIP_sock_getpeername(IPStack, s->sock_fd, (struct wolfIP_sockaddr *)addr, addrlen);
 }
 
 
@@ -735,11 +735,13 @@ static int sysfs_no_op(struct sysfs_fnode *sfs, void *buf, int len)
 
 
 #define IPTIMER_STACK_INTERVAL_MS 5
-static void ipstack_timer_cb(void *arg)
+typedef void (*timer_cb)(unsigned int,  void *);
+
+static void ipstack_timer_cb(unsigned int ms, void *arg)
 {
     if (IPStack)
         wolfIP_poll(IPStack, jiffies);
-    ktimer_add(IPTIMER_STACK_INTERVAL_MS, ipstack_timer_cb, NULL);
+    ktimer_add(IPTIMER_STACK_INTERVAL_MS, (timer_cb)ipstack_timer_cb, NULL);
 }
 
 
@@ -777,4 +779,12 @@ void socket_in_init(void)
 
     /* Start TCP/IP timer */
     ipstack_timer = ktimer_add(IPTIMER_STACK_INTERVAL_MS, ipstack_timer_cb, NULL);
+}
+
+int secure_getrandom(void *buf, unsigned size);
+uint32_t wolfIP_getrandom(void)
+{
+    uint32_t r;
+    secure_getrandom(&r, sizeof(r));
+    return r;
 }
