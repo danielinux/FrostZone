@@ -264,6 +264,18 @@ int sysfs_pins_read(struct sysfs_fnode *sfs, void *buf, int len)
     static uint32_t off;
     int i;
     int stack_used;
+    struct task_meminfo meminfo;
+    uint32_t heap_bytes;
+    struct task_meminfo meminfo;
+    uint32_t heap_bytes;
+    struct task_meminfo meminfo;
+    uint32_t heap_bytes;
+    struct task_meminfo meminfo;
+    uint32_t heap_bytes;
+    struct task_meminfo meminfo;
+    uint32_t heap_bytes;
+    struct task_meminfo meminfo;
+    uint32_t heap_bytes;
     char *name;
     int p_state;
     int nice;
@@ -430,6 +442,8 @@ int sysfs_tasks_read(struct sysfs_fnode *sfs, void *buf, int len)
     static uint32_t off;
     int i;
     int stack_used;
+    struct task_meminfo meminfo;
+    uint32_t heap_bytes;
     char *name;
     int p_state;
     int nice;
@@ -468,8 +482,17 @@ int sysfs_tasks_read(struct sysfs_fnode *sfs, void *buf, int len)
                 off += ul_to_str(stack_used, task_txt + off);
                 
                 task_txt[off++] = '\t';
-                stack_used = SCHEDULER_STACK_SIZE;
-                off += ul_to_str(stack_used, task_txt + off);
+                heap_bytes = 0;
+                if (task_meminfo(i, &meminfo) == 0) {
+                    uint32_t h;
+                    uint32_t regions = meminfo.n_heap_regions;
+                    uint32_t max_regions = sizeof(meminfo.heap) / sizeof(meminfo.heap[0]);
+                    if (regions > max_regions)
+                        regions = max_regions;
+                    for (h = 0; h < regions; h++)
+                        heap_bytes += meminfo.heap[h].size;
+                }
+                off += ul_to_str(heap_bytes, task_txt + off);
                 
                 task_txt[off++] = '\t';
                 nice = scheduler_get_nice(i);
