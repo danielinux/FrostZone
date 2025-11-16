@@ -72,54 +72,48 @@ Legacy RP2350/Pico2 support is still available via the helper scripts, but new f
 
 Each component ships with its own Kconfig tree. Run `make menuconfig` inside `secure-supervisor/`, `frosted/` and `userland/` to tailor the supervisor, kernel and user apps before building.
 
-* `secure-supervisor/menuconfig` programs TrustZone options, secure memory layout and which NSC veneers are exposed. This is where you configure clocks, SAU/IDAU, secure stacks and the secure RNG/mailbox services.
+* `cd secure-supervisor && make menuconfig` programs TrustZone options, secure memory layout and which NSC veneers are exposed. This is where you configure clocks, SAU/IDAU, secure stacks and the secure RNG/mailbox services.
 ![Menuconfig: supervisor](png/menuconfig_supervisor.png)
-* `frosted/menuconfig` enables kernel subsystems such as networking, filesystems, USB, framebuffer and device drivers. You can also tweak scheduler options, stack sizes and build-time debug hooks.
+* `cd frosted && make menuconfig` enables kernel subsystems such as networking, filesystems, USB, framebuffer and device drivers. You can also tweak scheduler options, stack sizes and build-time debug hooks.
 ![Menuconfig: frosted](png/menuconfig_frosted.png)
-* `userland/menuconfig` selects which apps and libraries land in XIPFS. Enable shells, net utilities, demos or third-party payloads here so they are compiled into `userland/out/`.
+* `cd userland && make menuconfig` selects which apps and libraries land in XIPFS. Enable shells, net utilities, demos or third-party payloads here so they are compiled into `userland/out/`.
 ![Menuconfig: userland](png/menuconfig_userland.png)
 
-To build both kernels, pico-sdk is needed. The scripts assume that you have
-a clone of the repository in `~/src/pico-sdk`. If pico-sdk is in a different
-directory, adjust build.sh accordingly.
+Once `make menuconfig` is complete for the subdirectories, `make` from the repository root orchestrates this sequence automatically and produces the required `secure-supervisor/secure.bin` and `frosted/kernel.bin` images.
 
-For STM32H563 builds the root `Makefile` drives both worlds. The most common flows are:
+
+For STM32H563 builds, the root `Makefile` creates binaries for both domains. The most common flows are:
 
 ```
 # Full build (secure + non-secure)
-make TARGET=stm32h563
+make
 
 # Rebuild a specific component
-make -C secure-supervisor TARGET=stm32h563
-make -C frosted TARGET=stm32h563
+make -C secure-supervisor
+make -C frosted
 
-# Flash all STM32 artifacts via ST-LINK
-scripts/flash_all_stm32h5.sh
+# Flash the two kernels via ST-LINK
+scripts/flash_all_stm32h5.sh --skip-userland
 ```
-
-For legacy RP2350 builds, the helper scripts live under `scripts/`:
-
-```
-./scripts/build_supervisor_rp2350.sh
-./scripts/build_frosted_rp2350.sh
-```
-
-Each install step regenerates its artifacts and then uses the matching `install_*_rp2350.sh` script, which expects `JLinkExe` and a connected Pico 2.
 
 Current STM32 targets rely on the component Makefiles. Build the secure supervisor before the kernel:
 
 ```
-make -C secure-supervisor TARGET=stm32h563 clean all
-make -C frosted TARGET=stm32h563 clean all
+make -C secure-supervisor clean all
+make -C frosted clean all
 ```
-
-`make TARGET=stm32h563` from the repository root orchestrates this sequence automatically and produces the required `secure-supervisor/secure.bin` and `frosted/kernel.bin` images.
-
-
 ## Building and installing userspace
 
- * Userland build requires a specific toolchain with the `arm-frosted-eabi` triplet.
-   This process will be documented soon.
+Userland build requires a specific toolchain with the `arm-frosted-eabi` triplet.
+
+You can build the toolchain from this repository:
+
+[arm-frosted-eabi-gcc](https://github.com/danielinux/arm-frosted-eabi-gcc)
+
+- Once the toolchain is installed, enter the userland directory and run `make menuconfig`.
+- Select libraries and applications to be included in the final XIPFS image.
+- Run `make` to build the userspace image.
+- Run the script `scripts/flash_all_stm32h5.sh` to flash the entire system (including userland) to the connected device, via STLink.
 
 
 ## Current Status
@@ -140,8 +134,10 @@ make -C frosted TARGET=stm32h563 clean all
 
 **Userspace**
 
-- Minimal init and `fresh` shell, net utils (`nc`, `ifconfig`, `dhcp`), filesystem tools and TZ guard demo
+- Support for TCP/IP on multiple interfaces (loopback, usb-ncm, ethernet).
+- Minimal init and `fresh` shell, binary utils, net utils (`nc`, `ifconfig`, `dhcp`), filesystem tools, games and tests
 - Toolchain (`arm-frosted-eabi`) produces PIC/XIP-friendly user binaries that run directly from XIPFS
+
 
 ## Roadmap
 
