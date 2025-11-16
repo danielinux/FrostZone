@@ -8,9 +8,9 @@ This project implements a small secure microkernel and a modular real-time opera
 
 ## Supported Hardware
 
-FrostZone is currently under development, and only supports RP2350 (i.e. Raspberry pi Pico-2).
+FrostZone's primary development board is the **STM32H563 Nucleo-144** (MB1404). Both the secure supervisor and the non-secure Frosted kernel boot directly on this board with TrustZone isolation, Ethernet, USB (CDC + NCM), and XIPFS-backed userspace.
 
-Support for other ARMv8-M targets will be added in the future.
+Legacy RP2350/Pico2 support is still available via the helper scripts, but new features land first on STM32H563.
 
 
 ## Architecture Overview
@@ -41,7 +41,20 @@ Support for other ARMv8-M targets will be added in the future.
  +-----------------------------------------------+
 ```
 
-## Memory layout (rp2350)
+## Memory layout (STM32H563)
+
+* **Flash layout**:
+  * `0x08000000 - 0x08003FFF`: Secure supervisor (16 KB)
+  * `0x08004000 - 0x08007FFF`: Non-secure callable veneers (16 KB)
+  * `0x08010000 - 0x0803FFFF`: Frosted kernel (192 KB)
+  * `0x08040000 - ...      `: XIPFS volume (user apps + assets)
+
+* **SRAM layout**:
+  * `0x0BF90000 - 0x0BF93FFF`: Secure supervisor SRAM + mailbox (16 KB)
+  * `0x20000000 - 0x20017FFF`: Frosted kernel RAM (96 KB)
+  * `0x20040000 - ...      `: Secure-managed mempool for kalloc/kfree (512 KB)
+
+### Memory layout (RP2350)
 
 * **Flash layout**:
   * `0x10000000 - 0x10007FFF`: Secure supervisor (32 KB)
@@ -60,6 +73,20 @@ Support for other ARMv8-M targets will be added in the future.
 To build both kernels, pico-sdk is needed. The scripts assume that you have
 a clone of the repository in `~/src/pico-sdk`. If pico-sdk is in a different
 directory, adjust build.sh accordingly.
+
+For STM32H563 builds the root `Makefile` drives both worlds. The most common flows are:
+
+```
+# Full build (secure + non-secure)
+make TARGET=stm32h563
+
+# Rebuild a specific component
+make -C secure-supervisor TARGET=stm32h563
+make -C frosted TARGET=stm32h563
+
+# Flash all STM32 artifacts via ST-LINK
+scripts/flash_all_stm32h5.sh
+```
 
 For legacy RP2350 builds, the helper scripts live under `scripts/`:
 
@@ -88,19 +115,29 @@ make -C frosted TARGET=stm32h563 clean all
 
 ## Current Status
 
-* Secure supervisor running with TrustZone configured SAU
-* CMSE gateways for allocation and task limit enforcement
-* Process scheduler with vfork+exec
-* XIPFS integration
-* Minimal userspace (init, "fresh" shell, a few filesystem utilities
+**Secure world**
 
-## TODO
+- STM32H563 supervisor configures SAU/IDAU, MPU, and GTZC for strict TrustZone partitioning
+- CMSE gateways expose allocation, task limits, and privileged mempool services to the non-secure kernel
+- Secure RNG, flash write path, and mailbox services plumbed through the NSC veneer
 
-* Expand userspace support for base tools
-* TCP/IP support in-kernel, socket interfaces
-* HW support: USB-ETH, Pico2-W wlan
-* Port more features and system calls from original Frosted OS
-* Secure boot / dual-kernel and xipfs updates
+**Non-secure Frosted kernel**
+
+- POSIX-style scheduler with RT priorities, `vfork/exec`, signals, pipes, ptys, semaphores, and task accounting
+- XIPFS executable filesystem, flashfs `/var`, sysfs, memfs `/tmp`, and a basic `/dev` tree
+- WolfIP TCP/IP stack (DHCP, static config, sockets) with LAN8742 Ethernet driver and TinyUSB CDC/NCM device networking
+- TrustZone-aware `kalloc`/`kfree`, MPU stack guards, and privilege-only MMIO window enforced via GTZC
+- Console over USB CDC + UART with framebuffer/fbcon optional
+
+**Userspace**
+
+- Minimal init and `fresh` shell, net utils (`nc`, `ifconfig`, `dhcp`), filesystem tools, TZ guard demo
+- Toolchain (`arm-frosted-eabi`) produces PIC/XIP-friendly user binaries that run directly from XIPFS
+
+## Roadmap
+
+- Broaden userspace (busybox subset, sshd, Micropython refresh)
+- Support for more devices & peripherals
 
 ## License
 
