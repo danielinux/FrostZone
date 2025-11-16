@@ -144,6 +144,10 @@ typedef int64_t time_t;
 
 void pico_lock(void);
 void pico_unlock(void);
+#if CONFIG_TCPIP
 void socket_in_init(void);
+#else
+static inline void socket_in_init(void) {}
+#endif
 
 #endif /* PICO_BSD_SOCKETS_H_ */

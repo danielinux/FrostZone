@@ -22,6 +22,9 @@
 #include "heap.h"
 #include "nvic.h"
 #include "systick.h"
+#include "kprintf.h"
+#include "errno.h"
+#include <stdbool.h>
 
 
 volatile unsigned int jiffies = 0u;
@@ -39,6 +42,7 @@ void frosted_scheduler_on(void)
     systick_counter_enable();
     systick_interrupt_enable();
     _sched_active = 1;
+    asm volatile ("cpsie i");
 }
 
 void frosted_scheduler_off(void)
@@ -58,11 +62,46 @@ typedef struct ktimer {
 
 DECLARE_HEAP(ktimer, expire_time);
 static struct heap_ktimer *ktimer_list = NULL;
+static bool ktimer_handler_valid(void (*handler)(uint32_t, void *))
+{
+    uintptr_t addr;
+
+    if (handler == NULL) {
+        return false;
+    }
+
+    addr = (uintptr_t)handler;
+#if defined(__thumb__)
+    if ((addr & 0x1U) == 0U) {
+        return false;
+    }
+    addr &= ~0x1U;
+#endif
+#if defined(TARGET_RP2350)
+    if (addr >= 0x10000000UL && addr < 0x11000000UL) {
+        return true;
+    }
+#else
+    if (addr >= 0x08000000UL && addr < 0x09000000UL) {
+        return true;
+    }
+#endif
+    return false;
+}
+
+static void ktimer_log_invalid(const char *where, void (*handler)(uint32_t, void *), void *arg)
+{
+    kprintf("ktimer: dropping handler %p (%s) arg=%p\n", handler, where, arg);
+    __asm__ volatile("bkpt #0");
+}
 
 /* Init function */
 void ktimer_init(void)
 {
     ktimer_list = heap_init();
+    if (!ktimer_list) {
+        kprintf("ktimer: heap_init failed\n");
+    }
 }
 
 /* Add kernel timer */
@@ -70,6 +109,16 @@ int ktimer_add(uint32_t count, void (*handler)(uint32_t, void *), void *arg)
 {
     struct ktimer t;
     int ret;
+
+    if (!ktimer_list) {
+        return -ENOMEM;
+    }
+
+    if (!ktimer_handler_valid(handler)) {
+        ktimer_log_invalid("add", handler, arg);
+        return -EINVAL;
+    }
+
     memset(&t, 0, sizeof(t));
     t.expire_time = jiffies + count;
     t.handler = handler;
@@ -88,6 +137,8 @@ int ktimer_del(int tid)
     int ret;
     if (tid < 0)
         return -1;
+    if (!ktimer_list)
+        return -ENOMEM;
     if (!task_in_syscall())
         irq_off();
     ret = heap_delete(ktimer_list, tid);
@@ -107,28 +158,36 @@ static inline int ktimer_expired(void)
 /* Tasklet that checks expired timers */
 static void ktimers_check_tasklet(void *arg)
 {
-    struct ktimer *t;
-    struct ktimer t_previous;
-    int next_t;
-    uint32_t this_timeslice;
+    struct ktimer current;
 
-    next_t = -1;
+    (void)arg;
 
-    if ((ktimer_list) && (ktimer_list->n > 0)) {
+    while (1) {
+        struct ktimer head;
+
         irq_off();
-        t = heap_first(ktimer_list);
+        if (!ktimer_list || (ktimer_list->n == 0) || (ktimer_list->top == NULL)) {
+            irq_on();
+            break;
+        }
+
+        head = ktimer_list->top[1].data;
+        if (head.expire_time > jiffies) {
+            irq_on();
+            break;
+        }
+
+        heap_peek(ktimer_list, &current);
         irq_on();
 
-        while ((t) && (t->expire_time < jiffies)) {
-            if (t->handler) {
-                t->handler(jiffies, t->arg);
-            }
-            irq_off();
-            heap_peek(ktimer_list, &t_previous);
-            t = heap_first(ktimer_list);
-            irq_on();
+        if (!ktimer_handler_valid(current.handler)) {
+            ktimer_log_invalid("run", current.handler, current.arg);
+            continue;
         }
-        next_t = (t->expire_time - jiffies);
+
+        if (current.handler) {
+            current.handler(jiffies, current.arg);
+        }
     }
 
     ktimer_check_pending = 0;

@@ -8,9 +8,9 @@ This project implements a small secure microkernel and a modular real-time opera
 
 ## Supported Hardware
 
-FrostZone is currently under development, and only supports RP2350 (i.e. Raspberry pi Pico-2).
+FrostZone's primary development board is the **STM32H563 Nucleo-144** (MB1404). Both the secure supervisor and the non-secure Frosted kernel boot directly on this board with TrustZone isolation, Ethernet, USB (CDC + NCM), and XIPFS-backed userspace.
 
-Support for other ARMv8-M targets will be added in the future.
+Legacy RP2350/Pico2 support is still available via the helper scripts, but new features land first on STM32H563.
 
 
 ## Architecture Overview
@@ -41,7 +41,20 @@ Support for other ARMv8-M targets will be added in the future.
  +-----------------------------------------------+
 ```
 
-## Memory layout (rp2350)
+## Memory layout (STM32H563)
+
+* **Flash layout**:
+  * `0x08000000 - 0x08003FFF`: Secure supervisor (16 KB)
+  * `0x08004000 - 0x08007FFF`: Non-secure callable veneers (16 KB)
+  * `0x08010000 - 0x0803FFFF`: Frosted kernel (192 KB)
+  * `0x08040000 - ...      `: XIPFS volume (user apps + assets)
+
+* **SRAM layout**:
+  * `0x0BF90000 - 0x0BF93FFF`: Secure supervisor SRAM + mailbox (16 KB)
+  * `0x20000000 - 0x20017FFF`: Frosted kernel RAM (96 KB)
+  * `0x20040000 - ...      `: Secure-managed mempool for kalloc/kfree (512 KB)
+
+### Memory layout (RP2350)
 
 * **Flash layout**:
   * `0x10000000 - 0x10007FFF`: Secure supervisor (32 KB)
@@ -61,26 +74,37 @@ To build both kernels, pico-sdk is needed. The scripts assume that you have
 a clone of the repository in `~/src/pico-sdk`. If pico-sdk is in a different
 directory, adjust build.sh accordingly.
 
-Use `build.sh` scripts. Build the supervisor first:
+For STM32H563 builds the root `Makefile` drives both worlds. The most common flows are:
 
 ```
-cd secure-supervisor
-./build.sh
-``` 
+# Full build (secure + non-secure)
+make TARGET=stm32h563
 
-This also generates the `frosted/nsc_kernel.o`, which is the interface used by Frosted
-to interact with the secure supervisor, and must be included in the Frosted build.
+# Rebuild a specific component
+make -C secure-supervisor TARGET=stm32h563
+make -C frosted TARGET=stm32h563
 
-Build Frosted afterwards:
-
-```
-cd frosted
-./build.sh
+# Flash all STM32 artifacts via ST-LINK
+scripts/flash_all_stm32h5.sh
 ```
 
-To install both kernels, since they are separate binaries, you will need a debugger connected
-to the SWD pins on your raspberry pi pico device. The scripts `install.sh` in both directories will automatically
-flash the two kernels in the assigned partitions.
+For legacy RP2350 builds, the helper scripts live under `scripts/`:
+
+```
+./scripts/build_supervisor_rp2350.sh
+./scripts/build_frosted_rp2350.sh
+```
+
+Each install step regenerates its artifacts and then uses the matching `install_*_rp2350.sh` script, which expects `JLinkExe` and a connected Pico 2.
+
+Current STM32 targets rely on the component Makefiles. Build the secure supervisor before the kernel:
+
+```
+make -C secure-supervisor TARGET=stm32h563 clean all
+make -C frosted TARGET=stm32h563 clean all
+```
+
+`make TARGET=stm32h563` from the repository root orchestrates this sequence automatically and produces the required `secure-supervisor/secure.bin` and `frosted/kernel.bin` images.
 
 
 ## Building and installing userspace
@@ -91,19 +115,29 @@ flash the two kernels in the assigned partitions.
 
 ## Current Status
 
-* Secure supervisor running with TrustZone configured SAU
-* CMSE gateways for allocation and task limit enforcement
-* Process scheduler with vfork+exec
-* XIPFS integration
-* Minimal userspace (init, "fresh" shell, a few filesystem utilities
+**Secure world**
 
-## TODO
+- STM32H563 supervisor configures SAU/IDAU, MPU, and GTZC for strict TrustZone partitioning
+- CMSE gateways expose allocation, task limits, and privileged mempool services to the non-secure kernel
+- Secure RNG, flash write path, and mailbox services plumbed through the NSC veneer
 
-* Expand userspace support for base tools
-* TCP/IP support in-kernel, socket interfaces
-* HW support: USB-ETH, Pico2-W wlan
-* Port more features and system calls from original Frosted OS
-* Secure boot / dual-kernel and xipfs updates
+**Non-secure Frosted kernel**
+
+- POSIX-style scheduler with RT priorities, `vfork/exec`, signals, pipes, ptys, semaphores, and task accounting
+- XIPFS executable filesystem, flashfs `/var`, sysfs, memfs `/tmp`, and a basic `/dev` tree
+- WolfIP TCP/IP stack (DHCP, static config, sockets) with LAN8742 Ethernet driver and TinyUSB CDC/NCM device networking
+- TrustZone-aware `kalloc`/`kfree`, MPU stack guards, and privilege-only MMIO window enforced via GTZC
+- Console over USB CDC + UART with framebuffer/fbcon optional
+
+**Userspace**
+
+- Minimal init and `fresh` shell, net utils (`nc`, `ifconfig`, `dhcp`), filesystem tools, TZ guard demo
+- Toolchain (`arm-frosted-eabi`) produces PIC/XIP-friendly user binaries that run directly from XIPFS
+
+## Roadmap
+
+- Broaden userspace (busybox subset, sshd, Micropython refresh)
+- Support for more devices & peripherals
 
 ## License
 
@@ -118,4 +152,16 @@ Including the following in-kernel libraries:
 FrostZone RTOS kernel is a port of Frosted OS (c) 2015 insane-adding-machines
 Cortex-M33 port (c) 2025 @danielinux
 
+## Secure Design Notes
 
+- Secure supervisor programs SAU/GTZC/MPU before dropping into the non-secure kernel, keeping TrustZone state confined to audited secure code (`secure-supervisor/include/stm32h563.h`).
+- Frosted kernel runs non-secure but privileged; it alone drives MMIO via syscalls while the MPU marks the peripheral window as privileged-only.
+- Userland tasks remain non-secure/unprivileged ELF/bFLT apps and rely on the kernel for device access; direct MMIO probes fault immediately.
+- GTZC privilege registers are now programmed so every exposed peripheral demands privileged access (`GTZC1_TZSC_PRIVCFGR[1..3]`), matching the kernel’s privilege level.
+- RCC stays non-secure visible for clock gating, but the supervisor enables `RCC_PRIVCFGR` so only privileged code can reconfigure clocks.
+
+## Userspace Guard Demo
+
+- `userland/tests/tz_guard_demo.c` provides canned scenarios (`periph-read`, `periph-write`, `secure-ram`, etc.) plus a manual `poke` helper to demonstrate fault behavior from user mode.
+- `make -C userland` drops the binary into `userland/out/`; flash with `scripts/flash_all_stm32h5.sh`, connect to `ttyACM1` (115200 8N1), and run the scenarios to observe MPU/TZ traps versus allowed accesses.
+- `scripts/run_tz_guard_demo.py` drives the same scenarios over `/dev/ttyACM1` and handles expected secure-fault resets for CI-style automation.

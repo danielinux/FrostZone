@@ -17,6 +17,7 @@ struct fb_info {
         struct fb_ops *fbops;
         struct device *dev;             /* This is this fb device */
         uint8_t *screen_buffer;   /* Framebuffer address */
+        void *priv;
 };
 
 struct fb_ops {
@@ -32,7 +33,7 @@ struct fb_ops {
         int (*fb_set_par)(struct fb_info *info);
 
         /* set color registers in batch */
-        int (*fb_setcmap)(uint32_t *cmap, struct fb_info *info);
+        int (*fb_setcmap)(const uint32_t *cmap, struct fb_info *info);
 
         /* blank display */
         int (*fb_blank)(struct fb_info *info);
@@ -55,6 +56,9 @@ struct fb_ops {
 
         /* teardown any resources to do with this framebuffer */
         void (*fb_destroy)(struct fb_info *info);
+
+        /* flush an updated rectangle to the display */
+        int (*fb_update)(struct fb_info *info, uint32_t x, uint32_t y, uint32_t w, uint32_t h);
 };
 
 
@@ -64,13 +68,17 @@ int register_framebuffer(struct fb_info *fb_info);
 
 /* Higher level drivers may access fb screen directly */
 unsigned char *framebuffer_get(void);
-int framebuffer_setcmap(uint32_t *cmap);
+int framebuffer_setcmap(const uint32_t *cmap);
+int framebuffer_flush(uint32_t x, uint32_t y, uint32_t w, uint32_t h);
 
 /* kernel init */
 int fb_init(void);
 #else
 #  define register_framebuffer(...) ((-ENOENT))
 #  define fb_init() ((-ENOENT))
+#  define framebuffer_get() NULL
+#  define framebuffer_setcmap(...) ((-ENOENT))
+#  define framebuffer_flush(...) ((-ENOENT))
 #endif
 
 #endif

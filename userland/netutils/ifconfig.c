@@ -38,6 +38,8 @@
 #include <stdio.h>      /* for fprintf etc */
 #include <fcntl.h>
 
+#include "net_compat.h"
+
 #ifndef htonl
 #define htonl(x) __builtin_bswap32(x)
 #define ntohl(x) __builtin_bswap32(x)
@@ -45,6 +47,20 @@
 #define ntohs(x) __builtin_bswap16(x)
 #endif
 
+
+static void copy_ifname(struct ifreq *ifr, const char *ifname)
+{
+    memset(ifr->ifr_name, 0, sizeof(ifr->ifr_name));
+    if (!ifname)
+        return;
+    strncpy(ifr->ifr_name, ifname, IFNAMSIZ - 1);
+    ifr->ifr_name[IFNAMSIZ - 1] = '\0';
+}
+
+static int ifconf_getproperties_fd(int sck, const char *ifname, uint8_t *macaddr,
+                                   struct sockaddr_in *address,
+                                   struct sockaddr_in *netmask,
+                                   struct sockaddr_in *broadcast);
 
 int
 ifdown(char *ifname)
@@ -59,7 +75,7 @@ ifdown(char *ifname)
 		return retval;
 	}
 	memset(&eth, 0, sizeof(struct ifreq));
-	strncpy(eth.ifr_name,ifname,4);
+	copy_ifname(&eth, ifname);
 	eth.ifr_flags = 0;
 	if(ioctl(sck, SIOCSIFFLAGS, &eth) < 0)
 	{
@@ -82,7 +98,7 @@ ifup(char *ifname)
 		return retval;
 	}
 	memset(&eth, 0, sizeof(struct ifreq));
-	strncpy(eth.ifr_name,ifname,4);
+	copy_ifname(&eth, ifname);
 	eth.ifr_flags = IFF_UP|IFF_RUNNING|IFF_MULTICAST|IFF_BROADCAST;
 	if(ioctl(sck, SIOCSIFFLAGS, &eth) < 0)
 	{
@@ -107,7 +123,7 @@ ifconfig(char *ifname, char *address, char *netmask)
 		return retval;
 	}
 	memset(&eth, 0, sizeof(struct ifreq));
-	strncpy(eth.ifr_name,ifname,4);
+	copy_ifname(&eth, ifname);
 	eth.ifr_flags = IFF_UP|IFF_RUNNING|IFF_MULTICAST|IFF_BROADCAST;
 
 	if(ioctl(sck, SIOCSIFFLAGS, &eth) < 0)
@@ -144,46 +160,48 @@ ipfail:
 }
 
 
-int ifconf_getproperties(char *ifname, uint8_t *macaddr, struct sockaddr_in *address, struct sockaddr_in *netmask, struct sockaddr_in *broadcast)
+static int ifconf_getproperties_fd(int sck, const char *ifname, uint8_t *macaddr,
+                                   struct sockaddr_in *address,
+                                   struct sockaddr_in *netmask,
+                                   struct sockaddr_in *broadcast)
 {
-	int sck;
 	struct ifreq ifr;
 	struct sockaddr_in addr = {.sin_family = 0}, nmask = {.sin_family = 0}, bcast = {.sin_family = 0};
-	uint8_t pmac[6];
+	uint8_t pmac[6] = {0};
 
-	sck = socket(AF_INET, SOCK_DGRAM, 0);
-	if(sck < 0){
-		perror("socket");
-		return -1;
-	}
-
+	memset(&ifr, 0, sizeof(ifr));
 	// save interface name
-	strcpy(ifr.ifr_name, ifname);
+	copy_ifname(&ifr, ifname);
 
 	// IP Address
-	if (ioctl(sck, SIOCGIFADDR, &ifr) < 0) {
-		close(sck);
-		return -1;
-	} else {
+	if (ioctl(sck, SIOCGIFADDR, &ifr) == 0) {
 		memcpy( &addr, (struct sockaddr_in *) &ifr.ifr_addr, sizeof(struct sockaddr_in));
-	}
+	} else {
+		memset(&addr, 0, sizeof(addr));
+        }
 
 	// Broadcast Address
 	if (ioctl(sck, SIOCGIFBRDADDR, &ifr) < 0) {
-		perror("ioctl(SIOCGIFBRDADDR)");
+		memset(&bcast, 0, sizeof(bcast));
 	} else {
 		memcpy( &bcast, (struct sockaddr_in *) &ifr.ifr_broadaddr, sizeof(struct sockaddr_in));
 	}
 
 	// NetMask Address
 	if (ioctl(sck, SIOCGIFNETMASK, &ifr) < 0) {
-		perror("ioctl(SIOCGIFNETMASK)");
+		memset(&nmask, 0, sizeof(nmask));
 	} else {
 		memcpy( &nmask, (struct sockaddr_in *) &ifr.ifr_netmask, sizeof(struct sockaddr_in));
 	}
 
-	if (macaddr)
+	if (macaddr) {
+		struct ifreq hw;
+		memset(&hw, 0, sizeof(hw));
+		copy_ifname(&hw, ifname);
+		if (ioctl(sck, SIOCGIFHWADDR, &hw) == 0)
+			memcpy(pmac, hw.ifr_addr.sa_data, 6);
 		memcpy(macaddr, pmac, 6);
+	}
 	if (address)
 		memcpy(address, &addr, sizeof(struct sockaddr_in));
 	if (netmask)
@@ -193,13 +211,25 @@ int ifconf_getproperties(char *ifname, uint8_t *macaddr, struct sockaddr_in *add
 
 
 	if (ioctl(sck, SIOCGIFFLAGS, &ifr) < 0){
-		close(sck);
 		return -1;
 	}
 
-	close(sck);
 	return  (ifr.ifr_flags & IFF_UP);
 
+}
+int ifconf_getproperties(char *ifname, uint8_t *macaddr, struct sockaddr_in *address, struct sockaddr_in *netmask, struct sockaddr_in *broadcast)
+{
+	int sck;
+	int ret;
+
+	sck = socket(AF_INET, SOCK_DGRAM, 0);
+	if(sck < 0){
+		perror("socket");
+		return -1;
+	}
+	ret = ifconf_getproperties_fd(sck, ifname, macaddr, address, netmask, broadcast);
+	close(sck);
+	return ret;
 }
 int ifconf_status(char *ifname) { return ifconf_getproperties(ifname, NULL, NULL, NULL, NULL); }
 int ifconf_getmac(char *ifname, uint8_t *mac) { return ifconf_getproperties(ifname, mac, NULL, NULL, NULL); }
@@ -208,17 +238,17 @@ int ifconf_getnetmask(char *ifname, struct sockaddr_in *netmask) { return ifconf
 int ifconf_getbroadcast(char *ifname, struct sockaddr_in *broadcast) { return ifconf_getproperties(ifname, NULL, NULL, NULL, broadcast); }
 int iflinksense(char *ifname);
 
-#define PROC_NET_DEV "/sys/net/dev"
+#define MAX_IFCONFIG_IFACES 8
 
-void ifconf_show(char *name)
+static void ifconf_show_fd(int sck, const char *name)
 {
     struct sockaddr_in a,n,b;
     int ret;
-    ret = ifconf_getproperties(name, NULL, &a, &n, &b);
+
+    ret = ifconf_getproperties_fd(sck, name, NULL, &a, &n, &b);
     if (ret < 0) {
-        perror("Cannot get interface properties");
-        printf("Cannot find interface %s\r\n", name);
-        exit(1);
+        fprintf(stderr, "ifconfig: cannot query %s (%s)\r\n", name, strerror(errno));
+        return;
     }
     printf("%s: flags:%s mtu 1500\r\n", name, (ret > 0)?"<UP,BROADCAST,MULTICAST,RUNNING>":"<DOWN>");
     printf("        inet %s ", inet_ntoa(a.sin_addr));
@@ -227,45 +257,59 @@ void ifconf_show(char *name)
     printf("\r\n");
 }
 
+void ifconf_show(char *name)
+{
+    int sck;
+    sck = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sck < 0) {
+        perror("socket");
+        return;
+    }
+    ifconf_show_fd(sck, name);
+    close(sck);
+}
+
 static void usage(char *name)
 {
     printf("Usage: %s [DEV [ADDR [netmask NMASK]]]\r\n", name);
     exit(1);
 }
 
+#ifndef APP_IFCONFIG_MODULE
 int main(int argc, char *argv[])
+#else
+int icebox_ifconfig(int argc, char *argv[])
+#endif
 {
     int i;
-    int fd;
     int ret;
-    char *p;
-    char *prev = NULL;
     struct ifreq ifr;
     if (argc == 1) {
-        char ifbuffer[256];
-        fd = open(PROC_NET_DEV, O_RDONLY);
-        if (fd < 0) {
-            printf("ifconfig: error reading from %s\r\n", PROC_NET_DEV);
-            exit(1);
-        }
-        ret = read(fd, ifbuffer, 255);
-        close(fd);
+        int sock;
+        struct ifconf ifc;
+        struct ifreq ifreqs[MAX_IFCONFIG_IFACES];
 
-        if (ret <= 0) {
-            printf("Error.\r\n");
+        sock = socket(AF_INET, SOCK_DGRAM, 0);
+        if (sock < 0) {
+            perror("socket");
             exit(1);
         }
-        for (i = 0; i < ret; i++) {
-            if ((ifbuffer[i] == '\r') || (ifbuffer[i] == ':'))
-                ifbuffer[i] = '\0';
-            if (ifbuffer[i] == '\n') {
-                    ifbuffer[i] = '\0';
-                if (prev) {
-                    ifconf_show(prev);
-                }
-                prev = &ifbuffer[i+1];
-            }
+
+        memset(ifreqs, 0, sizeof(ifreqs));
+        ifc.ifc_len = sizeof(ifreqs);
+        ifc.ifc_req = ifreqs;
+        if (ioctl(sock, SIOCGIFCONF, &ifc) < 0) {
+            perror("ioctl(SIOCGIFCONF)");
+            close(sock);
+            exit(1);
         }
+        ret = ifc.ifc_len / sizeof(struct ifreq);
+        for (i = 0; i < ret; i++) {
+            if (ifreqs[i].ifr_name[0] == '\0')
+                continue;
+            ifconf_show_fd(sock, ifreqs[i].ifr_name);
+        }
+        close(sock);
         exit(0);
     }
     memset(&ifr, 0, sizeof(struct ifreq));

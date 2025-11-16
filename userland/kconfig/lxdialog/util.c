@@ -20,6 +20,7 @@
  */
 
 #include <stdarg.h>
+#define COLOR_MENUCONFIG COLOR_MAGENTA
 
 #include "dialog.h"
 
@@ -70,35 +71,35 @@ do {                               \
 
 static void set_classic_theme(void)
 {
-	DLG_COLOR(screen,                COLOR_CYAN,   COLOR_MAGENTA,   true);
+	DLG_COLOR(screen,                COLOR_CYAN,   COLOR_MENUCONFIG,   true);
 	DLG_COLOR(shadow,                COLOR_BLACK,  COLOR_BLACK,  true);
 	DLG_COLOR(dialog,                COLOR_BLACK,  COLOR_WHITE,  false);
-	DLG_COLOR(title,                 COLOR_GREEN, COLOR_WHITE,  true);
+	DLG_COLOR(title,                 COLOR_MENUCONFIG, COLOR_WHITE,  true);
 	DLG_COLOR(border,                COLOR_WHITE,  COLOR_WHITE,  true);
-	DLG_COLOR(button_active,         COLOR_WHITE,  COLOR_MAGENTA,   true);
+	DLG_COLOR(button_active,         COLOR_WHITE,  COLOR_MENUCONFIG,   true);
 	DLG_COLOR(button_inactive,       COLOR_BLACK,  COLOR_WHITE,  false);
-	DLG_COLOR(button_key_active,     COLOR_WHITE,  COLOR_MAGENTA,   true);
+	DLG_COLOR(button_key_active,     COLOR_WHITE,  COLOR_MENUCONFIG,   true);
 	DLG_COLOR(button_key_inactive,   COLOR_RED,    COLOR_WHITE,  false);
-	DLG_COLOR(button_label_active,   COLOR_GREEN, COLOR_MAGENTA,   true);
+	DLG_COLOR(button_label_active,   COLOR_MENUCONFIG, COLOR_MENUCONFIG,   true);
 	DLG_COLOR(button_label_inactive, COLOR_BLACK,  COLOR_WHITE,  true);
 	DLG_COLOR(inputbox,              COLOR_BLACK,  COLOR_WHITE,  false);
 	DLG_COLOR(inputbox_border,       COLOR_BLACK,  COLOR_WHITE,  false);
 	DLG_COLOR(searchbox,             COLOR_BLACK,  COLOR_WHITE,  false);
-	DLG_COLOR(searchbox_title,       COLOR_GREEN, COLOR_WHITE,  true);
+	DLG_COLOR(searchbox_title,       COLOR_MENUCONFIG, COLOR_WHITE,  true);
 	DLG_COLOR(searchbox_border,      COLOR_WHITE,  COLOR_WHITE,  true);
-	DLG_COLOR(position_indicator,    COLOR_GREEN, COLOR_WHITE,  true);
+	DLG_COLOR(position_indicator,    COLOR_MENUCONFIG, COLOR_WHITE,  true);
 	DLG_COLOR(menubox,               COLOR_BLACK,  COLOR_WHITE,  false);
 	DLG_COLOR(menubox_border,        COLOR_WHITE,  COLOR_WHITE,  true);
 	DLG_COLOR(item,                  COLOR_BLACK,  COLOR_WHITE,  false);
-	DLG_COLOR(item_selected,         COLOR_WHITE,  COLOR_MAGENTA,   true);
-	DLG_COLOR(tag,                   COLOR_GREEN, COLOR_WHITE,  true);
-	DLG_COLOR(tag_selected,          COLOR_GREEN, COLOR_MAGENTA,   true);
-	DLG_COLOR(tag_key,               COLOR_GREEN, COLOR_WHITE,  true);
-	DLG_COLOR(tag_key_selected,      COLOR_GREEN, COLOR_MAGENTA,   true);
+	DLG_COLOR(item_selected,         COLOR_WHITE,  COLOR_MENUCONFIG,   true);
+	DLG_COLOR(tag,                   COLOR_MENUCONFIG, COLOR_WHITE,  true);
+	DLG_COLOR(tag_selected,          COLOR_MENUCONFIG, COLOR_MENUCONFIG,   true);
+	DLG_COLOR(tag_key,               COLOR_MENUCONFIG, COLOR_WHITE,  true);
+	DLG_COLOR(tag_key_selected,      COLOR_MENUCONFIG, COLOR_MENUCONFIG,   true);
 	DLG_COLOR(check,                 COLOR_BLACK,  COLOR_WHITE,  false);
-	DLG_COLOR(check_selected,        COLOR_WHITE,  COLOR_MAGENTA,   true);
-	DLG_COLOR(uarrow,                COLOR_GREEN,  COLOR_WHITE,  true);
-	DLG_COLOR(darrow,                COLOR_GREEN,  COLOR_WHITE,  true);
+	DLG_COLOR(check_selected,        COLOR_WHITE,  COLOR_MENUCONFIG,   true);
+	DLG_COLOR(uarrow,                COLOR_MENUCONFIG,  COLOR_WHITE,  true);
+	DLG_COLOR(darrow,                COLOR_MENUCONFIG,  COLOR_WHITE,  true);
 }
 
 static void set_blackbg_theme(void)
@@ -146,13 +147,13 @@ static void set_blackbg_theme(void)
 static void set_bluetitle_theme(void)
 {
 	set_classic_theme();
-	DLG_COLOR(title,               COLOR_MAGENTA,   COLOR_WHITE, true);
-	DLG_COLOR(button_key_active,   COLOR_GREEN, COLOR_MAGENTA,  true);
-	DLG_COLOR(button_label_active, COLOR_WHITE,  COLOR_MAGENTA,  true);
-	DLG_COLOR(searchbox_title,     COLOR_MAGENTA,   COLOR_WHITE, true);
-	DLG_COLOR(position_indicator,  COLOR_MAGENTA,   COLOR_WHITE, true);
-	DLG_COLOR(tag,                 COLOR_MAGENTA,   COLOR_WHITE, true);
-	DLG_COLOR(tag_key,             COLOR_MAGENTA,   COLOR_WHITE, true);
+	DLG_COLOR(title,               COLOR_MENUCONFIG,   COLOR_WHITE, true);
+	DLG_COLOR(button_key_active,   COLOR_MENUCONFIG, COLOR_MENUCONFIG,  true);
+	DLG_COLOR(button_label_active, COLOR_WHITE,  COLOR_MENUCONFIG,  true);
+	DLG_COLOR(searchbox_title,     COLOR_MENUCONFIG,   COLOR_WHITE, true);
+	DLG_COLOR(position_indicator,  COLOR_MENUCONFIG,   COLOR_WHITE, true);
+	DLG_COLOR(tag,                 COLOR_MENUCONFIG,   COLOR_WHITE, true);
+	DLG_COLOR(tag_key,             COLOR_MENUCONFIG,   COLOR_WHITE, true);
 
 }
 

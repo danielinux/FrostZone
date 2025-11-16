@@ -17,13 +17,15 @@
 # Base binary utils
 #
 APP_INIT=y
-APP_IDLING=y
+# APP_IDLING is not set
 ICEBOX=y
 # APP_BUSYBOX is not set
 APP_FRESH=y
 APP_CAT=m
+APP_CP=m
 APP_ECHO=m
 APP_LS=m
+APP_MV=m
 APP_TOUCH=m
 APP_RM=m
 APP_KILL=m
@@ -31,38 +33,42 @@ APP_TRUE=m
 APP_FALSE=m
 APP_LN=m
 APP_DIRNAME=m
-APP_MKDIR=m
+APP_DU=m
+# APP_MKDIR is not set
 APP_MOUNT=m
 APP_PS=m
-APP_PLAY=m
+APP_STAT=m
+# APP_PLAY is not set
 APP_WC=m
 APP_HEAD=m
 APP_TAIL=m
 APP_YES=m
 APP_SLEEP=m
-APP_UPTIME=m
+# APP_UPTIME is not set
 APP_KLOGD=m
-# APP_GDBSERVER is not set
+APP_GDBSERVER=y
 APP_REBOOT=m
 # APP_RENICE is not set
 APP_CUT=m
 APP_GREP=m
-# APP_KILO is not set
+APP_KILO=y
 # APP_POWERCTL is not set
-# APP_DATE is not set
+APP_DATE=m
 APP_FILE=m
 APP_STERM=m
 # APP_PWRCTL is not set
+APP_HEXDUMP=m
+APP_XXD=m
 
 #
 # Networking utils
 #
 APP_IFCONFIG=y
-# APP_ROUTE is not set
-APP_PING=y
+APP_ROUTE=y
+# APP_PING is not set
 # APP_HOST is not set
-# APP_TELNETD is not set
-# APP_NETCAT is not set
+APP_TELNETD=y
+APP_NETCAT=m
 # APP_NTPC is not set
 # APP_STARWARS is not set
 
@@ -81,7 +87,7 @@ APP_PING=y
 # APP_GPIOCTL is not set
 # APP_LATENCY is not set
 # APP_ACC is not set
-APP_LCD=y
+# APP_LCD is not set
 
 #
 # Games
@@ -91,6 +97,7 @@ APP_LCD=y
 # APP_BYTEBEAT is not set
 # APP_GROOVY is not set
 # APP_CMATRIX is not set
+APP_LIFE=y
 
 #
 # Test suites

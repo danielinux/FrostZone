@@ -33,6 +33,10 @@ struct xipfs_fnode {
     void (*init)(void *);
 };
 
+static volatile int xipfs_dbg_offset;
+static volatile uint32_t xipfs_dbg_magic;
+static volatile uint32_t xipfs_dbg_len;
+static volatile uintptr_t xipfs_dbg_payload;
 
 
 #define SECTOR_SIZE (512)
@@ -167,6 +171,10 @@ static int xipfs_parse_blob(const uint8_t *blob)
     offset = sizeof(struct xipfs_fat);
     for (i = 0; i < fat->fs_files; i++) {
         f = (const struct xipfs_fhdr *) (blob + offset);
+        xipfs_dbg_offset = offset;
+        xipfs_dbg_magic = f->magic;
+        xipfs_dbg_len = f->len;
+        xipfs_dbg_payload = (uintptr_t)f->payload;
         if ((f->magic != XIPFS_MAGIC) && (f->magic != XIPFS_MAGIC_ICELINK))
             return -1;
         if (f->magic == XIPFS_MAGIC) {

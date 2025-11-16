@@ -1,0 +1,158 @@
+mainmenu "Frosted Kernel Configuration"
+
+choice
+    prompt "Target platform"
+    default TARGET_STM32H563
+
+config TARGET_STM32H563
+    bool "STM32H563"
+
+config TARGET_STM32U585
+    bool "STM32U585"
+
+config TARGET_RP2350
+    bool "RP2350 / Pico 2"
+
+endchoice
+
+menu "System layout"
+
+config SYS_CLOCK
+    int "System clock frequency (Hz)"
+    default 250000000 if TARGET_STM32H563
+    default 160000000 if TARGET_STM32U585
+    default 120000000 if TARGET_RP2350
+    help
+      Core clock that the kernel uses for systick calculations and
+      peripheral timing.
+
+config APPS_ORIGIN
+    hex "Userland image origin"
+    default 0x08040000 if TARGET_STM32H563
+    default 0x08040000 if TARGET_STM32U585
+    default 0x10030000 if TARGET_RP2350
+    help
+      Base flash address where the userland binary image is stored.
+
+config FLASH_ORIGIN
+    hex "Kernel flash origin"
+    default 0x08010000 if TARGET_STM32H563
+    default 0x08010000 if TARGET_STM32U585
+    default 0x10010000 if TARGET_RP2350
+    help
+      Base flash address for the kernel binary. Must match the linker script.
+
+config LINK_MTU
+    int "Default network MTU"
+    default 1514
+    help
+      Default MTU advertised by network interfaces.
+
+endmenu
+
+menu "Kernel features"
+
+config FLASHFS
+    bool "Enable FlashFS"
+    default y if TARGET_STM32H563
+    default n
+    help
+      Adds the FlashFS filesystem implementation and related hooks.
+
+config FLASHFS_VERIFY
+    bool "Verify FlashFS writes"
+    depends on FLASHFS
+    default y
+    help
+      Perform a read-back verification after FlashFS writes.
+
+config EXTENDED_MEMFAULT
+    bool "Extended Memfault collection"
+    default y
+
+config RELOCATE_VECTORS_TO_RAM
+    bool "Relocate interrupt vectors to RAM"
+    default n
+
+config MPU
+    bool "Enable MPU enforcement"
+    default y
+
+config SIGNALS
+    bool "Enable POSIX-style signals"
+    default y
+
+config PIPE
+    bool "Enable POSIX pipes"
+    default y
+    help
+      Build pipe syscall support (pipe2 handler, buffering, polling).
+
+config CORE_DUMP
+    bool "Generate ELF core on segfault"
+    default n
+    help
+      When enabled the kernel writes /var/core after fatal faults so gdb can
+      inspect the saved registers and memory snapshot.
+
+config PTY_UNIX
+    bool "Enable UNIX98 PTYs"
+    default y
+
+config DEVTTY_CONSOLE
+    bool "Built-in TTY console device"
+    default y
+
+config DEVFRAMEBUFFER
+    bool "Framebuffer devices"
+    default y
+
+config DEVFBCON
+    bool "Framebuffer console"
+    depends on DEVFRAMEBUFFER
+    default y
+
+endmenu
+
+menu "Display peripherals"
+
+config ILI9341
+    bool "ILI9341 SPI display"
+    depends on DEVFRAMEBUFFER
+    default n
+
+config SPI1
+    bool "Enable SPI1 peripheral support"
+    default n
+
+endmenu
+
+menu "Networking"
+
+config TCPIP
+    bool "Enable TCP/IP stack"
+    default y
+
+config ETH
+    bool "STM32 Ethernet MAC"
+    depends on TCPIP
+    default y if TARGET_STM32U585
+    default n
+
+config DEVUSB
+    bool "TinyUSB device stack"
+    default y if TARGET_STM32H563
+    default y if TARGET_RP2350
+
+config CFG_TUD_ENABLED
+    bool "Enable TinyUSB device controller"
+    depends on DEVUSB
+    default y
+
+config USB_NET
+    bool "USB CDC-NCM network interface"
+    depends on DEVUSB && TCPIP
+    default y if TARGET_STM32H563
+    default y if TARGET_RP2350
+
+endmenu

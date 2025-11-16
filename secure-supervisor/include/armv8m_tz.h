@@ -19,7 +19,15 @@
 #define SAU_INIT_CTRL_ALLNS  (1 << 1)
 
 #define SCB_SHCSR     (*(volatile uint32_t *)(0xE000ED24))
-#define SCB_SHCSR_SECUREFAULT_EN            (1<<19)
+#define SCB_SHCSR_NS  (*(volatile uint32_t *)(0xE002ED24))
+#define SCB_SHCSR_MEMFAULT_EN           (1 << 16)
+#define SCB_SHCSR_BUSFAULT_EN           (1 << 17)
+#define SCB_SHCSR_USGFAULT_EN           (1 << 18)
+#define SCB_SHCSR_SECUREFAULT_EN        (1 << 19)
+#define SCB_SHCSR_ALLFAULTS_EN     (SCB_SHCSR_MEMFAULT_EN | \
+                                         SCB_SHCSR_BUSFAULT_EN | \
+                                         SCB_SHCSR_USGFAULT_EN | \
+                                         SCB_SHCSR_SECUREFAULT_EN)
 
 static inline void sau_init_region(uint32_t region, uint32_t start_addr,
         uint32_t end_addr, int secure)
@@ -33,4 +41,5 @@ static inline void sau_init_region(uint32_t region, uint32_t start_addr,
         | secure_flag | SAU_REG_ENABLE;
 }
 
+extern void mpu_init(void);
 #endif

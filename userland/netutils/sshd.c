@@ -717,7 +717,11 @@ static void ShowUsage(void)
 }
 
 
+#ifndef APP_SSHD_MODULE
 int main(int argc, char** argv)
+#else
+int icebox_sshd(int argc, char** argv)
+#endif
 {
     WOLFSSH_CTX* ctx = NULL;
     PwMapList pwMapList;

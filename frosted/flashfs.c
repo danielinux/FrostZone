@@ -20,6 +20,9 @@
 
 #include "frosted.h"
 #include "string.h"
+#include "locks.h"
+
+#ifdef CONFIG_FLASHFS
 
 static struct module mod_flashfs;
 static mutex_t *flashfs_lock;
@@ -32,7 +35,13 @@ static mutex_t *flashfs_lock;
 #define PART_SIZE 0x10000
 #define PART_MAX_PAGES (PART_SIZE / FLASH_PAGE_SIZE)
 
+#if defined(TARGET_rp2350)
 #define PART_MAP_BASE (0x101F0000U)
+#elif defined(TARGET_stm32h563)
+#define PART_MAP_BASE (0x081F0000U)
+#else
+#error "FlashFS partition is not defined for this target"
+#endif
 #define MAX_FNAME 128
 
 int secure_flash_write_page(uint32_t off, uint8_t *page);
@@ -50,23 +59,27 @@ struct flashfs_fnode {
 /* Bitmap in last flash page. Inverted logic (starts at 0xFFFFFFFF when formatted */
 static uint8_t *fs_bmp = (uint8_t *)PART_MAP_BASE + PART_SIZE - FLASH_PAGE_SIZE;
 
-static void fs_bmp_clear(uint32_t page)
+static int fs_bmp_clear(uint32_t page)
 {
     static uint8_t cache_bmp[FLASH_PAGE_SIZE];
 
     memcpy(cache_bmp, fs_bmp, FLASH_PAGE_SIZE); 
     cache_bmp[page / 8] |= 1 << (page & 7);
-    secure_flash_write_page((PART_MAX_PAGES - 1) * FLASH_PAGE_SIZE,
-            cache_bmp);
+    if (secure_flash_write_page((PART_MAX_PAGES - 1) * FLASH_PAGE_SIZE,
+            cache_bmp) != 0)
+        return -EIO;
+    return 0;
 }
 
-static void fs_bmp_set(uint32_t page)
+static int fs_bmp_set(uint32_t page)
 {
     static uint8_t cache_bmp[FLASH_PAGE_SIZE];
     memcpy(cache_bmp, fs_bmp, FLASH_PAGE_SIZE); 
     cache_bmp[page / 8] &= ~(1 << (page & 7));
-    secure_flash_write_page((PART_MAX_PAGES - 1) * FLASH_PAGE_SIZE,
-            cache_bmp);
+    if (secure_flash_write_page((PART_MAX_PAGES - 1) * FLASH_PAGE_SIZE,
+            cache_bmp) != 0)
+        return -EIO;
+    return 0;
 }
 
 static int fs_bmp_test(uint32_t page)
@@ -202,7 +215,9 @@ static int flash_commit_file_info(struct fnode *fno)
     hdr->fsize = fno->size;
     hdr->fname_len = strlen(fno->fname);
     strncpy(page_cache + sizeof(struct flashfs_file_hdr), fno->fname, 128);
-    secure_flash_write_page(mfno->startpage * FLASH_PAGE_SIZE, page_cache);
+    if (secure_flash_write_page(mfno->startpage * FLASH_PAGE_SIZE, page_cache) != 0)
+        return -EIO;
+    return 0;
 }
 
 static int relocate_file(struct fnode *fno, uint16_t newpage,
@@ -222,17 +237,31 @@ static int relocate_file(struct fnode *fno, uint16_t newpage,
     {
         memcpy(page_cache, (void *)PART_MAP_BASE +
                 mfno->startpage * FLASH_PAGE_SIZE, FLASH_PAGE_SIZE);
-        secure_flash_write_page((newpage + i) * FLASH_PAGE_SIZE, page_cache);
+        if (secure_flash_write_page((newpage + i) * FLASH_PAGE_SIZE, page_cache) != 0) {
+            mutex_unlock(flashfs_lock);
+            return -EIO;
+        }
     } 
     memset(page_cache, 0xFF, FLASH_PAGE_SIZE);
     for (i = old_page_count; i < new_page_count; i++)
     {
-        secure_flash_write_page((newpage + i) * FLASH_PAGE_SIZE, page_cache);
+        if (secure_flash_write_page((newpage + i) * FLASH_PAGE_SIZE, page_cache) != 0) {
+            mutex_unlock(flashfs_lock);
+            return -EIO;
+        }
     }
-    for (i = 0; i < new_page_count; i++) 
-        fs_bmp_set(newpage + i);
-    for (i = 0; i < old_page_count; i++)
-        fs_bmp_clear(mfno->startpage + i);
+    for (i = 0; i < new_page_count; i++)  {
+        if (fs_bmp_set(newpage + i) != 0) {
+            mutex_unlock(flashfs_lock);
+            return -EIO;
+        }
+    }
+    for (i = 0; i < old_page_count; i++) {
+        if (fs_bmp_clear(mfno->startpage + i) != 0) {
+            mutex_unlock(flashfs_lock);
+            return -EIO;
+        }
+    }
     mfno->startpage = newpage;
     mutex_unlock(flashfs_lock);
     return 0;
@@ -300,6 +329,7 @@ static int flashfs_write(struct fnode *fno, const void *buf, unsigned int len)
     struct flashfs_fnode *mfno;
     uint32_t off;
     int written = 0;
+    int ret = 0;
     int page_off;
     int size_in_page = 0;
     int i;
@@ -325,7 +355,9 @@ static int flashfs_write(struct fnode *fno, const void *buf, unsigned int len)
                 if (fs_bmp_test(mfno->startpage + old_page_count + i)) {
                     int new_loc = fs_bmp_find_free(new_page_count);
                     if (new_loc > 0) {
-                        relocate_file(fno, new_loc, old_page_count, new_page_count);
+                        int r = relocate_file(fno, new_loc, old_page_count, new_page_count);
+                        if (r != 0)
+                            return r;
                         mfno = FNO_MOD_PRIV(fno, &mod_flashfs);
                         if (!mfno)
                             return -ENOENT;
@@ -334,7 +366,10 @@ static int flashfs_write(struct fnode *fno, const void *buf, unsigned int len)
                         return -ENOSPC;
                 } else {
                     mutex_lock(flashfs_lock);
-                    fs_bmp_set(mfno->startpage + old_page_count + i);
+                    if (fs_bmp_set(mfno->startpage + old_page_count + i) != 0) {
+                        mutex_unlock(flashfs_lock);
+                        return -EIO;
+                    }
                     mutex_unlock(flashfs_lock);
                 }
             }
@@ -357,7 +392,11 @@ actual_write:
             memcpy(page_cache + page_off, buf + written, size_in_page);
             written += size_in_page;
             off += size_in_page;
-            secure_flash_write_page(mfno->startpage * FLASH_PAGE_SIZE, page_cache);
+            ret = secure_flash_write_page(mfno->startpage * FLASH_PAGE_SIZE, page_cache);
+            if (ret != 0) {
+                mutex_unlock(flashfs_lock);
+                return ret;
+            }
         } else {
             int current_page_n = get_page_count_on_flash(fno->fname, off) - 1;
             int page_count_verify = 0;
@@ -384,12 +423,18 @@ actual_write:
             content = get_page_content(mfno->startpage + current_page_n);
             written += size_in_page;
             off += size_in_page;
-            secure_flash_write_page(current_page_n * FLASH_PAGE_SIZE, page_cache);
+            ret = secure_flash_write_page((mfno->startpage + current_page_n) * FLASH_PAGE_SIZE, page_cache);
+            if (ret != 0) {
+                mutex_unlock(flashfs_lock);
+                return ret;
+            }
         }
     }
     task_fd_set_off(fno, off);
-    flash_commit_file_info(fno);
+    ret = flash_commit_file_info(fno);
     mutex_unlock(flashfs_lock);
+    if (ret != 0)
+        return ret;
     return len;
 }
 
@@ -438,13 +483,17 @@ static int flashfs_seek(struct fnode *fno, int off, int whence)
                     else
                         return -ENOSPC;
                 } else {
-                    fs_bmp_set(mfno->startpage + old_page_count + i);
+                    if (fs_bmp_set(mfno->startpage + old_page_count + i) != 0)
+                        return -EIO;
                 }
             }
         }
         mutex_lock(flashfs_lock);
         fno->size = new_off;
-        flash_commit_file_info(fno);
+        if (flash_commit_file_info(fno) != 0) {
+            mutex_unlock(flashfs_lock);
+            return -EIO;
+        }
         mutex_unlock(flashfs_lock);
     }
     task_fd_set_off(fno, new_off);
@@ -471,17 +520,24 @@ static int flashfs_creat(struct fnode *fno)
 
     mutex_lock(flashfs_lock);
     page = first_page;
-    while (page < first_page + page_count)
-        fs_bmp_set(page++);
+    while (page < first_page + page_count) {
+        if (fs_bmp_set(page++) != 0) {
+            mutex_unlock(flashfs_lock);
+            return -EIO;
+        }
+    }
 
     mfs = kalloc(sizeof(struct flashfs_fnode));
     if (mfs) {
         mfs->fno = fno;
         mfs->startpage = first_page;
         fno->priv = mfs;
-        flash_commit_file_info(fno);
+        if (flash_commit_file_info(fno) == 0) {
+            mutex_unlock(flashfs_lock);
+            return 0;
+        }
         mutex_unlock(flashfs_lock);
-        return 0;
+        return -EIO;
     }
     mutex_unlock(flashfs_lock);
     return -1;
@@ -498,8 +554,10 @@ static int flashfs_unlink(struct fnode *fno)
         return -EPERM;
     page_count = get_page_count_on_flash(fno->fname, fno->size);
     page = mfno->startpage;
-    while(page_count--)
-        fs_bmp_clear(page++);
+    while(page_count--) {
+        if (fs_bmp_clear(page++) != 0)
+            return -EIO;
+    }
     kfree(mfno);
     return 0;
 }
@@ -520,7 +578,8 @@ static int flashfs_truncate(struct fnode *fno, unsigned int newsize)
         old_page_count = get_page_count_on_flash(fno->fname, fno->size);
         new_page_count = get_page_count_on_flash(fno->fname, newsize);
         while (old_page_count > new_page_count) {
-            fs_bmp_clear(mfno->startpage + (--old_page_count));
+            if (fs_bmp_clear(mfno->startpage + (--old_page_count)) != 0)
+                return -EIO;
         }
         fno->size = newsize;
         return 0;
@@ -611,3 +670,5 @@ void flashfs_init(void)
     mod_flashfs.ops.truncate = flashfs_truncate;
     register_module(&mod_flashfs);
 }
+
+#endif /* CONFIG_FLASHFS */

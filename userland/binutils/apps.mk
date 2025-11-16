@@ -1,7 +1,9 @@
 cat: cat.o  ICE
+cp: cp.o ICE
 cut: cut.o ICE
 date: date.o ICE
 dirname: dirname.o ICE
+du: du.o ICE
 echo: echo.o ICE
 false: false.o ICE
 file: file.o ICE
@@ -16,11 +18,13 @@ kilo: kilo.o
 klogd: klogd.o ICE
 ln: ln.o ICE
 ls: ls.o ICE
+mv: mv.o ICE
 mkdir: mkdir.o ICE
 mount: mount.o ICE
 play: play.o ICE
 powerctl: powerctl.o ICE
 prodcons: prodcons.o
+stat: stat.o ICE
 ps: ps.o ICE
 reboot: reboot.o ICE
 renice: renice.o ICE
@@ -35,3 +39,5 @@ wc: wc.o ICE
 yes: yes.o ICE
 sterm: sterm.o
 pwrctl: pwrctl.o ICE
+hexdump: hexdump.o ICE
+xxd: xxd.o ICE

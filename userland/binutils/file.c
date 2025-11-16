@@ -236,28 +236,31 @@ int is_exec(uint8_t *b, int nb)
     return -1;
 }
 
+static uint8_t file_buf[FILE_SIZE];
+static char link_buf[PATH_MAX];
+
 void ex_regfile(char *name)
 {
     int fd = open(name, O_RDONLY);
+    int nb;
     if (fd < 0) {
         perror("Open failed");
         return;
     }
 
-    uint8_t buf[FILE_SIZE];
-    memset(buf, 0, (FILE_SIZE));
+    memset(file_buf, 0, FILE_SIZE);
 
-    int nb = read(fd, buf, FILE_SIZE);
+    nb = read(fd, file_buf, FILE_SIZE);
 
     if (nb < 0) {
         perror("Read failed");
         goto end;
     }
 
-    if (!is_exec(buf, nb))
+    if (!is_exec(file_buf, nb))
         goto end;
 
-    is_ascii(buf, nb);
+    is_ascii(file_buf, nb);
 
 end:
     close(fd);
@@ -282,10 +285,9 @@ int main(int argc, char *argv[])
 int icebox_file(int argc, char *argv[])
 #endif
 {
+    int i;
     if (argc < 2)
         exit(EINVAL);
-
-    int i;
     for (i = 1; i < argc; i++) {
         struct stat s;
         printf("%s: ", argv[i]);
@@ -311,10 +313,9 @@ int icebox_file(int argc, char *argv[])
 
         } else if (S_ISLNK(s.st_mode)) {
             printf("symbolic link");
-            char buf[PATH_MAX];
-            memset(buf, 0, PATH_MAX);
-            readlink(argv[1], buf, PATH_MAX);
-            printf(" to %s", buf);
+            memset(link_buf, 0, PATH_MAX);
+            readlink(argv[1], link_buf, PATH_MAX);
+            printf(" to %s", link_buf);
         } else if (S_ISSOCK(s.st_mode)) {
             printf("socket");
         }

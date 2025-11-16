@@ -30,10 +30,12 @@ int main(int argc, char *args[])
 int icebox_sleep(int argc, char *args[])
 #endif
 {
+	long sec;
 	if ((argc < 2) || (argc > 2)) {
 		fprintf(stderr, "Usage: sleep TIME\r\n");
+		return 1;
 	}
-	long sec = strtol(args[1], NULL, 10);
+	sec = strtol(args[1], NULL, 10);
 	sleep(sec);
 	exit(0);
 }

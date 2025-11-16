@@ -25,6 +25,8 @@
 
 #define KBD_PATH "/dev/kbd0"
 #define FBCON_PATH "/dev/fbcon"
+#define DEVTTY_NAME "tty0"
+#define DEVTTY_PATH "/dev/" DEVTTY_NAME
 
 #define KBD_MOD "usbkbd"
 #define FBCON_MOD "fbcon"
@@ -58,7 +60,7 @@ static struct module mod_ttycon = {
 
 static void devfile_create(void) 
 {
-    char name[5] = "tty";
+    char name[] = DEVTTY_NAME;
     struct fnode *devfs = fno_search("/dev");
     if (!devfs)
         return;
@@ -135,4 +137,3 @@ static void tty_attach(struct fnode *fno, int pid)
     TTY.mod_fbcon->ops.tty_attach(TTY.fbcon, pid);
     TTY.pid = pid;
 }
-

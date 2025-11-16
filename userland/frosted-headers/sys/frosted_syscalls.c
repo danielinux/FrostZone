@@ -3,6 +3,8 @@
 
 #include <stdint.h>
 #include "sys/frosted.h"
+int syscall(uint32_t nr, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5);
+
 /* Syscall: sleep(2 arguments) */
 int sys_sleep(uint32_t arg1, uint32_t arg2){
     return syscall(SYS_SLEEP, arg1, arg2, 0, 0, 0); 
@@ -58,24 +60,14 @@ int sys_unlink(uint32_t arg1){
     return syscall(SYS_UNLINK, arg1, 0, 0, 0, 0); 
 }
 
-/* Syscall: mmap(1 arguments) */
-int sys_mmap(uint32_t arg1){
-    return syscall(SYS_MALLOC, arg1, 0, 0, 0, 0); 
+/* Syscall: mmap(3 arguments) */
+int sys_mmap(uint32_t arg1, uint32_t arg2, uint32_t arg3){
+    return syscall(SYS_MMAP, arg1, arg2, arg3, 0,  0); 
 }
 
-/* Syscall: munmap(1 arguments) */
-int sys_munmap(uint32_t arg1){
-    return syscall(SYS_FREE, arg1, 0, 0, 0, 0); 
-}
-
-/* Syscall: calloc(2 arguments) */
-int sys_calloc(uint32_t arg1, uint32_t arg2){
-    return syscall(SYS_CALLOC, arg1, arg2, 0, 0, 0); 
-}
-
-/* Syscall: realloc(2 arguments) */
-int sys_realloc(uint32_t arg1, uint32_t arg2){
-    return syscall(SYS_REALLOC, arg1, arg2, 0, 0, 0); 
+/* Syscall: munmap(2 arguments) */
+int sys_munmap(uint32_t arg1, uint32_t arg2){
+    return syscall(SYS_MUNMAP, arg1, arg2, 0, 0, 0); 
 }
 
 /* Syscall: opendir(1 arguments) */

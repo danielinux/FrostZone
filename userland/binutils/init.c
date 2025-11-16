@@ -18,8 +18,6 @@
  *
  */
 
-#include "ioctl.h"
-#include "syscalls.h"
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
@@ -28,6 +26,8 @@
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include "ioctl.h"
+#include "syscalls.h"
 #define IDLE()                                                                 \
     while (1) {                                                                \
         do {                                                                   \
@@ -41,7 +41,7 @@ char fresh_txt[10] = "fresh";
 char serial_dev[12] = "/dev/ttyS0";
 
 const char fresh_path[30] = "/bin/fresh";
-char *shebang;
+const char *shebang;
 
 static char initsh[] = "/bin/init.sh";
 

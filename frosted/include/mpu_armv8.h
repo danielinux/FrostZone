@@ -99,8 +99,8 @@
 * \param IDX The attribute index to be associated with this memory region.
 */
 #define ARM_MPU_RLAR(LIMIT, IDX) \
-  ((LIMIT & MPU_RLAR_LIMIT_Msk) | \
-  ((IDX << MPU_RLAR_AttrIndx_Pos) & MPU_RLAR_AttrIndx_Msk) | \
+  (((LIMIT) & MPU_RLAR_LIMIT_Msk) | \
+  (((IDX) << MPU_RLAR_AttrIndx_Pos) & MPU_RLAR_AttrIndx_Msk) | \
   (MPU_RLAR_EN_Msk))
 
 /**

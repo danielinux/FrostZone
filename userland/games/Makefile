@@ -8,6 +8,7 @@ APPS-$(APP_BYTEBEAT)+=bytebeat
 APPS-$(APP_GROOVY)+=groovy
 APPS-$(APP_CMATRIX)+=cmatrix
 APPS-$(APP_LIFE)+=life
+LDFLAGS+=-lc -lg
 BIN:=$(patsubst %,../out/%,$(APPS-y))
 OBJ:=$(patsubst %,%.o,$(APPS-y))
 

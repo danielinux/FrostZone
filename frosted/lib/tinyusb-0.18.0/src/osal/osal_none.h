@@ -160,21 +160,24 @@ TU_ATTR_ALWAYS_INLINE static inline bool osal_queue_delete(osal_queue_t qhdl) {
 }
 
 TU_ATTR_ALWAYS_INLINE static inline bool osal_queue_receive(osal_queue_t qhdl, void* data, uint32_t msec) {
-  (void) msec; // not used, always behave as msec = 0
+  bool success;
 
+  (void) msec; // not used, always behave as msec = 0
   _osal_q_lock(qhdl);
-  bool success = tu_fifo_read(&qhdl->ff, data);
+  success = tu_fifo_read(&qhdl->ff, data);
   _osal_q_unlock(qhdl);
 
   return success;
 }
 
 TU_ATTR_ALWAYS_INLINE static inline bool osal_queue_send(osal_queue_t qhdl, void const* data, bool in_isr) {
+  bool success;
+
   if (!in_isr) {
     _osal_q_lock(qhdl);
   }
 
-  bool success = tu_fifo_write(&qhdl->ff, data);
+  success = tu_fifo_write(&qhdl->ff, data);
 
   if (!in_isr) {
     _osal_q_unlock(qhdl);

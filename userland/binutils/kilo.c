@@ -380,6 +380,7 @@ int getWindowSize(int ifd, int ofd, int *rows, int *cols) {
     if (ioctl(1, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
         /* ioctl() failed. Try to query the terminal itself. */
         int orig_row, orig_col, retval;
+        char seq[32];
 
         /* Get the initial position so we can restore it later. */
         retval = getCursorPosition(ifd,ofd,&orig_row,&orig_col);
@@ -391,7 +392,6 @@ int getWindowSize(int ifd, int ofd, int *rows, int *cols) {
         if (retval == -1) goto failed;
 
         /* Restore position. */
-        char seq[32];
         snprintf(seq,sizeof(seq),"\x1b[%d;%dH",orig_row,orig_col);
         if (write(ofd,seq,strlen(seq)) == -1) {
             /* Can't recover... */
@@ -432,6 +432,13 @@ int editorRowHasOpenComment(erow *row) {
 /* Set every byte of row->hl (that corresponds to every character in the line)
  * to the right syntax highlight type (HL_* defines). */
 void editorUpdateSyntax(erow *row) {
+    int i, prev_sep, in_string, in_comment;
+    int oc = 0;
+    char *p = NULL;
+    char **keywords;
+    char *scs;
+    char *mcs;
+    char *mce;
     if (!row)
         return;
     row->hl = realloc(row->hl,row->rsize);
@@ -439,13 +446,10 @@ void editorUpdateSyntax(erow *row) {
 
     if (E.syntax == NULL) return; /* No syntax, everything is HL_NORMAL. */
 
-    int i, prev_sep, in_string, in_comment;
-    int oc = 0;
-    char *p = NULL;
-    char **keywords = E.syntax->keywords;
-    char *scs = E.syntax->singleline_comment_start;
-    char *mcs = E.syntax->multiline_comment_start;
-    char *mce = E.syntax->multiline_comment_end;
+    keywords = E.syntax->keywords;
+    scs = E.syntax->singleline_comment_start;
+    mcs = E.syntax->multiline_comment_start;
+    mce = E.syntax->multiline_comment_end;
 
     /* Point to the first non-space char. */
     p = row->render;
@@ -618,7 +622,8 @@ int editorSyntaxToColor(int hl) {
 /* Select the syntax highlight scheme depending on the filename,
  * setting it in the global state E.syntax. */
 void editorSelectSyntaxHighlight(char *filename) {
-    for (unsigned int j = 0; j < HLDB_ENTRIES; j++) {
+    unsigned int j;
+    for (j = 0; j < HLDB_ENTRIES; j++) {
         struct editorSyntax *s = HLDB+j;
         unsigned int i = 0;
         while(s->filematch[i]) {
@@ -641,13 +646,14 @@ void editorSelectSyntaxHighlight(char *filename) {
 void editorUpdateRow(erow *row) {
     unsigned int tabs = 0, nonprint = 0;
     int j, idx;
+    unsigned long long allocsize;
 
    /* Create a version of the row we can directly print on the screen,
      * respecting tabs, substituting non printable characters with '?'. */
     free(row->render);
     for (j = 0; j < row->size; j++)
         if (row->chars[j] == TAB) tabs++;
-    unsigned long long allocsize =
+    allocsize =
         (unsigned long long) row->size + tabs*8 + nonprint*9 + 1;
     if (allocsize > UINT32_MAX) {
         printf("Some line of the edited file is too long for kilo\n");
@@ -678,7 +684,10 @@ void editorInsertRow(int at, char *s, size_t len) {
     E.row = realloc(E.row,sizeof(erow)*(E.numrows+1));
     if (at != E.numrows) {
         memmove(E.row+at+1,E.row+at,sizeof(E.row[0])*(E.numrows-at));
-        for (int j = at+1; j <= E.numrows; j++) E.row[j].idx++;
+        {
+            int j;
+            for (j = at+1; j <= E.numrows; j++) E.row[j].idx++;
+        }
     }
     E.row[at].size = len;
     E.row[at].chars = malloc(len+1);
@@ -710,7 +719,10 @@ void editorDelRow(int at) {
     row = E.row+at;
     editorFreeRow(row);
     memmove(E.row+at,E.row+at+1,sizeof(E.row[0])*(E.numrows-at-1));
-    for (int j = at; j < E.numrows-1; j++) E.row[j].idx--;
+    {
+        int j;
+        for (j = at; j < E.numrows-1; j++) E.row[j].idx--;
+    }
     E.numrows--;
     E.dirty++;
 }
@@ -894,11 +906,15 @@ void editorDelChar() {
  * or 1 on error. */
 int editorOpen(char *filename) {
     FILE *fp;
+    size_t fnlen;
+    char *line = NULL;
+    size_t linecap = 0;
+    ssize_t linelen;
 
 
     E.dirty = 0;
     free(E.filename);
-    size_t fnlen = strlen(filename)+1;
+    fnlen = strlen(filename)+1;
     E.filename = malloc(fnlen);
     memcpy(E.filename,filename,fnlen);
 
@@ -913,9 +929,6 @@ int editorOpen(char *filename) {
         } else return 1;
     }
 
-    char *line = NULL;
-    size_t linecap = 0;
-    ssize_t linelen;
     while((linelen = getline(&line,&linecap,fp)) != -1) {
         if (linelen && (line[linelen-1] == '\n' || line[linelen-1] == '\r'))
             line[--linelen] = '\0';
@@ -1010,42 +1023,46 @@ void editorRefreshScreen(void) {
 
         r = &E.row[filerow];
 
-        int len = r->rsize - E.coloff;
-        int current_color = -1;
-        abAppend(&ab, "\x1b[40m", 5);
-        if (len > 0) {
-            if (len > E.screencols) len = E.screencols;
-            char *c = r->render+E.coloff;
-            unsigned char *hl = r->hl+E.coloff;
-            int j;
-            if (hl[0] == HL_ERROR) {
-                abAppend(&ab, "\x1b[41m", 5);
-            }
-            for (j = 0; j < len; j++) {
-                if (hl[j] == HL_NONPRINT) {
-                    char sym;
-                    abAppend(&ab,"\x1b[7m",4);
-                    if (c[j] <= 26)
-                        sym = '@'+c[j];
-                    else
-                        sym = '?';
-                    abAppend(&ab,&sym,1);
-                    abAppend(&ab,"\x1b[0m",4);
-                } else if (hl[j] == HL_NORMAL) {
-                    if (current_color != -1) {
-                        abAppend(&ab,"\x1b[39m",5);
-                        current_color = -1;
+        {
+            int len = r->rsize - E.coloff;
+            int current_color = -1;
+            abAppend(&ab, "\x1b[40m", 5);
+            if (len > 0) {
+                char *c;
+                unsigned char *hl;
+                int j;
+                if (len > E.screencols) len = E.screencols;
+                c = r->render+E.coloff;
+                hl = r->hl+E.coloff;
+                if (hl[0] == HL_ERROR) {
+                    abAppend(&ab, "\x1b[41m", 5);
+                }
+                for (j = 0; j < len; j++) {
+                    if (hl[j] == HL_NONPRINT) {
+                        char sym;
+                        abAppend(&ab,"\x1b[7m",4);
+                        if (c[j] <= 26)
+                            sym = '@'+c[j];
+                        else
+                            sym = '?';
+                        abAppend(&ab,&sym,1);
+                        abAppend(&ab,"\x1b[0m",4);
+                    } else if (hl[j] == HL_NORMAL) {
+                        if (current_color != -1) {
+                            abAppend(&ab,"\x1b[39m",5);
+                            current_color = -1;
+                        }
+                        abAppend(&ab,c+j,1);
+                    } else {
+                        int color = editorSyntaxToColor(hl[j]);
+                        if (color != current_color) {
+                            char colorbuf[16];
+                            int clen = snprintf(colorbuf,sizeof(colorbuf),"\x1b[%dm",color);
+                            current_color = color;
+                            abAppend(&ab,colorbuf,clen);
+                        }
+                        abAppend(&ab,c+j,1);
                     }
-                    abAppend(&ab,c+j,1);
-                } else {
-                    int color = editorSyntaxToColor(hl[j]);
-                    if (color != current_color) {
-                        char buf[16];
-                        int clen = snprintf(buf,sizeof(buf),"\x1b[%dm",color);
-                        current_color = color;
-                        abAppend(&ab,buf,clen);
-                    }
-                    abAppend(&ab,c+j,1);
                 }
             }
         }
@@ -1058,45 +1075,51 @@ void editorRefreshScreen(void) {
     /* Create a two rows status. First row: */
     abAppend(&ab,"\x1b[0K",4);
     abAppend(&ab,"\x1b[7m",4);
-    char status[80], rstatus[80];
-    int len = snprintf(status, sizeof(status), "%.20s - %d lines %s",
-        E.filename, E.numrows, E.dirty ? "(modified)" : "");
-    int rlen = snprintf(rstatus, sizeof(rstatus),
-        "%d/%d",E.rowoff+E.cy+1,E.numrows);
-    if (len > E.screencols) len = E.screencols;
-    abAppend(&ab,status,len);
-    while(len < E.screencols) {
-        if (E.screencols - len == rlen) {
-            abAppend(&ab,rstatus,rlen);
-            break;
-        } else {
-            abAppend(&ab," ",1);
-            len++;
+    {
+        char status[80], rstatus[80];
+        int len = snprintf(status, sizeof(status), "%.20s - %d lines %s",
+            E.filename, E.numrows, E.dirty ? "(modified)" : "");
+        int rlen = snprintf(rstatus, sizeof(rstatus),
+            "%d/%d",E.rowoff+E.cy+1,E.numrows);
+        if (len > E.screencols) len = E.screencols;
+        abAppend(&ab,status,len);
+        while(len < E.screencols) {
+            if (E.screencols - len == rlen) {
+                abAppend(&ab,rstatus,rlen);
+                break;
+            } else {
+                abAppend(&ab," ",1);
+                len++;
+            }
         }
+        abAppend(&ab,"\x1b[0m\r\n",6);
     }
-    abAppend(&ab,"\x1b[0m\r\n",6);
 
     /* Second row depends on E.statusmsg and the status message update time. */
     abAppend(&ab,"\x1b[0K",4);
-    int msglen = strlen(E.statusmsg);
-    if (msglen && time(NULL)-E.statusmsg_time < 5)
-        abAppend(&ab,E.statusmsg,msglen <= E.screencols ? msglen : E.screencols);
+    {
+        int msglen = strlen(E.statusmsg);
+        if (msglen && time(NULL)-E.statusmsg_time < 5)
+            abAppend(&ab,E.statusmsg,msglen <= E.screencols ? msglen : E.screencols);
+    }
 
     /* Put cursor at its current position. Note that the horizontal position
      * at which the cursor is displayed may be different compared to 'E.cx'
      * because of TABs. */
-    int j;
-    int cx = 1;
-    int filerow = E.rowoff+E.cy;
-    erow *row = (filerow >= E.numrows) ? NULL : &E.row[filerow];
-    if (row) {
-        for (j = E.coloff; j < (E.cx+E.coloff); j++) {
-            if (j < row->size && row->chars[j] == TAB) cx += 7-((cx)%8);
-            cx++;
+    {
+        int cx = 1;
+        int filerow = E.rowoff+E.cy;
+        erow *row = (filerow >= E.numrows) ? NULL : &E.row[filerow];
+        int j;
+        if (row) {
+            for (j = E.coloff; j < (E.cx+E.coloff); j++) {
+                if (j < row->size && row->chars[j] == TAB) cx += 7-((cx)%8);
+                cx++;
+            }
         }
+        snprintf(buf,sizeof(buf),"\x1b[%d;%dH",E.cy+1,cx);
+        abAppend(&ab,buf,strlen(buf));
     }
-    snprintf(buf,sizeof(buf),"\x1b[%d;%dH",E.cy+1,cx);
-    abAppend(&ab,buf,strlen(buf));
     abAppend(&ab,"\x1b[?25h",6); /* Show cursor. */
     write(STDOUT_FILENO,ab.b,ab.len);
     abFree(&ab);
@@ -1119,7 +1142,6 @@ void editorRefreshScreen(void) {
             }
             E.dirty = 0;
         }
-        editorUpdateSyntax(row);
         ret = E.check_cb(E.compiler_cb_ctx, buf, &err_msg);
         if ((ret != 0) && (err_msg != NULL)) {
             int err_line = 0;
@@ -1133,7 +1155,6 @@ void editorRefreshScreen(void) {
                 /* Mark the error line as red */
                 E.row[at].hl = realloc(E.row[at].hl, E.row[at].rsize);
                 memset(E.row[at].hl, HL_ERROR, E.row[at].rsize);
-                editorUpdateSyntax(row);
             }
             free(err_msg);
             err_msg = NULL;
@@ -1175,13 +1196,14 @@ void editorFind(int fd) {
     /* Save the cursor position in order to restore it later. */
     int saved_cx = E.cx, saved_cy = E.cy;
     int saved_coloff = E.coloff, saved_rowoff = E.rowoff;
+    int c;
 
     while(1) {
         editorSetStatusMessage(
             "Search: %s (Use ESC/Arrows/Enter)", query);
         editorRefreshScreen();
 
-        int c = editorReadKey(fd);
+        c = editorReadKey(fd);
         if (c == DEL_KEY || c == CTRL_H || c == BACKSPACE) {
             if (qlen != 0) query[--qlen] = '\0';
             last_match = -1;

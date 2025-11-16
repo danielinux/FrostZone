@@ -33,10 +33,13 @@
 #include <unistd.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <ctype.h>
 static pid_t GBSH_PID;
 static pid_t GBSH_PGID;
 static int GBSH_IS_INTERACTIVE;
 static struct termios GBSH_TMODES;
+extern char **environ;
+static const char empty_value[] = "";
 
 int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
 
@@ -59,12 +62,333 @@ int changeDirectory(char *args[]);
 static char currentDirectory[128];
 static char lastcmd[128] = "";
 
+#define HISTORY_MAX 8
+static char history_entries[HISTORY_MAX][MAXLINE];
+static int history_len = 0;
+static int history_cursor = 0;
+static char history_path[32] = "/var/fresh_history";
+
+#define SHELL_PARAM_MAX LIMIT
+static char *shell_params[SHELL_PARAM_MAX];
+static int shell_paramc = 0;
+static char *shell_param0 = NULL;
+
+struct shell_param_snapshot {
+    char *values[SHELL_PARAM_MAX];
+    int count;
+    char *param0;
+};
+
+static void update_pwd_env(void)
+{
+    char cwd[sizeof(currentDirectory)];
+
+    if (getcwd(cwd, sizeof(cwd)) == NULL)
+        return;
+
+    setenv("PWD", cwd, 1);
+}
+
 int puts_r(struct _reent *r, const char *s)
 {
     return strlen(s);
 }
 
 static int fresh_exec(char *arg0, char **argv);
+static void history_init(void);
+static void history_add(const char *line);
+static void history_reset_cursor(void);
+static void history_load(void);
+static char *dup_string(const char *s);
+static void shell_params_clear(void);
+static void shell_params_assign(char *const *argv, int argc);
+static void shell_params_capture(struct shell_param_snapshot *snap);
+static void shell_params_restore_snapshot(struct shell_param_snapshot *snap);
+static void shell_params_snapshot_clear(struct shell_param_snapshot *snap);
+static int builtin_source(char **args, int argc);
+
+static char *dup_string(const char *s)
+{
+    char *out;
+    size_t len;
+    if (!s)
+        return NULL;
+    len = strlen(s) + 1;
+    out = malloc(len);
+    if (out)
+        memcpy(out, s, len);
+    return out;
+}
+
+static void history_set_path(void)
+{
+    struct stat st;
+    const char *preferred = "/tmp/fresh_history";
+
+    if (stat("/var", &st) == 0 && S_ISDIR(st.st_mode))
+        preferred = "/var/fresh_history";
+
+    strncpy(history_path, preferred, sizeof(history_path) - 1);
+    history_path[sizeof(history_path) - 1] = '\0';
+}
+
+static void history_append_file(const char *line)
+{
+    int fd;
+    size_t len;
+    if (!line || line[0] == '\0')
+        return;
+    fd = open(history_path, O_WRONLY | O_CREAT | O_APPEND, 0600);
+    if (fd < 0)
+        return;
+    len = strlen(line);
+    if (len > 0)
+        write(fd, line, len);
+    write(fd, "\n", 1);
+    close(fd);
+}
+
+static void history_store_line(const char *line, int persist)
+{
+    char clean[MAXLINE];
+    size_t len;
+
+    if (!line)
+        return;
+
+    len = strnlen(line, MAXLINE - 1);
+    while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+        len--;
+    if (len == 0)
+        return;
+    if (len >= MAXLINE)
+        len = MAXLINE - 1;
+    memcpy(clean, line, len);
+    clean[len] = '\0';
+
+    if (history_len == HISTORY_MAX) {
+        memmove(history_entries, history_entries + 1,
+                sizeof(history_entries[0]) * (HISTORY_MAX - 1));
+        history_len = HISTORY_MAX - 1;
+    }
+    strncpy(history_entries[history_len], clean, MAXLINE - 1);
+    history_entries[history_len][MAXLINE - 1] = '\0';
+    history_len++;
+done:
+    strncpy(lastcmd, clean, sizeof(lastcmd) - 1);
+    lastcmd[sizeof(lastcmd) - 1] = '\0';
+    if (persist)
+        history_append_file(clean);
+}
+
+static void history_add(const char *line)
+{
+    history_store_line(line, 1);
+    history_reset_cursor();
+}
+
+static void history_load(void)
+{
+    int fd;
+    char buf[128];
+    char line[MAXLINE];
+    size_t cur = 0;
+    ssize_t r;
+
+    fd = open(history_path, O_RDONLY);
+    if (fd < 0) {
+        if (strcmp(history_path, "/var/fresh_history") == 0) {
+            strncpy(history_path, "/tmp/fresh_history",
+                    sizeof(history_path) - 1);
+            history_path[sizeof(history_path) - 1] = '\0';
+            fd = open(history_path, O_RDONLY);
+        }
+    }
+    if (fd < 0)
+        return;
+
+    memset(line, 0, sizeof(line));
+    while ((r = read(fd, buf, sizeof(buf))) > 0) {
+        for (ssize_t idx = 0; idx < r; idx++) {
+            char c = buf[idx];
+            if (c == '\n') {
+                line[cur] = '\0';
+                history_store_line(line, 0);
+                cur = 0;
+            } else if (cur < (MAXLINE - 1)) {
+                line[cur++] = c;
+            }
+        }
+    }
+    if (cur > 0) {
+        line[cur] = '\0';
+        history_store_line(line, 0);
+    }
+    close(fd);
+    history_reset_cursor();
+}
+
+static void history_init(void)
+{
+    history_set_path();
+    history_load();
+}
+
+static void history_reset_cursor(void)
+{
+    history_cursor = history_len;
+}
+
+static void history_replace_input(char *input, int *len, int *pos,
+                                  const char *entry)
+{
+    const char del = 0x08;
+    const char space = 0x20;
+    int cur = *len;
+    while (cur-- > 0) {
+        write(STDOUT_FILENO, &del, 1);
+        write(STDOUT_FILENO, &space, 1);
+        write(STDOUT_FILENO, &del, 1);
+    }
+    *len = 0;
+    *pos = 0;
+    if (!entry)
+        return;
+    if (entry == input) {
+        *len = strnlen(input, MAXLINE - 1);
+        *pos = *len;
+        write(STDOUT_FILENO, input, *len);
+        return;
+    }
+    strncpy(input, entry, MAXLINE - 1);
+    input[MAXLINE - 1] = '\0';
+    *len = strlen(input);
+    *pos = *len;
+    write(STDOUT_FILENO, input, *len);
+}
+
+static void shell_params_clear(void)
+{
+    int i;
+    if (shell_param0) {
+        free(shell_param0);
+        shell_param0 = NULL;
+    }
+    for (i = 0; i < shell_paramc; i++) {
+        if (shell_params[i]) {
+            free(shell_params[i]);
+            shell_params[i] = NULL;
+        }
+    }
+    shell_paramc = 0;
+}
+
+static void shell_params_assign(char *const *argv, int argc)
+{
+    int i;
+    if (!argv || argc <= 0)
+        return;
+    shell_params_clear();
+    shell_param0 = dup_string(argv[0]);
+    if (!shell_param0)
+        shell_param0 = dup_string("fresh");
+    for (i = 1; i < argc && (i - 1) < SHELL_PARAM_MAX; i++) {
+        if (argv[i])
+            shell_params[i - 1] = dup_string(argv[i]);
+        else
+            shell_params[i - 1] = dup_string("");
+    }
+    shell_paramc = (argc - 1);
+    if (shell_paramc > SHELL_PARAM_MAX)
+        shell_paramc = SHELL_PARAM_MAX;
+}
+
+static void shell_params_capture(struct shell_param_snapshot *snap)
+{
+    int i;
+    if (!snap)
+        return;
+    snap->param0 = shell_param0 ? dup_string(shell_param0) : NULL;
+    snap->count = shell_paramc;
+    for (i = 0; i < SHELL_PARAM_MAX; i++) {
+        if (i < shell_paramc && shell_params[i])
+            snap->values[i] = dup_string(shell_params[i]);
+        else
+            snap->values[i] = NULL;
+    }
+}
+
+static void shell_params_restore_snapshot(struct shell_param_snapshot *snap)
+{
+    int i;
+    if (!snap)
+        return;
+    shell_params_clear();
+    if (snap->param0) {
+        shell_param0 = snap->param0;
+        snap->param0 = NULL;
+    }
+    shell_paramc = snap->count;
+    if (shell_paramc > SHELL_PARAM_MAX)
+        shell_paramc = SHELL_PARAM_MAX;
+    for (i = 0; i < shell_paramc; i++) {
+        shell_params[i] = snap->values[i];
+        snap->values[i] = NULL;
+    }
+    for (; i < SHELL_PARAM_MAX; i++) {
+        if (snap->values[i]) {
+            free(snap->values[i]);
+            snap->values[i] = NULL;
+        }
+    }
+    snap->count = 0;
+}
+
+static void shell_params_snapshot_clear(struct shell_param_snapshot *snap)
+{
+    int i;
+    if (!snap)
+        return;
+    if (snap->param0) {
+        free(snap->param0);
+        snap->param0 = NULL;
+    }
+    for (i = 0; i < SHELL_PARAM_MAX; i++) {
+        if (snap->values[i]) {
+            free(snap->values[i]);
+            snap->values[i] = NULL;
+        }
+    }
+    snap->count = 0;
+}
+
+static int builtin_source(char **args, int argc)
+{
+    struct shell_param_snapshot snap = {};
+    char *newargv[SHELL_PARAM_MAX + 1];
+    int count = 0;
+    int i;
+    int ret;
+
+    if (argc < 2) {
+        printf("source: missing file operand\r\n");
+        setenv("?", "1", 1);
+        return -1;
+    }
+
+    shell_params_capture(&snap);
+    for (i = 1; i < argc && count < (SHELL_PARAM_MAX + 1); i++) {
+        newargv[count++] = args[i];
+    }
+    if (count > 0)
+        shell_params_assign(newargv, count);
+
+    ret = fresh_exec(args[1], &args[1]);
+    shell_params_restore_snapshot(&snap);
+    shell_params_snapshot_clear(&snap);
+
+    return ret;
+}
 
 /**
  * Function used to initialize our shell. We used the approach explained in
@@ -164,19 +488,20 @@ void signalHandler_int(int p)
  */
 int changeDirectory(char *args[])
 {
-    // If we write no path (only 'cd'), then go to the home directory
-    if (args[1] == NULL) {
-        chdir(getenv("HOME"));
-        return 1;
+    const char *target = args[1];
+
+    if (target == NULL || target[0] == '\0') {
+        target = getenv("HOME");
+        if (target == NULL || target[0] == '\0')
+            target = "/";
     }
-    // Else we change the directory to the one specified by the
-    // argument, if possible
-    else {
-        if (chdir(args[1]) == -1) {
-            printf(" %s: no such directory\r\n", args[1]);
-            return -1;
-        }
+
+    if (chdir(target) == -1) {
+        printf(" %s: no such directory\r\n", target);
+        return -1;
     }
+
+    update_pwd_env();
     return 0;
 }
 
@@ -368,140 +693,119 @@ void fileIO(char *args[], char *inputFile, char *outputFile, int option)
 }
 
 /**
-* Method used to manage pipes.
-*/
-void pipeHandler(char *args[])
+ * Run a pipeline `cmd1 | cmd2 | ...`
+ */
+static int pipeHandler(char *args[])
 {
-    // File descriptors
-    int filedes[2]; // pos. 0 output, pos. 1 input of the pipe
-    int filedes2[2];
-    int num_cmds = 0;
-    char *command[LIMIT];
-    pid_t pid;
-    int err = -1;
-    int end = 0;
-    // Variables used for the different loops
-    int i = 0;
-    int j = 0;
-    int k = 0;
-    int l = 0;
+    char **commands[LIMIT];
+    pid_t pids[LIMIT];
+    int cmd_count = 0;
+    char **start = args;
+    int last_status = 0;
+    int i;
+    int prev_read = -1;
 
-    // First we calculate the number of commands (they are separated
-    // by '|')
-    while (args[l] != NULL) {
-        if (strcmp(args[l], "|") == 0) {
-            num_cmds++;
+    if (!args || !args[0])
+        return -1;
+
+    for (i = 0; args[i] != NULL; i++) {
+        if (strcmp(args[i], "|") == 0) {
+            args[i] = NULL;
+            if (!start || !*start) {
+                printf("fresh: invalid use of pipe\n");
+                return -1;
+            }
+            if (cmd_count >= LIMIT) {
+                printf("fresh: too many piped commands\n");
+                return -1;
+            }
+            commands[cmd_count++] = start;
+            start = &args[i + 1];
         }
-        l++;
     }
-    num_cmds++;
-
-    // Main loop of this method. For each command between '|', the
-    // pipes will be configured and standard input and/or output will
-    // be replaced. Then it will be executed
-    while (args[j] != NULL && end != 1) {
-        k = 0;
-        // We use an auxiliary array of pointers to store the command
-        // that will be executed on each iteration
-        while (strcmp(args[j], "|") != 0) {
-            command[k] = args[j];
-            j++;
-            if (args[j] == NULL) {
-                // 'end' variable used to keep the program from entering
-                // again in the loop when no more arguments are found
-                end = 1;
-                k++;
-                break;
-            }
-            k++;
+    if (start && *start) {
+        if (cmd_count >= LIMIT) {
+            printf("fresh: too many piped commands\n");
+            return -1;
         }
-        // Last position of the command will be NULL to indicate that
-        // it is its end when we pass it to the exec function
-        command[k] = NULL;
-        j++;
+        commands[cmd_count++] = start;
+    }
 
-        // Depending on whether we are in an iteration or another, we
-        // will set different descriptors for the pipes inputs and
-        // output. This way, a pipe will be shared between each two
-        // iterations, enabling us to connect the inputs and outputs of
-        // the two different commands.
-        if (i % 2 != 0) {
-            pipe(filedes); // for odd i
-        } else {
-            pipe(filedes2); // for even i
+    if (cmd_count < 2) {
+        printf("fresh: pipe requires at least two commands\n");
+        return -1;
+    }
+
+    for (i = 0; i < cmd_count; i++) {
+        int pipefd[2];
+        pid_t pid;
+        pipefd[0] = -1;
+        pipefd[1] = -1;
+        if (i < cmd_count - 1) {
+            if (pipe(pipefd) < 0) {
+                perror("pipe");
+                if (prev_read != -1)
+                    close(prev_read);
+                return -1;
+            }
         }
 
-        pid = vfork();
-
-        if (pid == -1) {
-            if (i != num_cmds - 1) {
-                if (i % 2 != 0) {
-                    close(filedes[1]); // for odd i
-                } else {
-                    close(filedes2[1]); // for even i
-                }
-            }
-            printf("Child process could not be created\r\n");
-            return;
+        pid = fork();
+        if (pid < 0) {
+            perror("fork");
+            if (pipefd[0] != -1)
+                close(pipefd[0]);
+            if (pipefd[1] != -1)
+                close(pipefd[1]);
+            if (prev_read != -1)
+                close(prev_read);
+            return -1;
         }
         if (pid == 0) {
-            // If we are in the first command
-            if (i == 0) {
-                dup2(filedes2[1], STDOUT_FILENO);
+            if (prev_read != -1) {
+                dup2(prev_read, STDIN_FILENO);
             }
-            // If we are in the last command, depending on whether it
-            // is placed in an odd or even position, we will replace
-            // the standard input for one pipe or another. The standard
-            // output will be untouched because we want to see the
-            // output in the terminal
-            else if (i == num_cmds - 1) {
-                if (num_cmds % 2 != 0) { // for odd number of commands
-                    dup2(filedes[0], STDIN_FILENO);
-                } else { // for even number of commands
-                    dup2(filedes2[0], STDIN_FILENO);
-                }
-                // If we are in a command that is in the middle, we will
-                // have to use two pipes, one for input and another for
-                // output. The position is also important in order to choose
-                // which file descriptor corresponds to each input/output
-            } else { // for odd i
-                if (i % 2 != 0) {
-                    dup2(filedes2[0], STDIN_FILENO);
-                    dup2(filedes[1], STDOUT_FILENO);
-                } else { // for even i
-                    dup2(filedes[0], STDIN_FILENO);
-                    dup2(filedes2[1], STDOUT_FILENO);
-                }
+            if (pipefd[1] != -1) {
+                dup2(pipefd[1], STDOUT_FILENO);
             }
+            if (pipefd[0] != -1)
+                close(pipefd[0]);
+            if (pipefd[1] != -1)
+                close(pipefd[1]);
+            if (prev_read != -1)
+                close(prev_read);
 
-            execvp(command[0], command);
-            exit(1);
+            execvp(commands[i][0], commands[i]);
+            perror(commands[i][0]);
+            _exit(127);
         }
 
-        // CLOSING DESCRIPTORS ON PARENT
-        if (i == 0) {
-            close(filedes2[1]);
-        } else if (i == num_cmds - 1) {
-            if (num_cmds % 2 != 0) {
-                close(filedes[0]);
-            } else {
-                close(filedes2[0]);
-            }
-        } else {
-            if (i % 2 != 0) {
-                close(filedes2[0]);
-                close(filedes[1]);
-            } else {
-                close(filedes[0]);
-                close(filedes2[1]);
-            }
-        }
-        while (child_pid != pid) {
-            sleep(60); /* Will be interrupted by sigchld. */
-        }
-
-        i++;
+        pids[i] = pid;
+        if (pipefd[1] != -1)
+            close(pipefd[1]);
+        if (prev_read != -1)
+            close(prev_read);
+        prev_read = pipefd[0];
     }
+
+    if (prev_read != -1)
+        close(prev_read);
+
+    for (i = 0; i < cmd_count; i++) {
+        int status = 0;
+        pid_t w;
+        do {
+            w = waitpid(pids[i], &status, 0);
+        } while (w < 0 && errno == EINTR);
+        if (w == pids[cmd_count - 1])
+            last_status = status;
+    }
+
+    if (WIFEXITED(last_status))
+        return WEXITSTATUS(last_status);
+    if (WIFSIGNALED(last_status))
+        return 128 + WTERMSIG(last_status);
+    return last_status;
 }
 
 /**
@@ -519,6 +823,11 @@ int commandHandler(char *args[], int argc)
     int background = 0;
 
     char *args_aux[LIMIT] = {NULL};
+    char *orig_args[LIMIT] = {NULL};
+
+    for (i = 0; i < argc && i < LIMIT; i++)
+        orig_args[i] = args[i];
+    i = 0;
 
     // We look for the special characters and separate the command itself
     // in a new array for the arguments
@@ -528,14 +837,64 @@ int commandHandler(char *args[], int argc)
             break;
         }
         if (!strncmp(args[j], "$", 1)) {
-                char *value = getenv((args[j] + 1));
-                char *ptr = malloc((strlen(value) + 1) * sizeof (char));
+            const char *name = args[j] + 1;
+            const char *value = NULL;
+            char tmp[16];
+
+            if (name[0] == '\0') {
+                value = "$";
+            } else if (name[0] == '$' && name[1] == '\0') {
+                snprintf(tmp, sizeof(tmp), "%d", getpid());
+                value = tmp;
+            } else if (name[0] == '?' && name[1] == '\0') {
+                const char *env = getenv("?");
+                value = env ? env : "0";
+            } else if (name[0] == '#' && name[1] == '\0') {
+                if (shell_paramc > 0)
+                    snprintf(tmp, sizeof(tmp), "%d", shell_paramc);
+                else
+                    snprintf(tmp, sizeof(tmp), "%d", argc - 1);
+                value = tmp;
+            } else if (isdigit((unsigned char)name[0])) {
+                char *endptr = NULL;
+                long idx = strtol(name, &endptr, 10);
+                if (endptr && *endptr == '\0') {
+                    if ((shell_paramc > 0) || shell_param0) {
+                        if (idx == 0)
+                            value = shell_param0 ? shell_param0 : "fresh";
+                        else if (idx > 0 && idx <= shell_paramc &&
+                                 shell_params[idx - 1])
+                            value = shell_params[idx - 1];
+                        else
+                            value = empty_value;
+                    } else if (idx >= 0 && idx < argc && orig_args[idx]) {
+                        value = orig_args[idx];
+                    } else {
+                        value = empty_value;
+                    }
+                } else {
+                    value = empty_value;
+                }
+            } else if (isalpha((unsigned char)name[0]) || name[0] == '_') {
+                const char *env = getenv(name);
+                value = env ? env : empty_value;
+            } else {
+                value = empty_value;
+            }
+
+            if (!value)
+                value = empty_value;
+
+            if (*value == '\0') {
+                args[j] = (char *)empty_value;
+            } else {
+                char *ptr = malloc(strlen(value) + 1);
                 if (ptr) {
-                    free(args[j]);
+                    strcpy(ptr, value);
                     args[j] = ptr;
-                    strncpy(args[j], value, strlen(value) + 1);
                 }
             }
+        }
         args_aux[j] = args[j];
         j++;
     }
@@ -590,6 +949,35 @@ int commandHandler(char *args[], int argc)
     // 'setenv' command to set environment variables
     else if (strcmp(args[0], "setenv") == 0) {
         setenv(args[1], args[2], 1);
+    } else if (strcmp(args[0], "export") == 0) {
+        int rv = 0;
+        if (argc < 2) {
+            printf("export: missing arguments\r\n");
+            rv = -1;
+        } else {
+            for (i = 1; i < argc && rv == 0; i++) {
+                char *eq = strchr(args[i], '=');
+                const char *key = args[i];
+                const char *val = NULL;
+                if (eq) {
+                    *eq = '\0';
+                    val = eq + 1;
+                } else {
+                    if (i + 1 >= argc) {
+                        printf("export: missing value for %s\r\n", args[i]);
+                        rv = -1;
+                        break;
+                    }
+                    val = args[++i];
+                }
+                if (setenv(key, val, 1) != 0)
+                    rv = -errno;
+                if (eq)
+                    *eq = '=';
+            }
+        }
+        setenv("?", rv == 0 ? "0" : "1", 1);
+        return rv;
     } else if (strcmp(args[0], "getenv") == 0) {
         if (argc > 1) {
             char *value;
@@ -598,11 +986,59 @@ int commandHandler(char *args[], int argc)
                 printf("%s\r\n", value);
             else
                 printf("getenv: variable '%s' is not set\r\n", args[1]);
+        } else {
+            extern char **environ;
+            for (char **env = environ; env && *env; env++)
+                printf("%s\r\n", *env);
         }
     }
     // 'unsetenv' command to undefine environment variables
-    else if (strcmp(args[0], "unsetenv") == 0) {
-        unsetenv(args[1]);
+    else if (strcmp(args[0], "unsetenv") == 0 || strcmp(args[0], "unset") == 0) {
+        if (argc < 2) {
+            printf("unset: missing variable name\r\n");
+            setenv("?", "1", 1);
+            return -1;
+        }
+        for (i = 1; i < argc; i++)
+            unsetenv(args[i]);
+        setenv("?", "0", 1);
+    } else if (strcmp(args[0], "source") == 0 || strcmp(args[0], ".") == 0) {
+        int src_ret = builtin_source(args, argc);
+        char buf[12];
+        snprintf(buf, sizeof(buf), "%d", src_ret);
+        setenv("?", buf, 1);
+        return src_ret;
+    } else if (strcmp(args[0], "shift") == 0) {
+        long shift_count = 1;
+        char *endptr = NULL;
+        if (argc > 1) {
+            shift_count = strtol(args[1], &endptr, 10);
+            if ((endptr && *endptr != '\0') || shift_count < 0) {
+                printf("shift: invalid count\r\n");
+                setenv("?", "1", 1);
+                return -1;
+            }
+        }
+        if (shift_count > shell_paramc) {
+            printf("shift: not enough positional parameters\r\n");
+            setenv("?", "1", 1);
+            return -1;
+        }
+        for (i = 0; i < shift_count; i++) {
+            if (shell_params[i]) {
+                free(shell_params[i]);
+                shell_params[i] = NULL;
+            }
+        }
+        for (i = shift_count; i < shell_paramc; i++)
+            shell_params[i - shift_count] = shell_params[i];
+        for (i = shell_paramc - shift_count; i < shell_paramc; i++) {
+            if (i >= 0)
+                shell_params[i] = NULL;
+        }
+        shell_paramc -= shift_count;
+        setenv("?", "0", 1);
+        return 0;
     } else {
         // If none of the preceding commands were used, we invoke the
         // specified program. We have to detect if I/O redirection,
@@ -616,8 +1052,11 @@ int commandHandler(char *args[], int argc)
                 // the appropriate method that will handle the different
                 // executions
             } else if (strcmp(args[i], "|") == 0) {
-                pipeHandler(args);
-                return 1;
+                int pipe_status = pipeHandler(args);
+                char buf[12];
+                snprintf(buf, sizeof(buf), "%d", pipe_status);
+                setenv("?", buf, 1);
+                return pipe_status;
                 // If '<' is detected, we have Input and Output redirection.
                 // First we check if the structure given is the correct one,
                 // and if that is the case we call the appropriate method
@@ -671,7 +1110,7 @@ char *readline_tty(char *input, int size)
         int out = STDOUT_FILENO;
         char got[5];
         int i, j;
-        int repeat = 0;
+        history_reset_cursor();
 
         while (len < size) {
             const char del = 0x08;
@@ -687,27 +1126,24 @@ char *readline_tty(char *input, int size)
             if ((ret == 3) && (got[0] == 0x1b)) {
                 char dir = got[2];
                 if (dir == 'A') {
-                    if ((strlen(lastcmd) == 0) || repeat) {
+                    if (history_len == 0)
                         continue;
-                    }
-                    repeat++;
-
-                    while (len > 0) {
-                        write(STDOUT_FILENO, &del, 1);
-                        write(STDOUT_FILENO, &space, 1);
-                        write(STDOUT_FILENO, &del, 1);
-                        len--;
-                    }
-                    len = strlen(lastcmd);
-                    lastcmd[len] = 0x00;
-                    len--;
-                    lastcmd[len] = 0x00;
-                    pos = len;
-                    printf("%s", lastcmd);
-                    fflush(stdout);
-                    strcpy(input, lastcmd);
+                    if (history_cursor > 0)
+                        history_cursor--;
+                    history_replace_input(input, &len, &pos,
+                                          history_entries[history_cursor]);
                     continue;
                 } else if (dir == 'B') {
+                    if (history_len == 0)
+                        continue;
+                    if (history_cursor < history_len)
+                        history_cursor++;
+                    if (history_cursor == history_len)
+                        history_replace_input(input, &len, &pos, NULL);
+                    else
+                        history_replace_input(input, &len, &pos,
+                                              history_entries[history_cursor]);
+                    continue;
                 } else if (dir == 'C') {
                     if (pos < len) {
                         printf("%c", input[pos++]);
@@ -793,8 +1229,14 @@ char *readline_tty(char *input, int size)
                 input[len + 1] = '\0';
                 printf("\r\n");
                 fflush(stdout);
-                if (len > 0)
-                    strncpy(lastcmd, input, 128);
+                if (len > 0) {
+                    char hist[MAXLINE];
+                    if (len >= MAXLINE)
+                        len = MAXLINE - 1;
+                    memcpy(hist, input, len);
+                    hist[len] = '\0';
+                    history_add(hist);
+                }
                 return input; /* CR (\r\n) */
             }
 
@@ -993,8 +1435,15 @@ int icebox_fresh(int argc, char *argv[])
     } else
         shell_init(NULL);
 
+    if (argc > 0)
+        shell_params_assign(argv, 1);
+
+    update_pwd_env();
+    history_init();
+
     /* Execute script */
     if (argc > idx) {
+        shell_params_assign(&argv[idx], argc - idx);
         ret = fresh_exec(argv[idx], &argv[idx]);
         return ret;
     }

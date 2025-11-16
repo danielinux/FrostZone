@@ -161,14 +161,68 @@ Ps()
 end
 
 
-file secure-supervisor/build/secure.elf
+# --- Configure once for STM32H5 ---
+set $FLASH      = 0x50022000
+set $BANK1_BASE = 0x08000000
+set $BANK2_BASE = 0x08100000     
+set $PAGE       = 8192           
+
+define flash_where
+  if $argc >= 1
+    set $addr = $arg0
+  end
+  if ($addr < $BANK2_BASE)
+    set $bank = 1
+    set $base = $BANK1_BASE
+    set $SECBB = $FLASH + 0xA0   
+    set $PRIVB = $FLASH + 0xC0   
+    set $SECWM = $FLASH + 0xE0   
+  else
+    set $bank = 2
+    set $base = $BANK2_BASE
+    set $SECBB = $FLASH + 0x1A0  
+    set $PRIVB = $FLASH + 0x1C0  
+    set $SECWM = $FLASH + 0x1E0  
+  end
+
+  set $off   = $addr - $base
+  set $page  = $off / $PAGE      
+  set $sb    = $page / 32        
+  set $bit   = $page % 32        
+
+  set $secbb_reg  = $SECBB + 4*$sb
+  set $privbb_reg = $PRIVB + 4*$sb
+
+  printf "Addr 0x%08lx -> Bank %d, page %u (sb=%u, bit=%u)\n", $addr, $bank, $page, $sb, $bit
+  printf " SECBB%uR%u @ 0x%08lx = ", $bank, $sb+1, $secbb_reg
+  x/wx $secbb_reg
+  printf "  -> SEC bit = %u\n", ((*(unsigned*)$secbb_reg >> $bit) & 1)
+  printf " PRIVBB%uR%u @ 0x%08lx = ", $bank, $sb+1, $privbb_reg
+  x/wx $privbb_reg
+  printf "  -> PRIV bit = %u\n", ((*(unsigned*)$privbb_reg >> $bit) & 1)
+
+  printf " SECWM%uR_CUR @ 0x%08lx = ", $bank, $SECWM
+  x/wx $SECWM
+  printf " (compare start/end fields to page=%u)\n", $page
+end
+document flash_where
+Usage: flash_where <address>
+Shows bank/page for <address>, SECBB/PRIVBB bit for that page, and SECWM*_CUR.
+end
+
+
+
+
+file secure-supervisor/secure.elf
 target remote :3333
-mon reset init
+source securefault.gdb
+source sau.gdb
+source memfault.gdb
+mon reset
 break secure_main
-add-symbol-file frosted/build/task0.elf
+add-symbol-file frosted/kernel.elf
 set $mpu = (MPU_Type *)(0xe000ed90)
 focus cmd
-continue
-
+si
 
 

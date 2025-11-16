@@ -172,6 +172,7 @@ int icebox_head(int argc, char** argv)
 	int i = 1;
 	int fd;
 	struct ht ht = {0, 0, 0, 0, 0};
+	struct wc wc;
 
 	i += parse_opts(argc, argv, &ht);
 	ht.side = START;
@@ -185,7 +186,9 @@ int icebox_head(int argc, char** argv)
 			i++;
 			continue;
 		}
-		struct wc wc = {0, 0, 0};
+		wc.bytes = 0;
+		wc.lines = 0;
+		wc.words = 0;
 		word_count(fd, &wc);
 
 		close(fd);

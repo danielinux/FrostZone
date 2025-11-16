@@ -71,8 +71,8 @@ int sys_pipe2_hdlr(int *pfd, int flags)
         goto fail_all;
     }
 
-    task_fd_setmask(pfd[0], O_RDONLY);
-    task_fd_setmask(pfd[1], O_WRONLY);
+    task_fd_setmask(pfd[0], FL_RDONLY);
+    task_fd_setmask(pfd[1], FL_WRONLY);
 
     rd->priv = pp;
     wr->priv = pp;

@@ -8,9 +8,17 @@
 
 -include ../kconfig/.config
 CC?=arm-frosted-eabi-cc
+CFLAGS?=
+CFLAGS+=-nostartfiles -nostdlib -fPIC -mlong-calls -fno-common -msingle-pic-base -mno-pic-data-is-text-relative -Wstack-usage=4096
+LDFLAGS?=
+LDFLAGS+=-fPIC -mlong-calls -fno-common -Wl,-elf2flt -lgloss -lc -lm -lgcc
 APPS-$(APP_CAT)+=cat
 CFLAGS-$(APP_CAT)+=-DAPP_CAT_STANDALONE
 CFLAGS-ICEBOX-$(APP_CAT)+=-DAPP_CAT_MODULE
+
+APPS-$(APP_CP)+=cp
+CFLAGS-$(APP_CP)+=-DAPP_CP_STANDALONE
+CFLAGS-ICEBOX-$(APP_CP)+=-DAPP_CP_MODULE
 
 APPS-$(APP_CUT)+=cut
 CFLAGS-$(APP_CUT)+=-DAPP_CUT_STANDALONE
@@ -23,6 +31,10 @@ CFLAGS-ICEBOX-$(APP_DATE)+=-DAPP_DATE_MODULE
 APPS-$(APP_DIRNAME)+=dirname
 CFLAGS-$(APP_DIRNAME)+=-DAPP_DIRNAME_STANDALONE
 CFLAGS-ICEBOX-$(APP_DIRNAME)+=-DAPP_DIRNAME_MODULE
+
+APPS-$(APP_DU)+=du
+CFLAGS-$(APP_DU)+=-DAPP_DU_STANDALONE
+CFLAGS-ICEBOX-$(APP_DU)+=-DAPP_DU_MODULE
 
 APPS-$(APP_ECHO)+=echo
 CFLAGS-$(APP_ECHO)+=-DAPP_ECHO_STANDALONE
@@ -80,6 +92,10 @@ APPS-$(APP_LS)+=ls
 CFLAGS-$(APP_LS)+=-DAPP_LS_STANDALONE
 CFLAGS-ICEBOX-$(APP_LS)+=-DAPP_LS_MODULE
 
+APPS-$(APP_MV)+=mv
+CFLAGS-$(APP_MV)+=-DAPP_MV_STANDALONE
+CFLAGS-ICEBOX-$(APP_MV)+=-DAPP_MV_MODULE
+
 APPS-$(APP_MKDIR)+=mkdir
 CFLAGS-$(APP_MKDIR)+=-DAPP_MKDIR_STANDALONE
 CFLAGS-ICEBOX-$(APP_MKDIR)+=-DAPP_MKDIR_MODULE
@@ -99,6 +115,10 @@ CFLAGS-ICEBOX-$(APP_POWERCTL)+=-DAPP_POWERCTL_MODULE
 APPS-$(APP_PRODCONS)+=prodcons
 CFLAGS-$(APP_PRODCONS)+=-DAPP_PRODCONS_STANDALONE
 CFLAGS-ICEBOX-$(APP_PRODCONS)+=-DAPP_PRODCONS_MODULE
+
+APPS-$(APP_STAT)+=stat
+CFLAGS-$(APP_STAT)+=-DAPP_STAT_STANDALONE
+CFLAGS-ICEBOX-$(APP_STAT)+=-DAPP_STAT_MODULE
 
 APPS-$(APP_PS)+=ps
 CFLAGS-$(APP_PS)+=-DAPP_PS_STANDALONE
@@ -156,18 +176,31 @@ APPS-$(APP_PWRCTL)+=pwrctl
 CFLAGS-$(APP_PWRCTL)+=-DAPP_PWRCTL_STANDALONE
 CFLAGS-ICEBOX-$(APP_PWRCTL)+=-DAPP_PWRCTL_MODULE
 
+APPS-$(APP_HEXDUMP)+=hexdump
+CFLAGS-$(APP_HEXDUMP)+=-DAPP_HEXDUMP_STANDALONE
+CFLAGS-ICEBOX-$(APP_HEXDUMP)+=-DAPP_HEXDUMP_MODULE
+
+APPS-$(APP_XXD)+=xxd
+CFLAGS-$(APP_XXD)+=-DAPP_XXD_STANDALONE
+CFLAGS-ICEBOX-$(APP_XXD)+=-DAPP_XXD_MODULE
+
 BIN:=$(patsubst %,../out/%,$(APPS-y))
-LNK:=$(patsubst %,../lnk/%,$(APPS-m))
 OBJ:=$(patsubst %,%.o,$(APPS-y))
 MOD:=$(patsubst %,ice/%.o,$(APPS-m))
+LNK:=$(patsubst %,../lnk/%,$(APPS-m))
 ICE-$(ICEBOX)=../out/icebox
-
+ICEBOX_EXTRA_OBJS?=
+NETUTILS_ICE_MODS := $(wildcard ../netutils/ice/*.o)
+ALL_ICEBOX_MODS := $(MOD) $(ICEBOX_EXTRA_OBJS) $(NETUTILS_ICE_MODS)
 all: $(BIN) $(MOD) $(LNK) $(ICE-y) $(LNK)
 
-../out/icebox: icebox.o $(MOD)
+../out/icebox: icebox.o $(ALL_ICEBOX_MODS)
 	arm-frosted-eabi-gcc -o $@ $^ $(CFLAGS) $(CFLAGS-ICEBOX-m) $(LDFLAGS)
 icebox.o: icebox.c
 	arm-frosted-eabi-gcc -c -o $@ $^ $(CFLAGS) $(CFLAGS-ICEBOX-m)
+
+.PHONY: icebox-refresh
+icebox-refresh: ../out/icebox
 
 ../out/gdbserver:  gdb-server.o gdb-remote.o
 	@arm-frosted-eabi-gcc -o $@ $^ $(CFLAGS) $(CFLAGS-y) $(LDFLAGS)

@@ -507,20 +507,64 @@ int sysfs_tasks_read(struct sysfs_fnode *sfs, void *buf, int len)
 
 #define NPOOLS 5
 
+static int sysfs_mem_append_line(char *dst, int off, const char *label, uint32_t value)
+{
+    strcpy(dst + off, label);
+    off += strlen(label);
+    dst[off++] = '\t';
+    off += ul_to_str(value, dst + off);
+    dst[off++] = '\r';
+    dst[off++] = '\n';
+    return off;
+}
+
 int sysfs_mem_read(struct sysfs_fnode *sfs, void *buf, int len)
 {
     char *res = (char *)buf;
     struct fnode *fno = sfs->fnode;
     static char *mem_txt;
     static int off;
-    int i;
-    int stack_used;
-    int p_state;
     uint32_t cur_off = task_fd_get_off(fno);
+    const char legend[] = "type             bytes    \r\n";
+    const char divider[] = "-------------------------\r\n";
 
-    /* ... */
+    if (cur_off == 0) {
+        struct mempool_stats stats;
+        mutex_lock(sysfs_mutex);
+        mem_txt = kalloc(MAX_SYSFS_BUFFER);
+        if (!mem_txt) {
+            mutex_unlock(sysfs_mutex);
+            return -1;
+        }
+        if (secure_mempool_stats(&stats) != 0) {
+            kfree(mem_txt);
+            mutex_unlock(sysfs_mutex);
+            return -1;
+        }
+        off = 0;
+        strcpy(mem_txt + off, legend);
+        off += strlen(legend);
+        strcpy(mem_txt + off, divider);
+        off += strlen(divider);
+        off = sysfs_mem_append_line(mem_txt, off, "processes", stats.task_reserved);
+        off = sysfs_mem_append_line(mem_txt, off, "kernel   ", stats.kernel_reserved);
+        off = sysfs_mem_append_line(mem_txt, off, "heap_free", stats.free);
+        mem_txt[off++] = '\0';
+    }
+
+    cur_off = task_fd_get_off(fno);
+    if (off == cur_off) {
+        kfree(mem_txt);
+        mutex_unlock(sysfs_mutex);
+        return -1;
+    }
+    if (len > (off - cur_off)) {
+        len = off - cur_off;
+    }
+    memcpy(res, mem_txt + cur_off, len);
+    cur_off += len;
     task_fd_set_off(fno, cur_off);
-    return 0;
+    return len;
 }
 
 int sysfs_modules_read(struct sysfs_fnode *sfs, void *buf, int len)

@@ -9,194 +9,337 @@
 #include <string.h>
 #include <stdio.h>
 
+#ifdef APP_CAT_MODULE
+extern int icebox_cat(int argc, char *argv[]);
+#endif
+#ifdef APP_CP_MODULE
+extern int icebox_cp(int argc, char *argv[]);
+#endif
+#ifdef APP_CUT_MODULE
+extern int icebox_cut(int argc, char *argv[]);
+#endif
+#ifdef APP_DATE_MODULE
+extern int icebox_date(int argc, char *argv[]);
+#endif
+#ifdef APP_DIRNAME_MODULE
+extern int icebox_dirname(int argc, char *argv[]);
+#endif
+#ifdef APP_DU_MODULE
+extern int icebox_du(int argc, char *argv[]);
+#endif
+#ifdef APP_ECHO_MODULE
+extern int icebox_echo(int argc, char *argv[]);
+#endif
+#ifdef APP_FALSE_MODULE
+extern int icebox_false(int argc, char *argv[]);
+#endif
+#ifdef APP_FILE_MODULE
+extern int icebox_file(int argc, char *argv[]);
+#endif
+#ifdef APP_FRESH_MODULE
+extern int icebox_fresh(int argc, char *argv[]);
+#endif
+#ifdef APP_GREP_MODULE
+extern int icebox_grep(int argc, char *argv[]);
+#endif
+#ifdef APP_HEAD_MODULE
+extern int icebox_head(int argc, char *argv[]);
+#endif
+#ifdef APP_KILL_MODULE
+extern int icebox_kill(int argc, char *argv[]);
+#endif
+#ifdef APP_KLOGD_MODULE
+extern int icebox_klogd(int argc, char *argv[]);
+#endif
+#ifdef APP_LN_MODULE
+extern int icebox_ln(int argc, char *argv[]);
+#endif
+#ifdef APP_LS_MODULE
+extern int icebox_ls(int argc, char *argv[]);
+#endif
+#ifdef APP_MV_MODULE
+extern int icebox_mv(int argc, char *argv[]);
+#endif
+#ifdef APP_MKDIR_MODULE
+extern int icebox_mkdir(int argc, char *argv[]);
+#endif
+#ifdef APP_MOUNT_MODULE
+extern int icebox_mount(int argc, char *argv[]);
+#endif
+#ifdef APP_PLAY_MODULE
+extern int icebox_play(int argc, char *argv[]);
+#endif
+#ifdef APP_POWERCTL_MODULE
+extern int icebox_powerctl(int argc, char *argv[]);
+#endif
+#ifdef APP_PS_MODULE
+extern int icebox_ps(int argc, char *argv[]);
+#endif
+#ifdef APP_STAT_MODULE
+extern int icebox_stat(int argc, char *argv[]);
+#endif
+#ifdef APP_REBOOT_MODULE
+extern int icebox_reboot(int argc, char *argv[]);
+#endif
+#ifdef APP_RENICE_MODULE
+extern int icebox_renice(int argc, char *argv[]);
+#endif
+#ifdef APP_RM_MODULE
+extern int icebox_rm(int argc, char *argv[]);
+#endif
+#ifdef APP_SLEEP_MODULE
+extern int icebox_sleep(int argc, char *argv[]);
+#endif
+#ifdef APP_TAIL_MODULE
+extern int icebox_tail(int argc, char *argv[]);
+#endif
+#ifdef APP_TEE_MODULE
+extern int icebox_tee(int argc, char *argv[]);
+#endif
+#ifdef APP_TOUCH_MODULE
+extern int icebox_touch(int argc, char *argv[]);
+#endif
+#ifdef APP_TRUE_MODULE
+extern int icebox_true(int argc, char *argv[]);
+#endif
+#ifdef APP_UPTIME_MODULE
+extern int icebox_uptime(int argc, char *argv[]);
+#endif
+#ifdef APP_WC_MODULE
+extern int icebox_wc(int argc, char *argv[]);
+#endif
+#ifdef APP_HEXDUMP_MODULE
+extern int icebox_hexdump(int argc, char *argv[]);
+#endif
+#ifdef APP_YES_MODULE
+extern int icebox_yes(int argc, char *argv[]);
+#endif
+#ifdef APP_PWRCTL_MODULE
+extern int icebox_pwrctl(int argc, char *argv[]);
+#endif
+#ifdef APP_XXD_MODULE
+extern int icebox_xxd(int argc, char *argv[]);
+#endif
+#ifdef APP_IFCONFIG_MODULE
+extern int icebox_ifconfig(int argc, char *argv[]);
+#endif
+#ifdef APP_ROUTE_MODULE
+extern int icebox_route(int argc, char *argv[]);
+#endif
+#ifdef APP_TELNETD_MODULE
+extern int icebox_telnetd(int argc, char *argv[]);
+#endif
+#ifdef APP_NETCAT_MODULE
+extern int icebox_nc(int argc, char *argv[]);
+#endif
+
 int main(int argc, char *argv[])
 {
 
 
 #ifdef APP_CAT_MODULE
-    extern int icebox_cat(int argc, char *argv[]);
     if(strcmp("cat", argv[0]) == 0)
         return icebox_cat(argc, argv);
 #endif
 
+#ifdef APP_CP_MODULE
+    if(strcmp("cp", argv[0]) == 0)
+        return icebox_cp(argc, argv);
+#endif
+
 #ifdef APP_CUT_MODULE
-    extern int icebox_cut(int argc, char *argv[]);
     if(strcmp("cut", argv[0]) == 0)
         return icebox_cut(argc, argv);
 #endif
 
 #ifdef APP_DATE_MODULE
-    extern int icebox_date(int argc, char *argv[]);
     if(strcmp("date", argv[0]) == 0)
         return icebox_date(argc, argv);
 #endif
 
 #ifdef APP_DIRNAME_MODULE
-    extern int icebox_dirname(int argc, char *argv[]);
     if(strcmp("dirname", argv[0]) == 0)
         return icebox_dirname(argc, argv);
 #endif
 
+#ifdef APP_DU_MODULE
+    if(strcmp("du", argv[0]) == 0)
+        return icebox_du(argc, argv);
+#endif
+
 #ifdef APP_ECHO_MODULE
-    extern int icebox_echo(int argc, char *argv[]);
     if(strcmp("echo", argv[0]) == 0)
         return icebox_echo(argc, argv);
 #endif
 
 #ifdef APP_FALSE_MODULE
-    extern int icebox_false(int argc, char *argv[]);
     if(strcmp("false", argv[0]) == 0)
         return icebox_false(argc, argv);
 #endif
 
 #ifdef APP_FILE_MODULE
-    extern int icebox_file(int argc, char *argv[]);
     if(strcmp("file", argv[0]) == 0)
         return icebox_file(argc, argv);
 #endif
 
 #ifdef APP_FRESH_MODULE
-    extern int icebox_fresh(int argc, char *argv[]);
     if(strcmp("fresh", argv[0]) == 0)
         return icebox_fresh(argc, argv);
 #endif
 
 #ifdef APP_GREP_MODULE
-    extern int icebox_grep(int argc, char *argv[]);
     if(strcmp("grep", argv[0]) == 0)
         return icebox_grep(argc, argv);
 #endif
 
 #ifdef APP_HEAD_MODULE
-    extern int icebox_head(int argc, char *argv[]);
     if(strcmp("head", argv[0]) == 0)
         return icebox_head(argc, argv);
 #endif
 
 #ifdef APP_KILL_MODULE
-    extern int icebox_kill(int argc, char *argv[]);
     if(strcmp("kill", argv[0]) == 0)
         return icebox_kill(argc, argv);
 #endif
 
 #ifdef APP_KLOGD_MODULE
-    extern int icebox_klogd(int argc, char *argv[]);
     if(strcmp("klogd", argv[0]) == 0)
         return icebox_klogd(argc, argv);
 #endif
 
 #ifdef APP_LN_MODULE
-    extern int icebox_ln(int argc, char *argv[]);
     if(strcmp("ln", argv[0]) == 0)
         return icebox_ln(argc, argv);
 #endif
 
 #ifdef APP_LS_MODULE
-    extern int icebox_ls(int argc, char *argv[]);
     if(strcmp("ls", argv[0]) == 0)
         return icebox_ls(argc, argv);
 #endif
 
+#ifdef APP_MV_MODULE
+    if(strcmp("mv", argv[0]) == 0)
+        return icebox_mv(argc, argv);
+#endif
+
 #ifdef APP_MKDIR_MODULE
-    extern int icebox_mkdir(int argc, char *argv[]);
     if(strcmp("mkdir", argv[0]) == 0)
         return icebox_mkdir(argc, argv);
 #endif
 
 #ifdef APP_MOUNT_MODULE
-    extern int icebox_mount(int argc, char *argv[]);
     if(strcmp("mount", argv[0]) == 0)
         return icebox_mount(argc, argv);
 #endif
 
 #ifdef APP_PLAY_MODULE
-    extern int icebox_play(int argc, char *argv[]);
     if(strcmp("play", argv[0]) == 0)
         return icebox_play(argc, argv);
 #endif
 
 #ifdef APP_POWERCTL_MODULE
-    extern int icebox_powerctl(int argc, char *argv[]);
     if(strcmp("powerctl", argv[0]) == 0)
         return icebox_powerctl(argc, argv);
 #endif
 
 #ifdef APP_PS_MODULE
-    extern int icebox_ps(int argc, char *argv[]);
     if(strcmp("ps", argv[0]) == 0)
         return icebox_ps(argc, argv);
 #endif
 
+#ifdef APP_STAT_MODULE
+    if(strcmp("stat", argv[0]) == 0)
+        return icebox_stat(argc, argv);
+#endif
+
 #ifdef APP_REBOOT_MODULE
-    extern int icebox_reboot(int argc, char *argv[]);
     if(strcmp("reboot", argv[0]) == 0)
         return icebox_reboot(argc, argv);
 #endif
 
 #ifdef APP_RENICE_MODULE
-    extern int icebox_renice(int argc, char *argv[]);
     if(strcmp("renice", argv[0]) == 0)
         return icebox_renice(argc, argv);
 #endif
 
 #ifdef APP_RM_MODULE
-    extern int icebox_rm(int argc, char *argv[]);
     if(strcmp("rm", argv[0]) == 0)
         return icebox_rm(argc, argv);
 #endif
 
 #ifdef APP_SLEEP_MODULE
-    extern int icebox_sleep(int argc, char *argv[]);
     if(strcmp("sleep", argv[0]) == 0)
         return icebox_sleep(argc, argv);
 #endif
 
 #ifdef APP_TAIL_MODULE
-    extern int icebox_tail(int argc, char *argv[]);
     if(strcmp("tail", argv[0]) == 0)
         return icebox_tail(argc, argv);
 #endif
 
 #ifdef APP_TEE_MODULE
-    extern int icebox_tee(int argc, char *argv[]);
     if(strcmp("tee", argv[0]) == 0)
         return icebox_tee(argc, argv);
 #endif
 
 #ifdef APP_TOUCH_MODULE
-    extern int icebox_touch(int argc, char *argv[]);
     if(strcmp("touch", argv[0]) == 0)
         return icebox_touch(argc, argv);
 #endif
 
 #ifdef APP_TRUE_MODULE
-    extern int icebox_true(int argc, char *argv[]);
     if(strcmp("true", argv[0]) == 0)
         return icebox_true(argc, argv);
 #endif
 
 #ifdef APP_UPTIME_MODULE
-    extern int icebox_uptime(int argc, char *argv[]);
     if(strcmp("uptime", argv[0]) == 0)
         return icebox_uptime(argc, argv);
 #endif
 
 #ifdef APP_WC_MODULE
-    extern int icebox_wc(int argc, char *argv[]);
     if(strcmp("wc", argv[0]) == 0)
         return icebox_wc(argc, argv);
 #endif
 
+#ifdef APP_HEXDUMP_MODULE
+    if(strcmp("hexdump", argv[0]) == 0)
+        return icebox_hexdump(argc, argv);
+#endif
+
 #ifdef APP_YES_MODULE
-    extern int icebox_yes(int argc, char *argv[]);
     if(strcmp("yes", argv[0]) == 0)
         return icebox_yes(argc, argv);
 #endif
 
 #ifdef APP_PWRCTL_MODULE
-    extern int icebox_pwrctl(int argc, char *argv[]);
     if(strcmp("pwrctl", argv[0]) == 0)
         return icebox_pwrctl(argc, argv);
+#endif
+
+#ifdef APP_XXD_MODULE
+    if(strcmp("xxd", argv[0]) == 0)
+        return icebox_xxd(argc, argv);
+#endif
+
+#ifdef APP_IFCONFIG_MODULE
+    if(strcmp("ifconfig", argv[0]) == 0)
+        return icebox_ifconfig(argc, argv);
+#endif
+
+#ifdef APP_ROUTE_MODULE
+    if(strcmp("route", argv[0]) == 0)
+        return icebox_route(argc, argv);
+#endif
+
+#ifdef APP_TELNETD_MODULE
+    if(strcmp("telnetd", argv[0]) == 0)
+        return icebox_telnetd(argc, argv);
+#endif
+
+#ifdef APP_NETCAT_MODULE
+    if(strcmp("nc", argv[0]) == 0)
+        return icebox_nc(argc, argv);
 #endif
 
     fprintf(stderr,"%s: command not implemented.\r\n", argv[0]);

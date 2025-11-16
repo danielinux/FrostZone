@@ -19,7 +19,6 @@
  */
 
 #include "stdint.h"
-#include "string.h"
 #include "hardware/clocks.h"
 #include "hardware/pll.h"
 #include "hardware/gpio.h"
@@ -29,6 +28,9 @@
 #include "hardware/resets.h"
 #include "pico/multicore.h"
 #include "pico/rand.h"
+#include "pico/stdio.h"
+#include <stdio.h>
+#include <string.h>
 
 #define NVIC_ICER0 (*(volatile uint32_t *)(0xE000E180))
 #define NVIC_ICPR0 (*(volatile uint32_t *)(0xE000E280))

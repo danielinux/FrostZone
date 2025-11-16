@@ -24,6 +24,7 @@
 #include <string.h>
 #include "limits.h"
 #include "task.h"
+#include "taskmem.h"
 
 #define MEMPOOL_SIZE        (0x50000) /* 20030000 ~ 2006FFFF */
 #define MAX_MEMPOOL_BLOCKS  512         /* Max blocks in tracking table */
@@ -44,14 +45,41 @@ static uint8_t *mempool_pool = NULL;
 
 static mempool_block_t mempool_blocks[MAX_MEMPOOL_BLOCKS];
 
+static void memzero(void *ptr, size_t len) {
+    volatile uint8_t *p = ptr;
+    while(len--) {
+        *p++ = 0;
+    }
+}
+
 void mempool_init(void) {
     if (mempool_pool != NULL)
         return;
     mempool_pool = &__mempool_start__;
-    memset(mempool_pool, 0, MEMPOOL_SIZE);
-    memset(mempool_blocks, 0, sizeof(mempool_blocks));
+    memzero(mempool_pool, MEMPOOL_SIZE);
+    memzero(mempool_blocks, sizeof(mempool_blocks));
     mempool_blocks[0].base = mempool_pool;
     mempool_blocks[0].size = MEMPOOL_SIZE;
+}
+
+static inline void mempool_limits_add(secure_task_t *task, uint32_t size)
+{
+    if (!task || size == 0)
+        return;
+    if (UINT32_MAX - task->limits.mem_used < size)
+        task->limits.mem_used = UINT32_MAX;
+    else
+        task->limits.mem_used += size;
+}
+
+static inline void mempool_limits_sub(secure_task_t *task, uint32_t size)
+{
+    if (!task || size == 0)
+        return;
+    if (task->limits.mem_used >= size)
+        task->limits.mem_used -= size;
+    else
+        task->limits.mem_used = 0;
 }
 
 /* Release a previously allocated area.
@@ -62,7 +90,9 @@ void mempool_unmap(void *ptr, uint16_t task_id) {
     mempool_block_t tmp = {0,0};
     if (!task)
         return; /* Invalid task ID */
-    if ((task->mempool_count == 0) && (task->main_segment.base == NULL))
+    if ((task->mempool_count == 0) &&
+        (task->main_segment.base == NULL) &&
+        (task->stack_segment.base == NULL))
         return; /* No allocated segments */
     if (!ptr)
         return; /* Null pointer cannot be freed */
@@ -74,6 +104,16 @@ void mempool_unmap(void *ptr, uint16_t task_id) {
         tmp.base = ptr;
         tmp.size = task->main_segment.size;
         task->main_segment.base = NULL;
+        task->main_segment.size = 0;
+        mempool_limits_sub(task, tmp.size);
+    }
+    else if (task->stack_segment.base == ptr)
+    {
+        tmp.base = ptr;
+        tmp.size = task->stack_segment.size;
+        task->stack_segment.base = NULL;
+        task->stack_segment.size = 0;
+        mempool_limits_sub(task, tmp.size);
     } else {
         for (i = 0; i < CONFIG_MEMPOOL_SEGMENTS_PER_TASK; i++)
         {
@@ -81,7 +121,7 @@ void mempool_unmap(void *ptr, uint16_t task_id) {
             {
                 tmp.base = ptr;
                 tmp.size = task->mempool[i].size;
-                task->limits.mem_used -= task->mempool[i].size;
+                mempool_limits_sub(task, task->mempool[i].size);
                 task->mempool_count--;
                 for (j = i; j < task->mempool_count; j++)
                     task->mempool[j] = task->mempool[j + 1];
@@ -126,7 +166,7 @@ void mempool_unmap(void *ptr, uint16_t task_id) {
  */
 static void *mempool_task_alloc(size_t task_size, uint16_t task_id)
 {
-    int i, j;
+    int i;
     size_t total_size = task_size + CONFIG_TASK_STACK_SIZE;
     secure_task_t *task = get_secure_task(task_id);
     if(!task) {
@@ -197,7 +237,7 @@ void *mempool_mmap(size_t size, uint16_t task_id, uint32_t flags)
                         /* The old block is moved and resized. */
                         mempool_blocks[i].base += size;
                         mempool_blocks[i].size -= size;
-                        task->limits.mem_used += size;
+                        mempool_limits_add(task, size);
                         return task->mempool[j].base + oldsize;
                     }
                 }
@@ -216,7 +256,7 @@ void *mempool_mmap(size_t size, uint16_t task_id, uint32_t flags)
             mem->base = mempool_blocks[i].base;
             mem->size = size;
             task->mempool_count++;
-            task->limits.mem_used += size;
+            mempool_limits_add(task, size);
 
             /* Split remaining space, if larger than needed */
             mempool_blocks[i].base += size;
@@ -247,7 +287,7 @@ void *mempool_alloc_stack(uint32_t size, uint16_t task_id) {
             }
             mem->base = mempool_blocks[i].base;
             mem->size = size;
-            task->limits.mem_used += size;
+            mempool_limits_add(task, size);
 
             /* Split remaining space,
              * if larger than needed */
@@ -262,7 +302,7 @@ void *mempool_alloc_stack(uint32_t size, uint16_t task_id) {
 
 
 /* Change ownership of a memory segment to another task */
-int mempool_chown(void *ptr, uint16_t new_owner, uint16_t caller_id) {
+int mempool_chown(const void *ptr, uint16_t new_owner, uint16_t caller_id) {
     int i, j;
     secure_task_t *src = get_secure_task(caller_id);
     secure_task_t *dst = get_secure_task(new_owner);
@@ -277,7 +317,9 @@ int mempool_chown(void *ptr, uint16_t new_owner, uint16_t caller_id) {
     }
 
 
-    if ((src->mempool_count == 0) && (src->main_segment.base == NULL))
+    if ((src->mempool_count == 0) &&
+        (src->main_segment.base == NULL) &&
+        (src->stack_segment.base == NULL))
         return -1; /* No allocated segments */
     if (!ptr)
         return -1; /* Null pointer cannot chownd */
@@ -287,8 +329,10 @@ int mempool_chown(void *ptr, uint16_t new_owner, uint16_t caller_id) {
         if (dst->main_segment.base != NULL)
             mempool_unmap(dst->main_segment.base, new_owner);
 
+        mempool_limits_sub(src, src->main_segment.size);
+        mempool_limits_add(dst, src->main_segment.size);
         src->main_segment.base = NULL;
-        dst->main_segment.base = ptr;
+        dst->main_segment.base = (uint8_t *)ptr;
         dst->main_segment.size = src->main_segment.size;
         src->main_segment.size = 0;
         return 0;
@@ -299,8 +343,10 @@ int mempool_chown(void *ptr, uint16_t new_owner, uint16_t caller_id) {
         if (dst->stack_segment.base != NULL)
             mempool_unmap(dst->stack_segment.base, new_owner);
 
+        mempool_limits_sub(src, src->stack_segment.size);
+        mempool_limits_add(dst, src->stack_segment.size);
         src->stack_segment.base = NULL;
-        dst->stack_segment.base = ptr;
+        dst->stack_segment.base = (uint8_t *)ptr;
         dst->stack_segment.size = src->stack_segment.size;
         src->stack_segment.size = 0;
         return 0;
@@ -320,6 +366,8 @@ int mempool_chown(void *ptr, uint16_t new_owner, uint16_t caller_id) {
             if (dst->main_segment.base == NULL) {
                 dst->main_segment.base = tmp.base;
                 dst->main_segment.size = tmp.size;
+                mempool_limits_sub(src, tmp.size);
+                mempool_limits_add(dst, tmp.size);
                 goto chown_successful;
             }
 
@@ -330,10 +378,14 @@ int mempool_chown(void *ptr, uint16_t new_owner, uint16_t caller_id) {
                 for (j = 0; j < dst->mempool_count -1; j++) {
                     if (dst->mempool[j].base + dst->mempool[j].size == tmp.base) {
                         dst->mempool[j].size += tmp.size;
+                        mempool_limits_sub(src, tmp.size);
+                        mempool_limits_add(dst, tmp.size);
                         goto chown_successful;
                     } else if (dst->mempool[j+1].base == tmp.base + tmp.size) {
                         dst->mempool[j+1].base -= tmp.size;
                         dst->mempool[j+1].size += tmp.size;
+                        mempool_limits_sub(src, tmp.size);
+                        mempool_limits_add(dst, tmp.size);
                         goto chown_successful;
                     }
                 }
@@ -344,6 +396,8 @@ int mempool_chown(void *ptr, uint16_t new_owner, uint16_t caller_id) {
                 return -1;
             dst->mempool[dst->mempool_count] = tmp;
             dst->mempool_count++;
+            mempool_limits_sub(src, tmp.size);
+            mempool_limits_add(dst, tmp.size);
             goto chown_successful;
         }
     }
@@ -375,13 +429,13 @@ void secure_munmap(void *ptr, uint16_t task_id)
 }
 
 __attribute__((cmse_nonsecure_entry))
-int secure_mempool_chown(void *ptr, uint16_t new_owner, uint16_t caller_id)
+int secure_mempool_chown(const void *ptr, uint16_t new_owner, uint16_t caller_id)
 {
     return mempool_chown(ptr, new_owner, caller_id);
 }
 
 __attribute__((cmse_nonsecure_entry))
-int secure_mempool_owner(void *ptr, uint16_t task_id)
+int secure_mempool_owner(const void *ptr, uint16_t task_id)
 {
     secure_task_t *t = NULL;
     int i;
@@ -407,13 +461,15 @@ int secure_mempool_owner(void *ptr, uint16_t task_id)
 __attribute__((cmse_nonsecure_entry))
 void secure_munmap_task(uint16_t owner)
 {
-    int i;
     secure_task_t *task = get_secure_task(owner);
     if (!task)
         return;
     while (task->mempool_count > 0)
         mempool_unmap(task->mempool[0].base, owner);
-    mempool_unmap(&task->main_segment, owner);
+    if (task->stack_segment.base)
+        mempool_unmap(task->stack_segment.base, owner);
+    if (task->main_segment.base)
+        mempool_unmap(task->main_segment.base, owner);
 }
 
 __attribute__((cmse_nonsecure_entry))
@@ -440,3 +496,54 @@ int secure_swap_stack(uint16_t parent, uint16_t child)
     return 0;
 } 
 
+__attribute__((cmse_nonsecure_entry))
+int secure_meminfo(uint16_t task_id, void *_info)
+{
+    unsigned int i;
+    struct task_meminfo *info = (struct task_meminfo *)_info;
+    if (!info)
+        return -1;
+
+    secure_task_t *task = get_secure_task(task_id);
+    if (!task)
+        return -1;
+    info->stack_base = (uintptr_t)task->stack_segment.base;
+    info->stack_size = task->stack_segment.size;
+    info->ram_base = (uintptr_t)task->main_segment.base;
+    info->ram_size = task->main_segment.size;
+    info->n_heap_regions = task->mempool_count;
+
+    for (i = 0; i < task->mempool_count; i++) {
+        info->heap[i].base = (uintptr_t)task->mempool[i].base;
+        info->heap[i].size = task->mempool[i].size;
+    }
+    return 0;
+}
+
+__attribute__((cmse_nonsecure_entry))
+int secure_mempool_stats(struct mempool_stats *stats)
+{
+    uint32_t kernel_used = 0;
+    uint32_t task_used = 0;
+    uint32_t total = MEMPOOL_SIZE;
+    if (!stats)
+        return -1;
+
+    for (int i = 0; i < MAX_SECURE_TASKS; i++) {
+        secure_task_t *task = &secure_tasks[i];
+        if (task->task_id == 0xFFFF)
+            continue;
+        if (task->task_id == 0) {
+            kernel_used = task->limits.mem_used;
+        } else {
+            task_used += task->limits.mem_used;
+        }
+    }
+
+    stats->total = total;
+    stats->kernel_reserved = kernel_used;
+    stats->task_reserved = task_used;
+    stats->free = (kernel_used + task_used >= total) ?
+                  0 : (total - (kernel_used + task_used));
+    return 0;
+}

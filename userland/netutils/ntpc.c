@@ -34,6 +34,8 @@
 #include <time.h>
 #include <sys/time.h>
 
+#include "net_compat.h"
+
 #ifndef htonl
 #define htonl(x) __builtin_bswap32(x)
 #define ntohl(x) __builtin_bswap32(x)
@@ -164,7 +166,11 @@ int query_ntp(int nfd, char *host)
     }
 }
 
+#ifndef APP_NTPC_MODULE
 int main(int argc, char **argv)
+#else
+int icebox_ntpc(int argc, char **argv)
+#endif
 {
     struct addrinfo *res;
     struct sockaddr_in *sai;
@@ -196,4 +202,3 @@ int main(int argc, char **argv)
     // if you're happy and you know it,
     exit(0);
 }
-

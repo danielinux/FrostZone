@@ -50,10 +50,11 @@ struct regstruct{
 static int inputline(char *input, int size)
 {
     int len;
+    int out;
+    int i;
     while (1 < 2) {
         len = 0;
-        int out = 1;
-        int i;
+        out = 1;
         memset(input, 0, size);
         while (len < size) {
             const char del = 0x08;

@@ -20,6 +20,14 @@
 #include "frosted.h"
 #include "string.h"
 
+#if CONFIG_TCPIP
+#define TCPIP_LOCK() tcpip_lock()
+#define TCPIP_UNLOCK() tcpip_unlock()
+#else
+#define TCPIP_LOCK() do {} while (0)
+#define TCPIP_UNLOCK() do {} while (0)
+#endif
+
 struct address_family {
     struct module *mod;
     uint16_t family;
@@ -132,177 +140,257 @@ int sys_write_hdlr(int fd, void *buf, int len)
 
 int sys_socket_hdlr(int family, int type, int proto)
 {
-    struct module *m = af_to_module(family);
-    if(!m || !(m->ops.socket))
-        return -EOPNOTSUPP;
-    return m->ops.socket(family, type, proto);
+    struct module *m;
+    int ret;
+
+    TCPIP_LOCK();
+    m = af_to_module(family);
+    if(!m || !(m->ops.socket)) {
+        ret = -EOPNOTSUPP;
+        goto out;
+    }
+    ret = m->ops.socket(family, type, proto);
+out:
+    TCPIP_UNLOCK();
+    return ret;
 }
 
 int sys_bind_hdlr(int sd, struct sockaddr_env *se)
 {
     struct fnode *fno;
+    int ret = -EINVAL;
 
-    if (!se || task_ptr_valid(se))
-        return -EACCES;
+    TCPIP_LOCK();
+    if (!se || task_ptr_valid(se)) {
+        ret = -EACCES;
+        goto out;
+    }
 
     fno = task_filedesc_get(sd);
 
-    if (fno && fno->owner && fno->owner->ops.bind) {
-        return fno->owner->ops.bind(sd, se->se_addr, se->se_len);
-    }
+    if (fno && fno->owner && fno->owner->ops.bind)
+        ret = fno->owner->ops.bind(sd, se->se_addr, se->se_len);
 
-    return -EINVAL;
+out:
+    TCPIP_UNLOCK();
+    return ret;
 }
 
 int sys_listen_hdlr(int sd, unsigned int backlog)
 {
-    struct fnode *fno = task_filedesc_get(sd);
-    if (fno && fno->owner && fno->owner->ops.listen) {
-        return fno->owner->ops.listen(sd, backlog);
-    }
-    return -EINVAL;
+    struct fnode *fno;
+    int ret = -EINVAL;
+
+    TCPIP_LOCK();
+    fno = task_filedesc_get(sd);
+    if (fno && fno->owner && fno->owner->ops.listen)
+        ret = fno->owner->ops.listen(sd, backlog);
+    TCPIP_UNLOCK();
+    return ret;
 }
 
 int sys_connect_hdlr(int sd, struct sockaddr_env *se)
 {
     struct fnode *fno;
+    int ret = -EINVAL;
 
-    if (!se || task_ptr_valid(se))
-        return -EACCES;
+    TCPIP_LOCK();
+    if (!se || task_ptr_valid(se)) {
+        ret = -EACCES;
+        goto out;
+    }
 
     fno = task_filedesc_get(sd);
 
-    if (fno && fno->owner && fno->owner->ops.connect) {
-        return fno->owner->ops.connect(sd, se->se_addr, se->se_len);
-    }
-    return -EINVAL;
+    if (fno && fno->owner && fno->owner->ops.connect)
+        ret = fno->owner->ops.connect(sd, se->se_addr, se->se_len);
+
+out:
+    TCPIP_UNLOCK();
+    return ret;
 }
 
 int sys_accept_hdlr(int sd, struct sockaddr_env *se)
 {
-    struct fnode *fno = task_filedesc_get(sd);
-    if (task_ptr_valid(se))
-        return -EACCES;
+    struct fnode *fno;
+    int ret = -EINVAL;
+
+    TCPIP_LOCK();
+    fno = task_filedesc_get(sd);
+    if (task_ptr_valid(se)) {
+        ret = -EACCES;
+        goto out;
+    }
     if (fno && fno->owner && fno->owner->ops.accept) {
         if (se)
-            return fno->owner->ops.accept(sd, se->se_addr, &(se->se_len));
+            ret = fno->owner->ops.accept(sd, se->se_addr, &(se->se_len));
         else
-            return fno->owner->ops.accept(sd, NULL, NULL);
+            ret = fno->owner->ops.accept(sd, NULL, NULL);
     }
-    return -EINVAL;
+out:
+    TCPIP_UNLOCK();
+    return ret;
 }
 
 
 int sys_recvfrom_hdlr(int sd, void *buf, int len, int flags, struct sockaddr_env *se)
 {
     struct fnode *fno;
+    int ret = -EINVAL;
 
-    if (!buf || task_ptr_valid(buf))
-        return -EACCES;
+    TCPIP_LOCK();
+    if (!buf || task_ptr_valid(buf)) {
+        ret = -EACCES;
+        goto out;
+    }
 
     fno = task_filedesc_get(sd);
     if (fno && fno->owner && fno->owner->ops.recvfrom) {
         if (se) {
-            if (task_ptr_valid(se))
-                return -EACCES;
-            return fno->owner->ops.recvfrom(sd, buf, len, flags, se->se_addr, &(se->se_len));
-        } else
-            return fno->owner->ops.recvfrom(sd, buf, len, flags, NULL, NULL);
+            if (task_ptr_valid(se)) {
+                ret = -EACCES;
+                goto out;
+            }
+            ret = fno->owner->ops.recvfrom(sd, buf, len, flags, se->se_addr, &(se->se_len));
+            goto out;
+        }
+        ret = fno->owner->ops.recvfrom(sd, buf, len, flags, NULL, NULL);
     }
-    return -EINVAL;
+
+out:
+    TCPIP_UNLOCK();
+    return ret;
 }
 
 int sys_sendto_hdlr(int sd, const void *buf, int len, int flags, struct sockaddr_env *se )
 {
     struct fnode *fno;
+    int ret = -EINVAL;
 
-    if (!buf || task_ptr_valid(buf))
-        return -EACCES;
+    TCPIP_LOCK();
+    if (!buf || task_ptr_valid(buf)) {
+        ret = -EACCES;
+        goto out;
+    }
 
     fno = task_filedesc_get(sd);
     if (fno && fno->owner && fno->owner->ops.sendto) {
         if (se) {
-            if (task_ptr_valid(se))
-                return -EACCES;
-            return fno->owner->ops.sendto(sd, buf, len, flags, se->se_addr, se->se_len);
-        } else
-            return fno->owner->ops.sendto(sd, buf, len, flags, NULL, 0);
+            if (task_ptr_valid(se)) {
+                ret = -EACCES;
+                goto out;
+            }
+            ret = fno->owner->ops.sendto(sd, buf, len, flags, se->se_addr, se->se_len);
+            goto out;
+        }
+        ret = fno->owner->ops.sendto(sd, buf, len, flags, NULL, 0);
     }
-    return -EINVAL;
+
+out:
+    TCPIP_UNLOCK();
+    return ret;
 }
 
 int sys_shutdown_hdlr(int sd, int how)
 {
-    struct fnode *fno = task_filedesc_get(sd);
-    if (fno && fno->owner && fno->owner->ops.shutdown) {
-        return fno->owner->ops.shutdown(sd, how);
-    }
-    return -EINVAL;
+    struct fnode *fno;
+    int ret = -EINVAL;
+
+    TCPIP_LOCK();
+    fno = task_filedesc_get(sd);
+    if (fno && fno->owner && fno->owner->ops.shutdown)
+        ret = fno->owner->ops.shutdown(sd, how);
+    TCPIP_UNLOCK();
+    return ret;
 }
 
 int sys_setsockopt_hdlr(int sd, int level, int optname, void *optval, unsigned int optlen)
 {
     struct fnode *fno;
+    int ret = -EINVAL;
 
-    if (!optval || task_ptr_valid(optval))
-        return -EACCES;
+    TCPIP_LOCK();
+    if (!optval || task_ptr_valid(optval)) {
+        ret = -EACCES;
+        goto out;
+    }
 
     fno = task_filedesc_get(sd);
-    if (fno && fno->owner && fno->owner->ops.setsockopt) {
-        return fno->owner->ops.setsockopt(sd, level, optname, optval, optlen);
-    }
-    return -EINVAL;
+    if (fno && fno->owner && fno->owner->ops.setsockopt)
+        ret = fno->owner->ops.setsockopt(sd, level, optname, optval, optlen);
+
+out:
+    TCPIP_UNLOCK();
+    return ret;
 }
 
 int sys_getsockopt_hdlr(int sd, int level, int optname, void *optval, unsigned int *optlen)
 {
     struct fnode *fno;
+    int ret = -EINVAL;
 
-    if (!optval || task_ptr_valid(optval))
-        return -EACCES;
+    TCPIP_LOCK();
+    if (!optval || task_ptr_valid(optval)) {
+        ret = -EACCES;
+        goto out;
+    }
 
-    if (!optlen || task_ptr_valid(optlen))
-        return -EACCES;
+    if (!optlen || task_ptr_valid(optlen)) {
+        ret = -EACCES;
+        goto out;
+    }
 
     fno = task_filedesc_get(sd);
-    if (fno && fno->owner && fno->owner->ops.getsockopt) {
-        return fno->owner->ops.getsockopt(sd, level, optname, optval, optlen);
-    }
-    return -EINVAL;
+    if (fno && fno->owner && fno->owner->ops.getsockopt)
+        ret = fno->owner->ops.getsockopt(sd, level, optname, optval, optlen);
+
+out:
+    TCPIP_UNLOCK();
+    return ret;
 }
 
 int sys_getsockname_hdlr(int sd, struct sockaddr_env *se)
 {
     struct fnode *fno;
+    int ret = -EINVAL;
 
+    TCPIP_LOCK();
     if (!se)
-        return -EINVAL;
+        goto out;
 
-    if (task_ptr_valid(se))
-        return -EACCES;
-
-    fno = task_filedesc_get(sd);
-    if (fno && fno->owner && fno->owner->ops.getsockname) {
-        return fno->owner->ops.getsockname(sd, se->se_addr, &(se->se_len));
+    if (task_ptr_valid(se)) {
+        ret = -EACCES;
+        goto out;
     }
 
-    return -EINVAL;
+    fno = task_filedesc_get(sd);
+    if (fno && fno->owner && fno->owner->ops.getsockname)
+        ret = fno->owner->ops.getsockname(sd, se->se_addr, &(se->se_len));
+
+out:
+    TCPIP_UNLOCK();
+    return ret;
 }
 
 int sys_getpeername_hdlr(int sd, struct sockaddr_env *se)
 {
     struct fnode *fno;
+    int ret = -EINVAL;
 
+    TCPIP_LOCK();
     if (!se)
-        return -EINVAL;
+        goto out;
 
-    if (task_ptr_valid(se))
-        return -EACCES;
-
-    fno = task_filedesc_get(sd);
-    if (fno && fno->owner && fno->owner->ops.getpeername) {
-        return fno->owner->ops.getpeername(sd, se->se_addr, &(se->se_len));
+    if (task_ptr_valid(se)) {
+        ret = -EACCES;
+        goto out;
     }
 
-    return -EINVAL;
+    fno = task_filedesc_get(sd);
+    if (fno && fno->owner && fno->owner->ops.getpeername)
+        ret = fno->owner->ops.getpeername(sd, se->se_addr, &(se->se_len));
+
+out:
+    TCPIP_UNLOCK();
+    return ret;
 }
