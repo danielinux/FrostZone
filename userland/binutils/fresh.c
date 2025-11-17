@@ -196,12 +196,13 @@ static void history_load(void)
     ssize_t r;
 
     fd = open(history_path, O_RDONLY);
-    if (fd < 0) {
-        if (strcmp(history_path, "/var/fresh_history") == 0) {
+    if (fd < 0 && strcmp(history_path, "/var/fresh_history") == 0) {
+        fd = open(history_path, O_RDONLY | O_CREAT, 0600);
+        if (fd < 0) {
             strncpy(history_path, "/tmp/fresh_history",
                     sizeof(history_path) - 1);
             history_path[sizeof(history_path) - 1] = '\0';
-            fd = open(history_path, O_RDONLY);
+            fd = open(history_path, O_RDONLY | O_CREAT, 0600);
         }
     }
     if (fd < 0)
