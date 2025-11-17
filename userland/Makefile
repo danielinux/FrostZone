@@ -38,8 +38,19 @@ endif
 
 #Applications selection
 DIR-y+=lib binutils hw-utils netutils games tests
-#DIR-$(APP_PYTHON)+=micropython
+DIR-$(APP_PYTHON)+=micropython
 DIR-$(APP_BUSYBOX)+=busybox
+
+MICROPYTHON_DIR:=micropython
+MICROPYTHON_PORT_DIR:=$(MICROPYTHON_DIR)/ports/unix
+MICROPYTHON_VARIANT:=frosted
+MICROPYTHON_BIN:=$(MICROPYTHON_PORT_DIR)/build-$(MICROPYTHON_VARIANT)/micropython
+MICROPYTHON_OUT:=out/python
+MICROPYTHON_TOOLCHAIN_DIR?=/opt/toolchains/arm-frosted-eabi/bin
+MICROPYTHON_CC:=$(CC)
+ifneq ("$(wildcard $(MICROPYTHON_TOOLCHAIN_DIR)/$(notdir $(CC)))","")
+MICROPYTHON_CC:=$(MICROPYTHON_TOOLCHAIN_DIR)/$(notdir $(CC))
+endif
 
 # COMPILER FLAGS -- Target CPU
 CFLAGS+=-mthumb -mlittle-endian -mthumb-interwork -ffunction-sections -D__Frosted__ -Wno-implicit-int -Wno-implicit-function-declaration
@@ -101,6 +112,13 @@ games: FORCE
 	mkdir -p gdb
 	make -C $@ LDFLAGS="$(LDFLAGS)" CFLAGS="$(CFLAGS)" CC=$(CC)
 
+micropython: FORCE
+	mkdir -p out
+	make -C $(MICROPYTHON_DIR)/mpy-cross CC=$(MICROPYTHON_CC)
+	make -C $(MICROPYTHON_PORT_DIR) submodules
+	make -C $(MICROPYTHON_PORT_DIR) VARIANT=$(MICROPYTHON_VARIANT) CC=$(MICROPYTHON_CC)
+	install -m 755 $(MICROPYTHON_BIN) $(MICROPYTHON_OUT)
+
 sh: FORCE
 	mkdir -p out
 	cp -a $@/* out/ || true
@@ -128,6 +146,8 @@ menuconfig:
 
 clean:
 	$(foreach d,$(DIR-y),make -C $(d) clean &>/dev/null || true;) 
+	@make -C micropython/mpy-cross clean
+	@make -C micropython/ports/unix clean
 	@rm -f *.img
 	@rm -f *.o
 	@rm -rf gdb out lnk ice

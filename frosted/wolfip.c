@@ -3038,6 +3038,13 @@ void wolfIP_ipconfig_get(struct wolfIP *s, ip4 *ip, ip4 *mask, ip4 *gw)
     wolfIP_ipconfig_get_ex(s, WOLFIP_PRIMARY_IF_IDX, ip, mask, gw);
 }
 
+void wolfIP_set_dns_server(struct wolfIP *s, ip4 addr)
+{
+    if (!s)
+        return;
+    s->dns_server = addr;
+}
+
 void wolfIP_ipconfig_set_ex(struct wolfIP *s, unsigned int if_idx, ip4 ip, ip4 mask, ip4 gw)
 {
     struct ipconf *conf = wolfIP_ipconf_at(s, if_idx);

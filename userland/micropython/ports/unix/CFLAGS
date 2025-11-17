@@ -1,0 +1,2 @@
+-mthumb -mlittle-endian -mthumb-interwork -ffunction-sections -D__Frosted__ -Wno-implicit-int -Wno-implicit-function-declaration -fPIC -mlong-calls -fno-common -msingle-pic-base -mno-pic-data-is-text-relative -Wstack-usage=4096 -nostartfiles
+

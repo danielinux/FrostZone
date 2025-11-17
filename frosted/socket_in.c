@@ -1045,6 +1045,9 @@ void socket_in_init(void)
         wolfIP_init(IPStack);
     }
 
+    if (IPStack)
+        wolfIP_set_dns_server(IPStack, atoip4("208.67.222.222"));
+
     netdev_reset_next_if();
     strcpy(mod_socket_in.name,"tcp_ip");
     mod_socket_in.ops.poll = sock_poll;

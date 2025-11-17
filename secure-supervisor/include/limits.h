@@ -12,7 +12,7 @@
 #define CAP_KERNEL (CAP_MALLOC | CAP_PERIPH | CAP_MAPMEM)
 #define CAP_TASK   (CAP_MALLOC | CAP_PERIPH)
 
-#define CONFIG_TASK_MAX_MEM (32 * 1024)
+#define CONFIG_TASK_MAX_MEM (128 * 1024)
 
 /* Task limits */
 typedef struct {
