@@ -76,7 +76,11 @@ static inline void ili9341_pin_set(const struct ili9341_gpio *gpio, bool level)
 
 static void ili9341_delay_ms(uint32_t ms)
 {
-    kthread_sleep_ms(ms);
+    uint32_t start = jiffies;
+
+    while ((uint32_t)(jiffies - start) < ms) {
+        __asm volatile("wfi");
+    }
 }
 
 static int ili9341_spi_write(const uint8_t *data, size_t len)

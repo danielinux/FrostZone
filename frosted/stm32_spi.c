@@ -6,6 +6,12 @@
 #define STM32_RCC_BASE RCC_BASE
 #include "stm32x5_board_common.h"
 
+#if defined(TARGET_stm32h563)
+#define STM32_RCC_CFGR2      (*(volatile uint32_t *)(STM32_RCC_BASE + 0x020UL))
+#define RCC_CFGR2_PPRE1_Pos  4U
+#define RCC_CFGR2_PPRE2_Pos  8U
+#endif
+
 #include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -29,8 +35,9 @@ extern uint32_t SystemCoreClock;
 #define SPI_CR1_SPE        (1U << 0)
 #define SPI_CR1_CSTART     (1U << 9)
 #define SPI_CR1_SSI        (1U << 12)
-#define SPI_CR1_TSIZE_SHIFT 16U
-#define SPI_CR1_TSIZE_MASK (0xFFFFU << SPI_CR1_TSIZE_SHIFT)
+#define SPI_CR1_IOLOCK     (1U << 16)
+#define SPI_CR2_TSIZE_SHIFT 0U
+#define SPI_CR2_TSIZE_MASK (0xFFFFU << SPI_CR2_TSIZE_SHIFT)
 
 #define SPI_CFG1_DSIZE_SHIFT 0U
 #define SPI_CFG1_DSIZE_MASK  (0x1FU << SPI_CFG1_DSIZE_SHIFT)
@@ -51,6 +58,7 @@ extern uint32_t SystemCoreClock;
 #define SPI_SR_TXP         (1U << 1)
 #define SPI_SR_EOT         (1U << 3)
 #define SPI_SR_TXTF        (1U << 4)
+#define SPI_SR_MODF        (1U << 9)
 #define SPI_SR_TXC         (1U << 12)
 #define SPI_SR_RXWNE       (1U << 15)
 
@@ -74,11 +82,27 @@ static struct dev_spi *DEV_SPI[MAX_SPIS];
 static int spi_dev_write(struct fnode *fno, const void *buf, unsigned int len);
 static struct module mod_devspi;
 
+static void stm32_spi_disable(uint32_t base)
+{
+    uint32_t cr1 = SPI_CR1(base);
+
+    if (cr1 & SPI_CR1_SPE) {
+        SPI_CR1(base) = cr1 & ~SPI_CR1_SPE;
+        while (SPI_CR1(base) & SPI_CR1_SPE)
+            ;
+    }
+}
+
 static void stm32_spi_enable_clock(uint32_t mask)
 {
+#if defined(TARGET_stm32h563)
+    /* Supervisor already owns the reset path; just make sure the clock stays enabled. */
+    RCC_APB2ENR |= mask;
+#else
     RCC_APB2RSTR |= mask;
     RCC_APB2RSTR &= ~mask;
     RCC_APB2ENR |= mask;
+#endif
 }
 
 static int spi_dev_write(struct fnode *fno, const void *buf, unsigned int len)
@@ -96,14 +120,39 @@ static struct module mod_devspi = {
     .ops.write = spi_dev_write,
 };
 
-static uint32_t stm32_spi_compute_mbr(uint32_t baudrate)
+#if defined(TARGET_stm32h563)
+static uint32_t stm32_spi_bus_clock(uint32_t base)
+{
+    static const uint8_t apb_presc_table[8] = { 1U, 1U, 1U, 1U, 2U, 4U, 8U, 16U };
+    uint32_t cfgr2 = STM32_RCC_CFGR2;
+    uint32_t presc_idx;
+
+    if ((base >= 0x40010000UL) && (base < 0x40020000UL)) {
+        presc_idx = (cfgr2 >> RCC_CFGR2_PPRE2_Pos) & 0x7U;
+    } else {
+        presc_idx = (cfgr2 >> RCC_CFGR2_PPRE1_Pos) & 0x7U;
+    }
+
+    return SystemCoreClock / apb_presc_table[presc_idx];
+}
+#else
+static uint32_t stm32_spi_bus_clock(uint32_t base)
+{
+    (void)base;
+    return SystemCoreClock;
+}
+#endif
+
+static uint32_t stm32_spi_compute_mbr(uint32_t base, uint32_t baudrate)
 {
     static const uint32_t divisors[] = { 2U, 4U, 8U, 16U, 32U, 64U, 128U, 256U };
     uint32_t i;
-    uint32_t spi_clk = SystemCoreClock;
+    uint32_t spi_clk = stm32_spi_bus_clock(base);
 
     if (baudrate == 0U)
         baudrate = 8000000U;
+    if (spi_clk == 0U)
+        return ARRAY_SIZE(divisors) - 1U;
 
     for (i = 0; i < ARRAY_SIZE(divisors); i++) {
         if ((spi_clk / divisors[i]) <= baudrate)
@@ -125,14 +174,20 @@ static void stm32_spi_config_pins(const struct spi_config *conf)
         stm32x5_gpio_config_alt(&conf->pio_nss);
 }
 
+static void stm32_spi_clear_flags(uint32_t base)
+{
+    (void)SPI_SR(base);
+    SPI_IFCR(base) = SPI_IFCR_EOTC | SPI_IFCR_TXTFC | SPI_IFCR_OVRC | SPI_IFCR_MODFC;
+}
+
 static void stm32_spi_program_hw(struct dev_spi *spi)
 {
     uint32_t cfg1 = 0;
-    uint32_t cfg2 = 0;
-    uint32_t mbr = stm32_spi_compute_mbr(spi->config.baudrate);
+    uint32_t cfg2;
+    uint32_t mbr = stm32_spi_compute_mbr(spi->base, spi->config.baudrate);
     uint32_t base = spi->base;
 
-    SPI_CR1(base) = 0;
+    stm32_spi_disable(base);
     SPI_CR2(base) = 0;
 
     cfg1 |= ((uint32_t)7U << SPI_CFG1_DSIZE_SHIFT); /* 8-bit frames */
@@ -140,7 +195,9 @@ static void stm32_spi_program_hw(struct dev_spi *spi)
     cfg1 |= (mbr << SPI_CFG1_MBR_SHIFT);
     SPI_CFG1(base) = cfg1;
 
-    cfg2 |= SPI_CFG2_MASTER | SPI_CFG2_SSM | SPI_CFG2_AFCNTR;
+    cfg2 = SPI_CFG2(base);
+    cfg2 &= ~(SPI_CFG2_LSBFRST | SPI_CFG2_CPHA | SPI_CFG2_CPOL | SPI_CFG2_SSM | SPI_CFG2_SSIOP);
+    cfg2 |= SPI_CFG2_SSM | SPI_CFG2_MASTER;
     if (spi->config.phase)
         cfg2 |= SPI_CFG2_CPHA;
     if (spi->config.polarity)
@@ -149,15 +206,28 @@ static void stm32_spi_program_hw(struct dev_spi *spi)
         cfg2 |= SPI_CFG2_LSBFRST;
 
     SPI_CFG2(base) = cfg2;
+    /* AFCNTR can only be asserted once the block is already in master mode. */
+    SPI_CFG2(base) |= SPI_CFG2_AFCNTR;
     SPI_CR1(base) = SPI_CR1_SSI;
+    stm32_spi_clear_flags(base);
 }
 
 static void stm32_spi_begin_transfer(uint32_t base, uint32_t count)
 {
-    uint32_t cr1 = SPI_CR1(base);
-    cr1 &= ~SPI_CR1_TSIZE_MASK;
-    cr1 |= ((count & 0xFFFFU) << SPI_CR1_TSIZE_SHIFT);
+    uint32_t cr2;
+    uint32_t cr1;
+
+    stm32_spi_disable(base);
+
+    cr2 = SPI_CR2(base);
+    cr2 &= ~SPI_CR2_TSIZE_MASK;
+    cr2 |= ((count & 0xFFFFU) << SPI_CR2_TSIZE_SHIFT);
+    SPI_CR2(base) = cr2;
+
+    cr1 = SPI_CR1(base);
     cr1 |= SPI_CR1_SSI | SPI_CR1_SPE;
+    if (SPI_SR(base) & SPI_SR_MODF)
+        stm32_spi_clear_flags(base);
     SPI_CR1(base) = cr1;
     SPI_CR1(base) |= SPI_CR1_CSTART;
 }
@@ -166,9 +236,8 @@ static void stm32_spi_wait_eot(uint32_t base)
 {
     while (!(SPI_SR(base) & SPI_SR_EOT))
         ;
-    SPI_IFCR(base) = SPI_IFCR_EOTC | SPI_IFCR_TXTFC | SPI_IFCR_OVRC | SPI_IFCR_MODFC;
-    while (!(SPI_SR(base) & SPI_SR_TXC))
-        ;
+    stm32_spi_disable(base);
+    stm32_spi_clear_flags(base);
     (void)SPI_SR(base);
 }
 

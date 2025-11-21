@@ -1,5 +1,7 @@
 #ifndef STM32H563_H
 
+#include "stm32_common.h"
+
 #if defined(TARGET_STM32H563)
 #define GTZC1_BASE             (0x50032400U)
 #define STM32H563_RCC_BASE     (0x54020C00U)
@@ -30,6 +32,15 @@
 
 #define RCC_APB1LENR_USART3EN  (1U << 18)
 #define RCC_APB2ENR_SPI1EN     (1U << 12)
+
+#define SEC_SPI1_BASE          0x50013000U
+#define SEC_SPI1_CR1           (*(volatile uint32_t *)(SEC_SPI1_BASE + 0x000U))
+#define SEC_SPI1_CFG2          (*(volatile uint32_t *)(SEC_SPI1_BASE + 0x00CU))
+#define SEC_SPI_CR1_SPE        (1U << 0)
+#define SEC_SPI_CR1_IOLOCK     (1U << 16)
+#define SEC_SPI_CFG2_MASTER    (1U << 22)
+#define SEC_SPI_CFG2_SSM       (1U << 26)
+
 #define GTZC1_TZSC             (*(volatile uint32_t *)(GTZC1_BASE + 0x00U))
 #define GTZC1_TZSC_SECCFGR1    *(volatile uint32_t *)(GTZC1_BASE + 0x010U)
 #define GTZC1_TZSC_SECCFGR2    *(volatile uint32_t *)(GTZC1_BASE + 0x014U)
@@ -329,6 +340,16 @@ static inline void stm32h5_gtzc_setup(void)
     /* Pre-enable GPIO and USART3 clocks for the non-secure domain. */
     RCC_AHB2ENR |= RCC_AHB2ENR_GPIOAEN | RCC_AHB2ENR_GPIOBEN | RCC_AHB2ENR_GPIOCEN | RCC_AHB2ENR_GPIODEN | RCC_AHB2ENR_GPIOFEN | RCC_AHB2ENR_GPIOGEN;
     RCC_APB2ENR |= RCC_APB2ENR_SPI1EN;
+    /* Force SPI1 into master mode from the secure side so non-secure writes can preserve the bit. */
+    SEC_SPI1_CR1 &= ~(SEC_SPI_CR1_SPE | SEC_SPI_CR1_IOLOCK);
+    while (SEC_SPI1_CR1 & SEC_SPI_CR1_SPE)
+        ;
+    {
+        uint32_t cfg2 = SEC_SPI1_CFG2;
+        cfg2 |= SEC_SPI_CFG2_MASTER | SEC_SPI_CFG2_SSM;
+        SEC_SPI1_CFG2 = cfg2;
+        stm32_data_memory_barrier();
+    }
     RCC_APB1LRSTR |= RCC_APB1LENR_USART3EN;
     RCC_APB1LRSTR &= ~RCC_APB1LENR_USART3EN;
     RCC_APB1LENR |= RCC_APB1LENR_USART3EN;

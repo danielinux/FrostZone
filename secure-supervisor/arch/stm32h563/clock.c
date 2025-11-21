@@ -24,18 +24,17 @@ void stm32h563_clock_init(void)
     uint32_t reg32;
     uint32_t plln, pllm, pllq, pllp, pllr, hpre, apb1pre, apb2pre, apb3pre, flash_waitstates;
 
-
 #if PLL_SRC_HSE
-    pllm = 4;
-    plln = 250;
-    pllp = 2;
-    pllq = 2;
+    pllm = 1;
+    plln = 62;
+    pllp = 2; /* 250Mhz */
+    pllq = 5; /* 100Mhz */
     pllr = 2;
 #else
-    pllm = 1;
-    plln = 129;
+    pllm = 4;
+    plln = 31;
     pllp = 2;
-    pllq = 2;
+    pllq = 5;
     pllr = 2;
 #endif
     flash_waitstates = 5;
@@ -93,15 +92,15 @@ void stm32h563_clock_init(void)
 #endif
     stm32_data_memory_barrier();
 
-    RCC_PLL1DIVR = ((plln - 1) << RCC_PLLDIVR_DIVN_SHIFT) | ((pllp - 1) << RCC_PLLDIVR_DIVP_SHIFT) |
-        ((pllq - 1) << RCC_PLLDIVR_DIVQ_SHIFT) | ((pllr - 1) << RCC_PLLDIVR_DIVR_SHIFT);
+    RCC_PLL1DIVR = ((plln - 1) << RCC_PLLDIVR_DIVN_SHIFT) |
+                   ((pllp - 1) << RCC_PLLDIVR_DIVP_SHIFT) |
+                   ((pllq - 1) << RCC_PLLDIVR_DIVQ_SHIFT) |
+                   ((pllr - 1) << RCC_PLLDIVR_DIVR_SHIFT);
     stm32_data_memory_barrier();
-
 
     /* Disable Fractional PLL */
     RCC_PLL1CFGR &= ~RCC_PLLCFGR_PLLFRACEN;
     stm32_data_memory_barrier();
-
 
     /* Configure Fractional PLL factor */
     RCC_PLL1FRACR = 0x00000000;
@@ -118,8 +117,8 @@ void stm32h563_clock_init(void)
     RCC_PLL1CFGR &= ~RCC_PLLCFGR_PLLVCOSEL;
     stm32_data_memory_barrier();
 
-    /* Enable PLL1 system clock out (DIV: P) */
-    RCC_PLL1CFGR |= RCC_PLLCFGR_PLL1PEN;
+    /* Enable PLL1 system clock out (DIV: P and Q) */
+    RCC_PLL1CFGR |= RCC_PLLCFGR_PLL1PEN | RCC_PLLCFGR_PLL1QEN;
 
     /* Enable PLL1 */
     RCC_CR |= RCC_CR_PLL1ON;
@@ -131,11 +130,13 @@ void stm32h563_clock_init(void)
     apb3pre = RCC_APB_PRESCALER_DIV_NONE;
     reg32 = RCC_CFGR2;
     reg32 &= ~( (0x0F << RCC_CFGR2_HPRE_SHIFT) |
-            (0x07 << RCC_CFGR2_PPRE1_SHIFT) |
-            (0x07 << RCC_CFGR2_PPRE2_SHIFT) |
-            (0x07 << RCC_CFGR2_PPRE3_SHIFT));
-    reg32 |= ((hpre) << RCC_CFGR2_HPRE_SHIFT) | ((apb1pre) << RCC_CFGR2_PPRE1_SHIFT) |
-        ((apb2pre) << RCC_CFGR2_PPRE2_SHIFT) | ((apb3pre) << RCC_CFGR2_PPRE3_SHIFT);
+                (0x07 << RCC_CFGR2_PPRE1_SHIFT) |
+                (0x07 << RCC_CFGR2_PPRE2_SHIFT) |
+                (0x07 << RCC_CFGR2_PPRE3_SHIFT));
+    reg32 |= (   (hpre) << RCC_CFGR2_HPRE_SHIFT) |
+             ((apb1pre) << RCC_CFGR2_PPRE1_SHIFT) |
+             ((apb2pre) << RCC_CFGR2_PPRE2_SHIFT) |
+             ((apb3pre) << RCC_CFGR2_PPRE3_SHIFT);
     RCC_CFGR2 = reg32;
     stm32_data_memory_barrier();
 
@@ -156,4 +157,3 @@ void stm32h563_clock_init(void)
     RCC_PLL1CFGR |= RCC_PLLCFGR_PLL1PEN;
 
 }
-
