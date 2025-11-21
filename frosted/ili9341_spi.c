@@ -317,10 +317,10 @@ int tft_init(void)
     ili9341.spi.bus = ILI9341_SPI_BUS;
     ili9341.spi.priv = &ili9341;
 
-    ili9341.cs = (struct ili9341_gpio){ GPIOD_BASE, 14 };
-    ili9341.rst = (struct ili9341_gpio){ GPIOD_BASE, 15 };
-    ili9341.dc = (struct ili9341_gpio){ GPIOF_BASE, 3 };
-    ili9341.bl = (struct ili9341_gpio){ GPIOB_BASE, 3 };
+    ili9341.cs = (struct ili9341_gpio){ GPIOA_BASE, 6 };
+    ili9341.rst = (struct ili9341_gpio){ GPIOC_BASE, 0 };
+    ili9341.dc = (struct ili9341_gpio){ GPIOF_BASE, 6 };
+    ili9341.bl = (struct ili9341_gpio){ GPIOC_BASE, 11 };
 
     ili9341_gpio_init_output(&ili9341.cs);
     ili9341_gpio_init_output(&ili9341.rst);

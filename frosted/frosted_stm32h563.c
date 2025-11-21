@@ -134,7 +134,7 @@ int machine_init(void)
     nvic_disable_irq(GPDMA1_Channel1_IRQn);
     nvic_clear_pending(GPDMA1_Channel1_IRQn);
 #endif
-#if CONFIG_SPI1
+#if CONFIG_SPI3
     spi_bus_init();
 #endif
     return 0;

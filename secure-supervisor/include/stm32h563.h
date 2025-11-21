@@ -30,12 +30,13 @@
 #define RCC_CR_HSI48RDY             (1 << 13)
 #define RCC_CR_HSI48ON              (1 << 12)
 
+#define RCC_APB1LRSTR_SPI3RST  (1U << 15)
 #define RCC_APB1LENR_USART3EN  (1U << 18)
-#define RCC_APB2ENR_SPI1EN     (1U << 12)
+#define RCC_APB1LENR_SPI3EN    (1U << 15)
 
-#define SEC_SPI1_BASE          0x50013000U
-#define SEC_SPI1_CR1           (*(volatile uint32_t *)(SEC_SPI1_BASE + 0x000U))
-#define SEC_SPI1_CFG2          (*(volatile uint32_t *)(SEC_SPI1_BASE + 0x00CU))
+#define SEC_SPI3_BASE          0x50003C00U
+#define SEC_SPI3_CR1           (*(volatile uint32_t *)(SEC_SPI3_BASE + 0x000U))
+#define SEC_SPI3_CFG2          (*(volatile uint32_t *)(SEC_SPI3_BASE + 0x00CU))
 #define SEC_SPI_CR1_SPE        (1U << 0)
 #define SEC_SPI_CR1_IOLOCK     (1U << 16)
 #define SEC_SPI_CFG2_MASTER    (1U << 22)
@@ -339,15 +340,17 @@ static inline void stm32h5_gtzc_setup(void)
 
     /* Pre-enable GPIO and USART3 clocks for the non-secure domain. */
     RCC_AHB2ENR |= RCC_AHB2ENR_GPIOAEN | RCC_AHB2ENR_GPIOBEN | RCC_AHB2ENR_GPIOCEN | RCC_AHB2ENR_GPIODEN | RCC_AHB2ENR_GPIOFEN | RCC_AHB2ENR_GPIOGEN;
-    RCC_APB2ENR |= RCC_APB2ENR_SPI1EN;
-    /* Force SPI1 into master mode from the secure side so non-secure writes can preserve the bit. */
-    SEC_SPI1_CR1 &= ~(SEC_SPI_CR1_SPE | SEC_SPI_CR1_IOLOCK);
-    while (SEC_SPI1_CR1 & SEC_SPI_CR1_SPE)
+    RCC_APB1LRSTR |= RCC_APB1LRSTR_SPI3RST;
+    RCC_APB1LRSTR &= ~RCC_APB1LRSTR_SPI3RST;
+    RCC_APB1LENR |= RCC_APB1LENR_SPI3EN;
+    /* Force SPI3 into master mode from the secure side so non-secure writes can preserve the bit. */
+    SEC_SPI3_CR1 &= ~(SEC_SPI_CR1_SPE | SEC_SPI_CR1_IOLOCK);
+    while (SEC_SPI3_CR1 & SEC_SPI_CR1_SPE)
         ;
     {
-        uint32_t cfg2 = SEC_SPI1_CFG2;
+        uint32_t cfg2 = SEC_SPI3_CFG2;
         cfg2 |= SEC_SPI_CFG2_MASTER | SEC_SPI_CFG2_SSM;
-        SEC_SPI1_CFG2 = cfg2;
+        SEC_SPI3_CFG2 = cfg2;
         stm32_data_memory_barrier();
     }
     RCC_APB1LRSTR |= RCC_APB1LENR_USART3EN;
@@ -358,7 +361,7 @@ static inline void stm32h5_gtzc_setup(void)
 
     FLASH_PRIVCFGR &= ~(FLASH_PRIVCFGR_NSPRIV); /* Allow NS access to flash */
     GTZC1_TZSC_SECCFGR1 &= ~(1U << 14); /* Enable non-secure access to USART3 */
-    GTZC1_TZSC_SECCFGR2 &= ~(1U << 9);  /* Enable non-secure access to SPI1 */
+    GTZC1_TZSC_SECCFGR1 &= ~(1U << 12); /* Enable non-secure access to SPI3 */
     GTZC1_TZSC_SECCFGR3 &= ~(1U << 11); /* Enable non-secure access to MAC */
 
     /* Mark all peripherals as privileged-only. The frosted kernel runs privileged. */
@@ -382,7 +385,7 @@ static inline void stm32h5_configure_gpio_security(void)
     /* LED pins: PB0 (green), PG4 (red), PF4 (orange) */
     gpio_mark_non_secure(GPIOB_BASE, (1U << 0));
     gpio_mark_non_secure(GPIOG_BASE, (1U << 4));
-    gpio_mark_non_secure(GPIOF_BASE, (1U << 4));
+    gpio_mark_non_secure(GPIOF_BASE, (1U << 4));  /* PF4 LED */
 
     /* User button on GPIOC: PC13 */
     gpio_mark_non_secure(GPIOC_BASE, (1U << 13));
@@ -395,11 +398,10 @@ static inline void stm32h5_configure_gpio_security(void)
     gpio_mark_non_secure(GPIOG_BASE, (1U << 7));
     gpio_mark_non_secure(GPIOA_BASE, (1U << 9) | (1U << 4));
 
-    /* SPI1 / LCD interface */
-    gpio_mark_non_secure(GPIOA_BASE, (1U << 5));           /* SCK */
-    gpio_mark_non_secure(GPIOB_BASE, (1U << 5) | (1U << 3)); /* MOSI + backlight */
-    gpio_mark_non_secure(GPIOD_BASE, (1U << 14) | (1U << 15)); /* CS + RST */
-    gpio_mark_non_secure(GPIOF_BASE, (1U << 3));           /* D/C */
+    /* SPI3 / LCD interface */
+    gpio_mark_non_secure(GPIOA_BASE, (1U << 6));           /* CS */
+    gpio_mark_non_secure(GPIOF_BASE, (1U << 6));           /* D/C */
+    gpio_mark_non_secure(GPIOC_BASE, (1U << 0) | (1U << 10) | (1U << 11) | (1U << 12)); /* RST + SCK + BL + MOSI */
 
     /* USART3 on PD8, PD9 */
     gpio_mark_non_secure(GPIOD_BASE, (1U << 4));

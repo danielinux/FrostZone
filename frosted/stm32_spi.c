@@ -93,16 +93,9 @@ static void stm32_spi_disable(uint32_t base)
     }
 }
 
-static void stm32_spi_enable_clock(uint32_t mask)
+static void stm32_spi_enable_clock(const struct spi_config *conf)
 {
-#if defined(TARGET_stm32h563)
-    /* Supervisor already owns the reset path; just make sure the clock stays enabled. */
-    RCC_APB2ENR |= mask;
-#else
-    RCC_APB2RSTR |= mask;
-    RCC_APB2RSTR &= ~mask;
-    RCC_APB2ENR |= mask;
-#endif
+    (void)conf;
 }
 
 static int spi_dev_write(struct fnode *fno, const void *buf, unsigned int len)
@@ -267,7 +260,7 @@ int devspi_create(const struct spi_config *conf)
     spi->file_slave.priv = spi;
     memcpy(&spi->config, conf, sizeof(*conf));
 
-    stm32_spi_enable_clock(conf->rcc);
+    stm32_spi_enable_clock(conf);
     stm32_spi_config_pins(conf);
     stm32_spi_program_hw(spi);
 
@@ -332,11 +325,11 @@ int spi_bus_init(void)
 {
 #if defined(TARGET_stm32h563)
     static bool initialized;
-    static const struct spi_config spi1_cfg = {
+static const struct spi_config spi3_cfg = {
         .idx = 0,
-        .base = 0x40013000UL,
-        .irq = 55,
-        .rcc = RCC_APB2ENR_SPI1EN,
+        .base = 0x40003C00UL,
+        .irq = 57,
+        .rcc = RCC_APB1LENR_SPI3EN,
         .baudrate = 24000000,
         .polarity = 0,
         .phase = 0,
@@ -346,29 +339,29 @@ int spi_bus_init(void)
         .enable_software_slave_management = 1,
         .send_msb_first = 1,
         .pio_sck = {
-            .base = GPIOA_BASE,
-            .pin = 5,
+            .base = GPIOC_BASE,
+            .pin = 10,
             .mode = GPIO_MODE_AF,
             .pullupdown = IOCTL_GPIO_PUPD_NONE,
             .speed = GPIO_SPEED_HIGH,
             .optype = GPIO_OTYPE_PP,
-            .af = 5,
+            .af = 6,
             .trigger = GPIO_TRIGGER_NONE,
-            .name = "spi1_sck",
+            .name = "spi3_sck",
         },
         .pio_miso = {
             .base = 0,
         },
         .pio_mosi = {
-            .base = GPIOB_BASE,
-            .pin = 5,
+            .base = GPIOC_BASE,
+            .pin = 12,
             .mode = GPIO_MODE_AF,
             .pullupdown = IOCTL_GPIO_PUPD_NONE,
             .speed = GPIO_SPEED_HIGH,
             .optype = GPIO_OTYPE_PP,
-            .af = 5,
+            .af = 6,
             .trigger = GPIO_TRIGGER_NONE,
-            .name = "spi1_mosi",
+            .name = "spi3_mosi",
         },
         .pio_nss = {
             .base = 0,
@@ -380,7 +373,7 @@ int spi_bus_init(void)
     if (initialized)
         return 0;
 
-    ret = devspi_create(&spi1_cfg);
+    ret = devspi_create(&spi3_cfg);
     if (ret == -EEXIST)
         ret = 0;
     if (ret == 0)

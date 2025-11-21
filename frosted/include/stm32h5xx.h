@@ -27,8 +27,11 @@
 #define RCC_CR_HSI48ON      (1UL << 12)
 #define RCC_CR_HSI48RDY     (1UL << 13)
 
+#define RCC_APB1LRSTR       (*(volatile uint32_t *)(RCC_BASE + 0x074UL))
+#define RCC_APB1LRSTR_SPI3RST    (1UL << 15)
 #define RCC_APB1LENR        (*(volatile uint32_t *)(RCC_BASE + 0x09CUL))
 #define RCC_APB1LENR_CRSEN  (1UL << 24)
+#define RCC_APB1LENR_SPI3EN (1UL << 15)
 
 #define RCC_APB1HRSTR       (*(volatile uint32_t *)(RCC_BASE + 0x078UL))
 #define RCC_APB1HRSTR_UCPDRST   (1UL << 23)
@@ -37,11 +40,9 @@
 
 #define RCC_APB2RSTR        (*(volatile uint32_t *)(RCC_BASE + 0x07CUL))
 #define RCC_APB2RSTR_USBFSRST   (1UL << 24)
-#define RCC_APB2RSTR_SPI1RST    (1UL << 12)
 
 #define RCC_APB2ENR         (*(volatile uint32_t *)(RCC_BASE + 0x0A4UL))
 #define RCC_APB2ENR_USBFSEN     (1UL << 24)
-#define RCC_APB2ENR_SPI1EN      (1UL << 12)
 
 #define RCC_CCIPR4          (*(volatile uint32_t *)(RCC_BASE + 0x0E4UL))
 #define RCC_CCIPR4_USBFSSEL_Pos 4

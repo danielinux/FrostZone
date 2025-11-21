@@ -121,8 +121,8 @@ config ILI9341
     depends on DEVFRAMEBUFFER
     default n
 
-config SPI1
-    bool "Enable SPI1 peripheral support"
+config SPI3
+    bool "Enable SPI3 peripheral support"
     default n
 
 endmenu
