@@ -67,6 +67,8 @@ extern uint32_t SystemCoreClock;
 #define SPI_IFCR_OVRC      (1U << 6)
 #define SPI_IFCR_MODFC     (1U << 9)
 
+#define SPI3_NS_BASE       0x40003C00UL
+
 #define MAX_SPIS 2
 
 struct dev_spi {
@@ -155,6 +157,21 @@ static uint32_t stm32_spi_compute_mbr(uint32_t base, uint32_t baudrate)
     return ARRAY_SIZE(divisors) - 1U;
 }
 
+/* Debug hooks: capture the last SPI3 transfer settings for GDB inspection. */
+struct spi_debug_state {
+    uint32_t begin_count;
+    uint32_t last_tsize;
+    uint32_t cr1;
+    uint32_t cr2;
+    uint32_t cfg1;
+    uint32_t cfg2;
+    uint32_t sr;
+    uint32_t last_base;
+    uint32_t last_count;
+};
+
+volatile struct spi_debug_state spi3_dbg;
+
 static void stm32_spi_config_pins(const struct spi_config *conf)
 {
     if (conf->pio_sck.base)
@@ -216,6 +233,17 @@ static void stm32_spi_begin_transfer(uint32_t base, uint32_t count)
     cr2 &= ~SPI_CR2_TSIZE_MASK;
     cr2 |= ((count & 0xFFFFU) << SPI_CR2_TSIZE_SHIFT);
     SPI_CR2(base) = cr2;
+
+    /* Always capture debug snapshots so GDB can see what was attempted. */
+    spi3_dbg.begin_count++;
+    spi3_dbg.last_base = base;
+    spi3_dbg.last_count = count;
+    spi3_dbg.last_tsize = count & 0xFFFFU;
+    spi3_dbg.cr1 = SPI_CR1(base);
+    spi3_dbg.cr2 = SPI_CR2(base);
+    spi3_dbg.cfg1 = SPI_CFG1(base);
+    spi3_dbg.cfg2 = SPI_CFG2(base);
+    spi3_dbg.sr = SPI_SR(base);
 
     cr1 = SPI_CR1(base);
     cr1 |= SPI_CR1_SSI | SPI_CR1_SPE;
@@ -325,14 +353,14 @@ int spi_bus_init(void)
 {
 #if defined(TARGET_stm32h563)
     static bool initialized;
-static const struct spi_config spi3_cfg = {
+    static const struct spi_config spi3_cfg = {
         .idx = 0,
         .base = 0x40003C00UL,
         .irq = 57,
         .rcc = RCC_APB1LENR_SPI3EN,
-        .baudrate = 24000000,
-        .polarity = 0,
-        .phase = 0,
+        .baudrate = 10000000,
+        .polarity = 1,
+        .phase = 1,
         .rx_only = 0,
         .bidir_mode = 0,
         .dff_16 = 0,
@@ -343,7 +371,7 @@ static const struct spi_config spi3_cfg = {
             .pin = 10,
             .mode = GPIO_MODE_AF,
             .pullupdown = IOCTL_GPIO_PUPD_NONE,
-            .speed = GPIO_SPEED_HIGH,
+            .speed = GPIO_SPEED_VERY,
             .optype = GPIO_OTYPE_PP,
             .af = 6,
             .trigger = GPIO_TRIGGER_NONE,
@@ -357,7 +385,7 @@ static const struct spi_config spi3_cfg = {
             .pin = 12,
             .mode = GPIO_MODE_AF,
             .pullupdown = IOCTL_GPIO_PUPD_NONE,
-            .speed = GPIO_SPEED_HIGH,
+            .speed = GPIO_SPEED_VERY,
             .optype = GPIO_OTYPE_PP,
             .af = 6,
             .trigger = GPIO_TRIGGER_NONE,

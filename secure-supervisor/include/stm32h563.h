@@ -26,6 +26,12 @@
 #define RCC_AHB2ENR_SRAM2EN   (1U << 30)
 #define RCC_AHB2ENR_SRAM3EN   (1U << 31)
 
+#define GPIOF_BASE_SEC        0x52021400U
+#define GPIO_MODER(base)      (*(volatile uint32_t *)((base) + 0x00U))
+#define GPIO_OTYPER(base)     (*(volatile uint32_t *)((base) + 0x04U))
+#define GPIO_OSPEEDR(base)    (*(volatile uint32_t *)((base) + 0x08U))
+#define GPIO_PUPDR(base)      (*(volatile uint32_t *)((base) + 0x0CU))
+#define GPIO_BSRR(base)       (*(volatile uint32_t *)((base) + 0x18U))
 
 #define RCC_CR_HSI48RDY             (1 << 13)
 #define RCC_CR_HSI48ON              (1 << 12)
@@ -36,11 +42,25 @@
 
 #define SEC_SPI3_BASE          0x50003C00U
 #define SEC_SPI3_CR1           (*(volatile uint32_t *)(SEC_SPI3_BASE + 0x000U))
+#define SEC_SPI3_CR2           (*(volatile uint32_t *)(SEC_SPI3_BASE + 0x004U))
+#define SEC_SPI3_CFG1          (*(volatile uint32_t *)(SEC_SPI3_BASE + 0x008U))
 #define SEC_SPI3_CFG2          (*(volatile uint32_t *)(SEC_SPI3_BASE + 0x00CU))
 #define SEC_SPI_CR1_SPE        (1U << 0)
 #define SEC_SPI_CR1_IOLOCK     (1U << 16)
+#define SEC_SPI_CR1_SSI        (1U << 12)
+#define SEC_SPI_CFG1_DSIZE_SHIFT 0U
+#define SEC_SPI_CFG1_DSIZE_MASK  (0x1FU << SEC_SPI_CFG1_DSIZE_SHIFT)
+#define SEC_SPI_CFG1_FTHLV_SHIFT 5U
+#define SEC_SPI_CFG1_FTHLV_MASK  (0xFU << SEC_SPI_CFG1_FTHLV_SHIFT)
+#define SEC_SPI_CFG1_MBR_SHIFT   28U
+#define SEC_SPI_CFG1_MBR_MASK    (0x7U << SEC_SPI_CFG1_MBR_SHIFT)
 #define SEC_SPI_CFG2_MASTER    (1U << 22)
+#define SEC_SPI_CFG2_LSBFRST   (1U << 23)
+#define SEC_SPI_CFG2_CPHA      (1U << 24)
+#define SEC_SPI_CFG2_CPOL      (1U << 25)
 #define SEC_SPI_CFG2_SSM       (1U << 26)
+#define SEC_SPI_CFG2_SSIOP     (1U << 28)
+#define SEC_SPI_CFG2_AFCNTR    (1U << 31)
 
 #define GTZC1_TZSC             (*(volatile uint32_t *)(GTZC1_BASE + 0x00U))
 #define GTZC1_TZSC_SECCFGR1    *(volatile uint32_t *)(GTZC1_BASE + 0x010U)
@@ -338,21 +358,26 @@ static inline void stm32h5_gtzc_setup(void)
     RCC_SECCFGR = 0x00000000U;
     //RCC_PRIVCFGR = 0xFFFFFFFFU; /* Require privileged access to RCC control paths. */
 
-    /* Pre-enable GPIO and USART3 clocks for the non-secure domain. */
+    /* Pre-enable GPIO clocks needed by the display and console before we declassify pins. */
     RCC_AHB2ENR |= RCC_AHB2ENR_GPIOAEN | RCC_AHB2ENR_GPIOBEN | RCC_AHB2ENR_GPIOCEN | RCC_AHB2ENR_GPIODEN | RCC_AHB2ENR_GPIOFEN | RCC_AHB2ENR_GPIOGEN;
     RCC_APB1LRSTR |= RCC_APB1LRSTR_SPI3RST;
     RCC_APB1LRSTR &= ~RCC_APB1LRSTR_SPI3RST;
     RCC_APB1LENR |= RCC_APB1LENR_SPI3EN;
-    /* Force SPI3 into master mode from the secure side so non-secure writes can preserve the bit. */
+    /* Pre-configure SPI3 from secure world so NS can just stream commands. */
     SEC_SPI3_CR1 &= ~(SEC_SPI_CR1_SPE | SEC_SPI_CR1_IOLOCK);
     while (SEC_SPI3_CR1 & SEC_SPI_CR1_SPE)
         ;
-    {
-        uint32_t cfg2 = SEC_SPI3_CFG2;
-        cfg2 |= SEC_SPI_CFG2_MASTER | SEC_SPI_CFG2_SSM;
-        SEC_SPI3_CFG2 = cfg2;
-        stm32_data_memory_barrier();
-    }
+    SEC_SPI3_CR2 = 0;
+    /* 8-bit frames, fifo threshold 1 byte, MBR divider for ~10 MHz when core is 250 MHz. */
+    SEC_SPI3_CFG1 = (7U << SEC_SPI_CFG1_DSIZE_SHIFT) |
+                    (1U << SEC_SPI_CFG1_FTHLV_SHIFT) |
+                    (4U << SEC_SPI_CFG1_MBR_SHIFT);
+    /* Mode 0, master, software-managed NSS, MSB first, AFCNTR set post-master. */
+    SEC_SPI3_CFG2 = SEC_SPI_CFG2_MASTER | SEC_SPI_CFG2_SSM;
+    SEC_SPI3_CFG2 |= SEC_SPI_CFG2_AFCNTR;
+    SEC_SPI3_CR1 = SEC_SPI_CR1_SSI;
+    /* Mark SPI3 non-secure in the TZSC so NS writes take effect. */
+    GTZC1_TZSC_SECCFGR1 &= ~(1U << 12); /* SPI3SEC bit */
     RCC_APB1LRSTR |= RCC_APB1LENR_USART3EN;
     RCC_APB1LRSTR &= ~RCC_APB1LENR_USART3EN;
     RCC_APB1LENR |= RCC_APB1LENR_USART3EN;
@@ -398,13 +423,13 @@ static inline void stm32h5_configure_gpio_security(void)
     gpio_mark_non_secure(GPIOG_BASE, (1U << 7));
     gpio_mark_non_secure(GPIOA_BASE, (1U << 9) | (1U << 4));
 
-    /* SPI3 / LCD interface */
-    gpio_mark_non_secure(GPIOA_BASE, (1U << 6));           /* CS */
-    gpio_mark_non_secure(GPIOF_BASE, (1U << 6));           /* D/C */
-    gpio_mark_non_secure(GPIOC_BASE, (1U << 0) | (1U << 10) | (1U << 11) | (1U << 12)); /* RST + SCK + BL + MOSI */
+    /* SPI3 / LCD interface (ILI9341): mark full ports used by the panel as non-secure to avoid per-pin gaps. */
+    gpio_mark_non_secure(GPIOA_BASE, 0xFFFFU); /* includes PA6 (CS) */
+    gpio_mark_non_secure(GPIOC_BASE, 0xFFFFU); /* includes PC0 (RST), PC10 (SCK), PC11 (BL), PC12 (MOSI) */
+    gpio_mark_non_secure(GPIOF_BASE, 0xFFFFU); /* includes PF6 (D/C) */
 
     /* USART3 on PD8, PD9 */
-    gpio_mark_non_secure(GPIOD_BASE, (1U << 4));
+    gpio_mark_non_secure(GPIOD_BASE, (1U << 8) | (1U << 9));
 }
 #endif // TARGET_STM32H563
 

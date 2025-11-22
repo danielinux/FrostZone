@@ -29,14 +29,25 @@ int tft_init(void)
 
 #define ILI9341_CMD_SWRESET   0x01U
 #define ILI9341_CMD_SLPOUT    0x11U
+#define ILI9341_CMD_NORON     0x13U
 #define ILI9341_CMD_DISPON    0x29U
 #define ILI9341_CMD_CASET     0x2AU
 #define ILI9341_CMD_PASET     0x2BU
 #define ILI9341_CMD_RAMWR     0x2CU
 #define ILI9341_CMD_MADCTL    0x36U
 #define ILI9341_CMD_COLMOD    0x3AU
+#define ILI9341_CMD_FRMCTR1   0xB1U
+#define ILI9341_CMD_DFUNCTR   0xB6U
+#define ILI9341_CMD_GAMMASET  0x26U
+
+#define ILI9341_MADCTL_MY     0x80U
+#define ILI9341_MADCTL_MX     0x40U
+#define ILI9341_MADCTL_MV     0x20U
+#define ILI9341_MADCTL_ML     0x10U
+#define ILI9341_MADCTL_BGR    0x08U
 
 #define ILI9341_SPI_BUS       0
+#define ILI9341_SPI_BASE      0x40003C00UL
 struct ili9341_gpio {
     uint32_t base;
     uint8_t pin;
@@ -55,6 +66,26 @@ struct ili9341_panel {
 
 static struct ili9341_panel ili9341;
 static int ili9341_fb_update(struct fb_info *info, uint32_t x, uint32_t y, uint32_t w, uint32_t h);
+
+/* Debug state for GDB inspection */
+struct ili9341_debug_state {
+    uint32_t cmd_count;
+    uint32_t last_len;
+    int32_t last_ret;
+    uint8_t last_cmd;
+    uint32_t spi_cr1;
+    uint32_t spi_cr2;
+    uint32_t spi_cfg1;
+    uint32_t spi_cfg2;
+    uint32_t spi_sr;
+    uint32_t gradient_hits;
+    uint32_t fail_count;
+    int32_t last_error;
+    uint8_t last_error_cmd;
+    uint32_t last_error_stage;
+};
+
+volatile struct ili9341_debug_state ili9341_dbg;
 
 static inline void ili9341_gpio_init_output(struct ili9341_gpio *gpio)
 {
@@ -94,6 +125,10 @@ static int ili9341_write_command(uint8_t cmd, const uint8_t *payload, size_t len
 {
     int ret;
 
+    ili9341_dbg.cmd_count++;
+    ili9341_dbg.last_cmd = cmd;
+    ili9341_dbg.last_len = (uint32_t)len;
+
     ili9341_pin_set(&ili9341.cs, false);
     ili9341_pin_set(&ili9341.dc, false);
     ret = ili9341_spi_write(&cmd, 1U);
@@ -105,6 +140,18 @@ static int ili9341_write_command(uint8_t cmd, const uint8_t *payload, size_t len
     }
 out:
     ili9341_pin_set(&ili9341.cs, true);
+    ili9341_dbg.last_ret = ret;
+    ili9341_dbg.spi_cr1 = *(volatile uint32_t *)(ILI9341_SPI_BASE + 0x00U);
+    ili9341_dbg.spi_cr2 = *(volatile uint32_t *)(ILI9341_SPI_BASE + 0x04U);
+    ili9341_dbg.spi_cfg1 = *(volatile uint32_t *)(ILI9341_SPI_BASE + 0x08U);
+    ili9341_dbg.spi_cfg2 = *(volatile uint32_t *)(ILI9341_SPI_BASE + 0x0CU);
+    ili9341_dbg.spi_sr = *(volatile uint32_t *)(ILI9341_SPI_BASE + 0x14U);
+    if (ret < 0) {
+        ili9341_dbg.fail_count++;
+        ili9341_dbg.last_error = ret;
+        ili9341_dbg.last_error_cmd = cmd;
+        ili9341_dbg.last_error_stage = 0;
+    }
     return ret;
 }
 
@@ -112,58 +159,80 @@ static void ili9341_reset_panel(void)
 {
     ili9341_pin_set(&ili9341.cs, true);
     ili9341_pin_set(&ili9341.dc, true);
-    ili9341_pin_set(&ili9341.rst, true);
-    ili9341_delay_ms(5);
-    ili9341_pin_set(&ili9341.rst, false);
+    /* Datasheet polarity: reset low to assert, high to release. */
+    ili9341_pin_set(&ili9341.rst, false);  /* assert */
     ili9341_delay_ms(20);
-    ili9341_pin_set(&ili9341.rst, true);
+    ili9341_pin_set(&ili9341.rst, true);   /* release */
     ili9341_delay_ms(150);
 }
 
 static void ili9341_set_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1)
 {
-    uint8_t buf[4];
-
-    buf[0] = (uint8_t)(x0 >> 8);
-    buf[1] = (uint8_t)(x0 & 0xFFU);
-    buf[2] = (uint8_t)(x1 >> 8);
-    buf[3] = (uint8_t)(x1 & 0xFFU);
-    ili9341_write_command(ILI9341_CMD_CASET, buf, sizeof(buf));
-
-    buf[0] = (uint8_t)(y0 >> 8);
-    buf[1] = (uint8_t)(y0 & 0xFFU);
-    buf[2] = (uint8_t)(y1 >> 8);
-    buf[3] = (uint8_t)(y1 & 0xFFU);
-    ili9341_write_command(ILI9341_CMD_PASET, buf, sizeof(buf));
+    uint8_t col_addr[] = {
+        (uint8_t)(x0 >> 8), (uint8_t)(x0 & 0xff),
+        (uint8_t)(x1 >> 8), (uint8_t)(x1 & 0xff),
+    };
+    uint8_t row_addr[] = {
+        (uint8_t)(y0 >> 8), (uint8_t)(y0 & 0xff),
+        (uint8_t)(y1 >> 8), (uint8_t)(y1 & 0xff),
+    };
+    ili9341_write_command(ILI9341_CMD_CASET, col_addr, sizeof(col_addr));
+    ili9341_write_command(ILI9341_CMD_PASET, row_addr, sizeof(row_addr));
 }
 
 static int ili9341_init_sequence(void)
 {
-    uint8_t data;
+    /* Minimal Pico-proven init sequence for RGB565 gradient */
+    static const uint8_t pixfmt = 0x55; /* 16-bit */
+    static const uint8_t madctl = ILI9341_MADCTL_MV | ILI9341_MADCTL_MX; /* 320x240 landscape, RGB */
+    static const uint8_t frmctr1[] = { 0x00, 0x1b };
+    static const uint8_t dfunctr[] = { 0x0a, 0x82, 0x27 };
+    static const uint8_t gamma = 0x01;
+    int ret;
 
     ili9341_reset_panel();
-    if (ili9341_write_command(ILI9341_CMD_SWRESET, NULL, 0) < 0)
-        return -EIO;
-    ili9341_delay_ms(150);
 
-    if (ili9341_write_command(ILI9341_CMD_SLPOUT, NULL, 0) < 0)
+    ret = ili9341_write_command(ILI9341_CMD_SWRESET, NULL, 0);
+    if (ret < 0)
+        return -EIO;
+    ili9341_delay_ms(5);
+
+    ret = ili9341_write_command(ILI9341_CMD_SLPOUT, NULL, 0);
+    if (ret < 0)
         return -EIO;
     ili9341_delay_ms(120);
 
-    data = 0x55; /* 16-bit pixel */
-    if (ili9341_write_command(ILI9341_CMD_COLMOD, &data, 1U) < 0)
+    if (ili9341_write_command(ILI9341_CMD_FRMCTR1, frmctr1, sizeof(frmctr1)) < 0)
         return -EIO;
 
-    data = 0xA8; /* Landscape, BGR */
-    if (ili9341_write_command(ILI9341_CMD_MADCTL, &data, 1U) < 0)
+    if (ili9341_write_command(ILI9341_CMD_DFUNCTR, dfunctr, sizeof(dfunctr)) < 0)
         return -EIO;
 
-    ili9341_set_window(0, 0, ILI9341_WIDTH - 1U, ILI9341_HEIGHT - 1U);
+    ret = ili9341_write_command(ILI9341_CMD_COLMOD, &pixfmt, 1U);
+    if (ret < 0)
+        return -EIO;
 
-    if (ili9341_write_command(ILI9341_CMD_DISPON, NULL, 0) < 0)
+    ret = ili9341_write_command(ILI9341_CMD_GAMMASET, &gamma, 1U);
+    if (ret < 0)
+        return -EIO;
+
+    ret = ili9341_write_command(ILI9341_CMD_MADCTL, &madctl, 1U);
+    if (ret < 0)
+        return -EIO;
+
+    ret = ili9341_write_command(ILI9341_CMD_NORON, NULL, 0);
+    if (ret < 0)
+        return -EIO;
+    ili9341_delay_ms(10);
+
+    ret = ili9341_write_command(ILI9341_CMD_DISPON, NULL, 0);
+    if (ret < 0)
         return -EIO;
     ili9341_delay_ms(20);
+
+    /* Backlight on */
     ili9341_pin_set(&ili9341.bl, true);
+
     return 0;
 }
 
@@ -178,8 +247,10 @@ static uint16_t ili9341_rgb565(uint32_t rgb888)
 static void ili9341_demo_gradient(void)
 {
     uint8_t cmd = ILI9341_CMD_RAMWR;
-    uint16_t linebuf[ILI9341_WIDTH];
+    uint8_t linebuf[ILI9341_WIDTH * 2U];
     uint32_t x, y;
+
+    ili9341_dbg.gradient_hits++;
 
     ili9341_set_window(0, 0, ILI9341_WIDTH - 1U, ILI9341_HEIGHT - 1U);
     ili9341_pin_set(&ili9341.cs, false);
@@ -193,9 +264,43 @@ static void ili9341_demo_gradient(void)
             uint8_t r = (uint8_t)((x * 255U) / (ILI9341_WIDTH - 1U));
             uint8_t b = (uint8_t)(((x + y) * 255U) / (ILI9341_WIDTH + ILI9341_HEIGHT - 2U));
             uint32_t rgb = ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
-            linebuf[x] = ili9341_rgb565(rgb);
+            uint16_t pix = ili9341_rgb565(rgb);
+            linebuf[2U * x] = (uint8_t)(pix >> 8);
+            linebuf[2U * x + 1U] = (uint8_t)(pix & 0xFFU);
         }
-        if (ili9341_spi_write((const uint8_t *)linebuf, sizeof(linebuf)) < 0)
+        if (ili9341_spi_write(linebuf, sizeof(linebuf)) < 0) {
+            ili9341_dbg.fail_count++;
+            ili9341_dbg.last_error = -EIO;
+            ili9341_dbg.last_error_cmd = ILI9341_CMD_RAMWR;
+            ili9341_dbg.last_error_stage = 7;
+            break;
+        }
+    }
+out:
+    ili9341_pin_set(&ili9341.cs, true);
+    ili9341_pin_set(&ili9341.dc, true);
+}
+
+static void ili9341_fill_color(uint16_t color)
+{
+    uint8_t cmd = ILI9341_CMD_RAMWR;
+    uint8_t linebuf[ILI9341_WIDTH * 2U];
+    uint32_t y;
+    uint16_t pix = color;
+
+    for (uint32_t x = 0; x < ILI9341_WIDTH; x++) {
+        linebuf[2U * x] = (uint8_t)(pix >> 8);
+        linebuf[2U * x + 1U] = (uint8_t)(pix & 0xFFU);
+    }
+
+    ili9341_set_window(0, 0, ILI9341_WIDTH - 1U, ILI9341_HEIGHT - 1U);
+    ili9341_pin_set(&ili9341.cs, false);
+    ili9341_pin_set(&ili9341.dc, false);
+    if (ili9341_spi_write(&cmd, 1U) < 0)
+        goto out;
+    ili9341_pin_set(&ili9341.dc, true);
+    for (y = 0; y < ILI9341_HEIGHT; y++) {
+        if (ili9341_spi_write(linebuf, sizeof(linebuf)) < 0)
             break;
     }
 out:
@@ -326,7 +431,12 @@ int tft_init(void)
     ili9341_gpio_init_output(&ili9341.rst);
     ili9341_gpio_init_output(&ili9341.dc);
     ili9341_gpio_init_output(&ili9341.bl);
+    /* Backlight off until init completes. */
     ili9341_pin_set(&ili9341.bl, false);
+
+    ret = ili9341_init_sequence();
+    if (ret < 0)
+        return ret;
 
     ili9341_configure_fb(&ili9341.fb, ili9341.frontbuffer);
     ret = register_framebuffer(&ili9341.fb);
@@ -336,10 +446,9 @@ int tft_init(void)
         return ret;
     }
 
-    ret = ili9341_init_sequence();
-    if (ret < 0)
-        return ret;
-
+    /* Allow panel extra time to settle before drawing. */
+    ili9341_delay_ms(500);
+    ili9341_fill_color(0x0000); /* Clear to black first */
     ili9341_demo_gradient();
 
     return 0;
