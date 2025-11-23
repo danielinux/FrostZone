@@ -75,7 +75,7 @@ APP_NETCAT=y
 #
 # Interpreters
 #
-# APP_PYTHON is not set
+APP_PYTHON=y
 
 #
 # Hardware utils
@@ -103,4 +103,7 @@ APP_LIFE=y
 # Test suites
 #
 # SWTESTS is not set
-# HWTESTS is not set
+HWTESTS=y
+# APP_SENSOR is not set
+APP_FBTEST=y
+APP_FBBLUE=y

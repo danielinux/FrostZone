@@ -43,6 +43,10 @@ extern uint32_t SystemCoreClock;
 #define SPI_CFG1_DSIZE_MASK  (0x1FU << SPI_CFG1_DSIZE_SHIFT)
 #define SPI_CFG1_FTHLV_SHIFT 5U
 #define SPI_CFG1_FTHLV_MASK  (0xFU << SPI_CFG1_FTHLV_SHIFT)
+#define SPI_CFG1_CRCSIZE_SHIFT 16U
+#define SPI_CFG1_CRCSIZE_MASK  (0x1FU << SPI_CFG1_CRCSIZE_SHIFT)
+#define SPI_CFG1_BAUDRATE_SHIFT 28U
+#define SPI_CFG1_BAUDRATE_MASK  0x7U
 #define SPI_CFG1_MBR_SHIFT   28U
 #define SPI_CFG1_MBR_MASK    (0x7U << SPI_CFG1_MBR_SHIFT)
 
@@ -52,6 +56,7 @@ extern uint32_t SystemCoreClock;
 #define SPI_CFG2_CPOL      (1U << 25)
 #define SPI_CFG2_SSM       (1U << 26)
 #define SPI_CFG2_SSIOP     (1U << 28)
+#define SPI_CFG2_SSOE      (1U << 29)
 #define SPI_CFG2_AFCNTR    (1U << 31)
 
 #define SPI_SR_RXP         (1U << 0)
@@ -64,8 +69,12 @@ extern uint32_t SystemCoreClock;
 
 #define SPI_IFCR_EOTC      (1U << 3)
 #define SPI_IFCR_TXTFC     (1U << 4)
+#define SPI_IFCR_UDRC      (1U << 5)
 #define SPI_IFCR_OVRC      (1U << 6)
+#define SPI_IFCR_CRCEC     (1U << 7)
+#define SPI_IFCR_TIFREC    (1U << 8)
 #define SPI_IFCR_MODFC     (1U << 9)
+#define SPI_IFCR_SUSPC     (1U << 11)
 
 #define SPI3_NS_BASE       0x40003C00UL
 
@@ -194,70 +203,48 @@ static void stm32_spi_program_hw(struct dev_spi *spi)
 {
     uint32_t cfg1 = 0;
     uint32_t cfg2;
-    uint32_t mbr = stm32_spi_compute_mbr(spi->base, spi->config.baudrate);
     uint32_t base = spi->base;
 
+    /* Start from a clean state and drop any accidental IOLOCK. */
     stm32_spi_disable(base);
+    SPI_CR1(base) &= ~SPI_CR1_IOLOCK;
+    SPI_IFCR(base) = SPI_IFCR_EOTC | SPI_IFCR_TXTFC | SPI_IFCR_OVRC | SPI_IFCR_MODFC | SPI_IFCR_TIFREC | SPI_IFCR_UDRC | SPI_IFCR_SUSPC | SPI_IFCR_CRCEC;
     SPI_CR2(base) = 0;
 
-    cfg1 |= ((uint32_t)7U << SPI_CFG1_DSIZE_SHIFT); /* 8-bit frames */
-    cfg1 |= (1U << SPI_CFG1_FTHLV_SHIFT);           /* Fifo threshold = 1 byte */
-    cfg1 |= (mbr << SPI_CFG1_MBR_SHIFT);
+    /* wolfBoot-style static configuration */
+    cfg1 |= (2U << SPI_CFG1_BAUDRATE_SHIFT); /* hclk/32 (~3 MHz from 100 MHz kernel) */
+    cfg1 |= (7U << SPI_CFG1_CRCSIZE_SHIFT);  /* 8-bit CRC size */
+    cfg1 |= (0U << SPI_CFG1_FTHLV_SHIFT);    /* FIFO threshold = 1 */
+    cfg1 |= (7U << SPI_CFG1_DSIZE_SHIFT);    /* 8-bit data */
     SPI_CFG1(base) = cfg1;
 
-    cfg2 = SPI_CFG2(base);
-    cfg2 &= ~(SPI_CFG2_LSBFRST | SPI_CFG2_CPHA | SPI_CFG2_CPOL | SPI_CFG2_SSM | SPI_CFG2_SSIOP);
-    cfg2 |= SPI_CFG2_SSM | SPI_CFG2_MASTER;
-    if (spi->config.phase)
-        cfg2 |= SPI_CFG2_CPHA;
-    if (spi->config.polarity)
-        cfg2 |= SPI_CFG2_CPOL;
-    if (!spi->config.send_msb_first)
-        cfg2 |= SPI_CFG2_LSBFRST;
-
+    cfg2 = SPI_CFG2_MASTER | SPI_CFG2_SSM; /* Mode 0 (CPOL=0, CPHA=0), software NSS */
     SPI_CFG2(base) = cfg2;
-    /* AFCNTR can only be asserted once the block is already in master mode. */
-    SPI_CFG2(base) |= SPI_CFG2_AFCNTR;
-    SPI_CR1(base) = SPI_CR1_SSI;
-    stm32_spi_clear_flags(base);
+
+    /* Enable, then start the transfer engine. */
+    SPI_CR1(base) = SPI_CR1_SPE | SPI_CR1_SSI;
+    SPI_CR1(base) |= SPI_CR1_CSTART;
 }
 
 static void stm32_spi_begin_transfer(uint32_t base, uint32_t count)
 {
-    uint32_t cr2;
-    uint32_t cr1;
-
-    stm32_spi_disable(base);
-
-    cr2 = SPI_CR2(base);
-    cr2 &= ~SPI_CR2_TSIZE_MASK;
-    cr2 |= ((count & 0xFFFFU) << SPI_CR2_TSIZE_SHIFT);
-    SPI_CR2(base) = cr2;
-
     /* Always capture debug snapshots so GDB can see what was attempted. */
     spi3_dbg.begin_count++;
     spi3_dbg.last_base = base;
     spi3_dbg.last_count = count;
-    spi3_dbg.last_tsize = count & 0xFFFFU;
+    spi3_dbg.last_tsize = 0U;
     spi3_dbg.cr1 = SPI_CR1(base);
     spi3_dbg.cr2 = SPI_CR2(base);
     spi3_dbg.cfg1 = SPI_CFG1(base);
     spi3_dbg.cfg2 = SPI_CFG2(base);
     spi3_dbg.sr = SPI_SR(base);
-
-    cr1 = SPI_CR1(base);
-    cr1 |= SPI_CR1_SSI | SPI_CR1_SPE;
-    if (SPI_SR(base) & SPI_SR_MODF)
-        stm32_spi_clear_flags(base);
-    SPI_CR1(base) = cr1;
-    SPI_CR1(base) |= SPI_CR1_CSTART;
 }
 
 static void stm32_spi_wait_eot(uint32_t base)
 {
-    while (!(SPI_SR(base) & SPI_SR_EOT))
+    /* In continuous-start mode, wait for the last word to leave the shifter. */
+    while (!(SPI_SR(base) & SPI_SR_TXC))
         ;
-    stm32_spi_disable(base);
     stm32_spi_clear_flags(base);
     (void)SPI_SR(base);
 }
@@ -308,12 +295,11 @@ int devspi_xfer(struct spi_slave *sl, const char *obuf, char *ibuf, unsigned int
 {
     struct dev_spi *spi;
     const uint8_t *tx = (const uint8_t *)obuf;
+    uint8_t *rx = (uint8_t *)ibuf;
     unsigned int remaining = len;
 
     if (!sl || sl->bus >= MAX_SPIS)
         return -EINVAL;
-    if (ibuf)
-        return -ENOSYS;
 
     spi = DEV_SPI[sl->bus];
     if (!spi || !spi->mutex)
@@ -333,7 +319,12 @@ int devspi_xfer(struct spi_slave *sl, const char *obuf, char *ibuf, unsigned int
             while (!(SPI_SR(spi->base) & SPI_SR_TXP))
                 ;
             SPI_TXDR(spi->base) = value;
-            if (SPI_SR(spi->base) & SPI_SR_RXP)
+            /* Always clock and consume RX; store if caller provided a buffer. */
+            while (!(SPI_SR(spi->base) & SPI_SR_RXP))
+                ;
+            if (rx)
+                rx[i] = (uint8_t)SPI_RXDR(spi->base);
+            else
                 (void)SPI_RXDR(spi->base);
         }
         stm32_spi_wait_eot(spi->base);
@@ -342,6 +333,8 @@ int devspi_xfer(struct spi_slave *sl, const char *obuf, char *ibuf, unsigned int
 
         if (tx)
             tx += chunk;
+        if (rx)
+            rx += chunk;
         remaining -= chunk;
     }
     mutex_unlock(spi->mutex);
@@ -359,8 +352,8 @@ int spi_bus_init(void)
         .irq = 57,
         .rcc = RCC_APB1LENR_SPI3EN,
         .baudrate = 10000000,
-        .polarity = 1,
-        .phase = 1,
+        .polarity = 0,
+        .phase = 0,
         .rx_only = 0,
         .bidir_mode = 0,
         .dff_16 = 0,

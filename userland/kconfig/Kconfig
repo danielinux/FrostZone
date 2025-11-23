@@ -213,6 +213,9 @@ menu "Test suites"
         config APP_FBTEST
             bool "Test for framebuffer"
             default n
+        config APP_FBBLUE
+            bool "Fill framebuffer with solid blue"
+            default n
     endif
 
 endmenu

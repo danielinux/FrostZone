@@ -29,10 +29,12 @@ All associated GPIOs are configured as non-secure by the secure supervisor to al
 
 ## ILI9341 TFT console (SPI3-based attachment)
 
-- `LCD_BL` – `PC11` (GPIO output, backlight enable, non-secure).
+- `LCD_CS` – `PC8` (GPIO output, active low, non-secure).
+- `LCD_BL` – `PC9` (GPIO output, backlight enable, non-secure).
 - `SPI3_SCK` – `PC10` (alternate function 6, non-secure).
+- `SPI3_MISO`— `PC11` (alternate function 6, non-secure).
 - `SPI3_MOSI` – `PC12` (alternate function 6, non-secure). `SPI3_MISO` remains unconnected.
-- `LCD_CS` – `PA6` (GPIO output, active low, non-secure).
-- `LCD_RST` – `PC0` (GPIO output, non-secure).
-- `LCD_DC` – `PF6` (GPIO output, command/data select, non-secure).
+- `LCD_DC` – `PD2` (GPIO output, command/data select, non-secure).
+-  SKIP position on CN8 connector `PG2`
+- `LCD_RST` – `PG3` (GPIO output, non-secure).
 

@@ -39,6 +39,10 @@
 #define RCC_APB1LRSTR_SPI3RST  (1U << 15)
 #define RCC_APB1LENR_USART3EN  (1U << 18)
 #define RCC_APB1LENR_SPI3EN    (1U << 15)
+#define RCC_CCIPR4             (*(volatile uint32_t *)(STM32H563_RCC_BASE + 0x0E4U))
+#define RCC_CCIPR4_SPI3SEL_SHIFT 6U
+#define RCC_CCIPR4_SPI3SEL_MASK  (0x7U << RCC_CCIPR4_SPI3SEL_SHIFT)
+#define RCC_CCIPR4_SPI3SEL_PLL1Q (0x0U << RCC_CCIPR4_SPI3SEL_SHIFT)
 
 #define SEC_SPI3_BASE          0x50003C00U
 #define SEC_SPI3_CR1           (*(volatile uint32_t *)(SEC_SPI3_BASE + 0x000U))
@@ -360,6 +364,8 @@ static inline void stm32h5_gtzc_setup(void)
 
     /* Pre-enable GPIO clocks needed by the display and console before we declassify pins. */
     RCC_AHB2ENR |= RCC_AHB2ENR_GPIOAEN | RCC_AHB2ENR_GPIOBEN | RCC_AHB2ENR_GPIOCEN | RCC_AHB2ENR_GPIODEN | RCC_AHB2ENR_GPIOFEN | RCC_AHB2ENR_GPIOGEN;
+    /* Drive the SPI3 kernel clock from PLL1 so NS never reprograms RCC_CCIPR4. */
+    RCC_CCIPR4 = (RCC_CCIPR4 & ~RCC_CCIPR4_SPI3SEL_MASK) | RCC_CCIPR4_SPI3SEL_PLL1Q;
     RCC_APB1LRSTR |= RCC_APB1LRSTR_SPI3RST;
     RCC_APB1LRSTR &= ~RCC_APB1LRSTR_SPI3RST;
     RCC_APB1LENR |= RCC_APB1LENR_SPI3EN;
