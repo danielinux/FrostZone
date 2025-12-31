@@ -79,6 +79,7 @@ int ping(struct sockaddr_in *dst, int count, int len)
                 perror("poll");
                 return -1;
             } else {
+                uint32_t triptime;
                 char *ip;
                 int r = recvfrom(sock, payload, DEFAULT_LEN, 0, (struct sockaddr *)&reply_from, &sockaddr_in_len);
                 if (r <= 0) {
@@ -88,7 +89,7 @@ int ping(struct sockaddr_in *dst, int count, int len)
                 gettimeofday(&tv, (struct timezone *)NULL);
                 tp = (struct timeval *)(payload + sizeof (struct icmp_hdr));
                 tvsub(&tv, tp);
-                uint32_t triptime = tv.tv_sec * 1000 + (tv.tv_usec / 1000);
+                triptime = tv.tv_sec * 1000 + (tv.tv_usec / 1000);
                 ip = inet_ntoa(reply_from.sin_addr);
                 printf("%d bytes from %s: icmp seq=%d time=%d ms\r\n", r, ip, icmp_hdr->un.echo.sequence, triptime);
                 usleep(1000000 - (1000 * (triptime)));

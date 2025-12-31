@@ -8,6 +8,7 @@ PREFIX:=$(PWD)/build
 KERNEL_CONFIG ?= ../frosted/.config
 APP_CONFIG ?= kconfig/.config
 
+ifneq ($(filter menuconfig,$(MAKECMDGOALS)),menuconfig)
 ifeq ($(wildcard $(KERNEL_CONFIG)),)
 $(error Kernel configuration missing ($(KERNEL_CONFIG)). Run 'make menuconfig' inside frosted/.)
 endif
@@ -20,6 +21,7 @@ include $(APP_CONFIG)
 
 ifndef SYS_CLOCK
 $(error SYS_CLOCK not defined in $(KERNEL_CONFIG))
+endif
 endif
 # TOOLCHAIN CONFIG
 CROSS_COMPILE?=arm-frosted-eabi-

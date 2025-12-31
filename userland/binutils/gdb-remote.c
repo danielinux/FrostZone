@@ -37,12 +37,13 @@ int gdb_send_packet(int fd, char* data) {
     unsigned int data_length = (unsigned int) strlen(data);
     int length = data_length + 4;
     char* packet = malloc(length); /* '$' data (hex) '#' cksum (hex) */
+    uint8_t cksum = 0;
+    char ack;
 
     memset(packet, 0, length);
 
     packet[0] = '$';
 
-    uint8_t cksum = 0;
     for(unsigned int i = 0; i < data_length; i++) {
         packet[i + 1] = data[i];
         cksum += data[i];
@@ -58,7 +59,6 @@ int gdb_send_packet(int fd, char* data) {
             return -2;
         }
 
-        char ack;
         if(read(fd, &ack, 1) != 1) {
             free(packet);
             return -2;
@@ -79,6 +79,10 @@ int gdb_recv_packet(int fd, char** buffer) {
     char recv_cksum[3] = {0};
     char* packet_buffer = malloc(packet_size);
     unsigned state;
+    char c;
+    uint8_t recv_cksum_int;
+    char nack = '-';
+    char ack = '+';
 
 start:
     state = 0;
@@ -90,7 +94,6 @@ start:
      * 4: fin
      */
 
-    char c;
     while(state != 4) {
         if(read(fd, &c, 1) != 1) {
             return -2;
@@ -131,16 +134,14 @@ start:
         }
     }
 
-    uint8_t recv_cksum_int = strtoul(recv_cksum, NULL, 16);
+    recv_cksum_int = strtoul(recv_cksum, NULL, 16);
     if(recv_cksum_int != cksum) {
-        char nack = '-';
         if(write(fd, &nack, 1) != 1) {
             return -2;
         }
 
         goto start;
     } else {
-        char ack = '+';
         if(write(fd, &ack, 1) != 1) {
             return -2;
         }
@@ -172,4 +173,3 @@ int gdb_check_for_interrupt(int fd) {
 
     return 0;
 }
-

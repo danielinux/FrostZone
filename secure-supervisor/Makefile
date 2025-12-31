@@ -13,6 +13,7 @@ KCONFIG_DIR := $(abspath $(CURDIR)/../userland/kconfig)
 KCONFIG_FILE := $(abspath $(CURDIR)/Kconfig)
 KCONFIG_CONFIG ?= $(abspath $(CURDIR)/.config)
 
+ifneq ($(filter menuconfig,$(MAKECMDGOALS)),menuconfig)
 ifeq ($(wildcard $(KCONFIG_CONFIG)),)
 $(error Secure supervisor configuration missing ($(KCONFIG_CONFIG)). Run 'make menuconfig' first.)
 endif
@@ -51,6 +52,7 @@ SRCS = ivt.c startup_secure.c secure_main.c sg.c mempool.c task.c random.c flash
 
 CFLAGS += -DCONFIG_ETH=$(CONFIG_ETH)
 CFLAGS += -DCONFIG_FLASHFS_VERIFY=$(CONFIG_FLASHFS_VERIFY)
+endif
 
 OBJS = $(SRCS:.c=.o)
 

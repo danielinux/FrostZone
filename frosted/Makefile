@@ -10,6 +10,7 @@ KCONFIG_DIR := $(abspath $(CURDIR)/../userland/kconfig)
 KCONFIG_FILE := $(abspath $(CURDIR)/Kconfig)
 KCONFIG_CONFIG ?= $(abspath $(CURDIR)/.config)
 
+ifneq ($(filter menuconfig,$(MAKECMDGOALS)),menuconfig)
 ifeq ($(wildcard $(KCONFIG_CONFIG)),)
 $(error Frosted configuration missing ($(KCONFIG_CONFIG)). Run 'make menuconfig' first.)
 endif
@@ -109,6 +110,7 @@ ifeq ($(CONFIG_DEVUSB),1)
 CFLAGS += -DCONFIG_USB=1
 CFLAGS += -DCFG_TUSB_MCU=OPT_MCU_STM32H5
 CFLAGS += -Ilib/tinyusb/src -Ilib/tinyusb/hw
+endif
 endif
 
 

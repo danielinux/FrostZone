@@ -68,7 +68,7 @@ APP_ROUTE=y
 # APP_PING is not set
 # APP_HOST is not set
 APP_TELNETD=y
-APP_NETCAT=m
+APP_NETCAT=y
 # APP_NTPC is not set
 # APP_STARWARS is not set
 

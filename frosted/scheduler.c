@@ -3369,12 +3369,12 @@ int __naked sv_call_handler(void)
     if (n_syscall >= _SYSCALLS_NR) {
         restore_task_context();
         irq_on();
-        return -1;
+        goto return_from_syscall;
     }
     if (sys_syscall_handlers[n_syscall] == NULL) {
         restore_task_context();
         irq_on();
-        return -1;
+        goto return_from_syscall;
     }
 
 #ifdef CONFIG_SYSCALL_TRACE
