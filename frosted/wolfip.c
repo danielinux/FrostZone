@@ -2140,14 +2140,19 @@ static void dhcp_cancel_timer(struct wolfIP *s)
 static int dhcp_parse_offer(struct wolfIP *s, struct dhcp_msg *msg)
 {
     struct dhcp_option *opt = (struct dhcp_option *)(msg->options);
+    uint8_t *opt_base = msg->options;
+    size_t options_len = sizeof(msg->options);
+    size_t offset = 0;
     uint32_t ip;
     uint32_t netmask = 0xFFFFFF00;
     struct ipconf *primary = wolfIP_primary_ipconf(s);
-    while (opt->code != 0xFF) {
+    while (offset + 2 <= options_len && opt->code != 0xFF) {
         if (opt->code == DHCP_OPTION_MSG_TYPE) {
             if (opt->data[0] == DHCP_OFFER) {
-                opt = (struct dhcp_option *)((uint8_t *)opt + 3);
-                while (opt->code != 0xFF) {
+                offset += 3;
+                if (offset + 2 > options_len) break;
+                opt = (struct dhcp_option *)(opt_base + offset);
+                while (offset + 2 <= options_len && opt->code != 0xFF) {
                     if (opt->code == DHCP_OPTION_SERVER_ID) {
                         uint32_t data = opt->data[0] | (opt->data[1] << 8) | (opt->data[2] << 16) | (opt->data[3] << 24);
                         s->dhcp_server_ip = ee32(data);
@@ -2169,7 +2174,9 @@ static int dhcp_parse_offer(struct wolfIP *s, struct dhcp_msg *msg)
                 return 0;
             }
         }
-        opt = (struct dhcp_option *)((uint8_t *)opt + 2 + opt->len);
+        if (offset + 2 + opt->len > options_len) break;
+        offset += 2 + opt->len;
+        opt = (struct dhcp_option *)(opt_base + offset);
     }
     if ((s->dhcp_server_ip != 0) && (s->dhcp_ip != 0)) {
         s->dhcp_state = DHCP_REQUEST_SENT;
@@ -2189,7 +2196,7 @@ static int dhcp_parse_ack(struct wolfIP *s, struct dhcp_msg *msg)
                 uint32_t data;
                 opt = (struct dhcp_option *)((uint8_t *)opt + 3);
                 data = opt->data[0] | (opt->data[1] << 8) | (opt->data[2] << 16) | (opt->data[3] << 24);
-                while (opt->code != 0xFF) {
+                while (offset + 2 <= options_len && opt->code != 0xFF) {
                     if (opt->code == DHCP_OPTION_SERVER_ID)
                         s->dhcp_server_ip = ee32(data);
                     if (primary) {
