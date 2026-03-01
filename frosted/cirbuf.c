@@ -35,6 +35,8 @@ struct cirbuf * cirbuf_create(int size)
     struct cirbuf* inbuf;
     if (size <= 0) 
         return NULL;
+    if (size > 0x1000000) /* Arbitrary large limit to prevent overflow */
+        return NULL;
 
     inbuf = kalloc(sizeof(struct cirbuf));
     if (!inbuf)
@@ -56,7 +58,7 @@ struct cirbuf * cirbuf_create(int size)
 /* 0 on success, -1 on fail */
 int cirbuf_writebyte(struct cirbuf *cb, uint8_t byte)
 {
-    if (!cb)
+    if (!cb || cb->bufsize <= 0)
         return -1;
 
     /* check if there is space */
@@ -76,7 +78,7 @@ int cirbuf_writebyte(struct cirbuf *cb, uint8_t byte)
 /* 0 on success, -1 on fail */
 int cirbuf_readbyte(struct cirbuf *cb, uint8_t *byte)
 {
-    if (!cb || !byte)
+    if (!cb || !byte || cb->bufsize <= 0)
         return -1;
 
     /* check if there is data */
@@ -97,7 +99,7 @@ int cirbuf_readbytes(struct cirbuf *cb, void *bytes, int len)
     int buflen;
     int i;
     char *dst = bytes;
-    if (!cb || !bytes)
+    if (!cb || !bytes || cb->bufsize <= 0)
         return -1;
 
     /* check if there is data */
@@ -122,7 +124,7 @@ int cirbuf_writebytes(struct cirbuf *cb, const uint8_t * bytes, int len)
     uint8_t byte;
     int freesize;
     int tot_len = len;
-    if (!cb)
+    if (!cb || cb->bufsize <= 0)
         return 0;
 
     /* check if there is space */
@@ -156,7 +158,7 @@ int cirbuf_writebytes(struct cirbuf *cb, const uint8_t * bytes, int len)
 int cirbuf_bytesfree(struct cirbuf *cb)
 {
     int bytes;
-    if (!cb)
+    if (!cb || cb->bufsize <= 0)
         return -1;
 
     bytes = (int)(cb->readptr - cb->writeptr - 1);
@@ -169,7 +171,7 @@ int cirbuf_bytesfree(struct cirbuf *cb)
 int cirbuf_bytesinuse(struct cirbuf *cb)
 {
     int bytes;
-    if (!cb)
+    if (!cb || cb->bufsize <= 0)
         return -1;
 
     bytes = (int)(cb->writeptr - cb->readptr);
