@@ -81,9 +81,9 @@ int tty_console_init(void)
 
 static void tty_send_break(void *arg)
 {
-    int *pid = (int *)(arg);
-    if (pid)
-        task_kill(*pid, 2);
+    int pid = *(int *)(arg);
+    if (pid > 1)
+        task_kill(pid, 2);
 }
 
 static int tty_read(struct fnode *fno, void *buf, unsigned int len)
@@ -95,9 +95,13 @@ static int tty_read(struct fnode *fno, void *buf, unsigned int len)
         return 0;
     ret = TTY.mod_kbd->ops.read(TTY.kbd, buf, len);
     if (TTY.pid > 1) {
-        for (i = 0; i < ret; i++) {
-            if (((uint8_t *)buf)[i] == 0x03) /* Ctrl + c*/
-                tasklet_add(tty_send_break, &TTY.pid); 
+        int *pid_arg = kalloc(sizeof(int));
+        if (pid_arg) {
+            *pid_arg = TTY.pid;
+            for (i = 0; i < ret; i++) {
+                if (((uint8_t *)buf)[i] == 0x03) /* Ctrl + c*/
+                    tasklet_add(tty_send_break, pid_arg);
+            }
         }
     }
     return ret;
