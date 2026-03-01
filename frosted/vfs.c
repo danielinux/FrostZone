@@ -17,6 +17,45 @@
  *      Authors: Daniele Lacamera, Maxime Vincent
  *
  */
+// Minimal kernel-safe ksnprintf: supports %s and %d only
+#include "string.h"
+typedef __builtin_va_list va_list;
+#define va_start(v,l)   __builtin_va_start(v,l)
+#define va_end(v)       __builtin_va_end(v)
+#define va_arg(v,t)     __builtin_va_arg(v,t)
+int ksnprintf(char *buf, size_t size, const char *fmt, ...);
+// #include <stdio.h> // Not available in kernel
+
+int ksnprintf(char *buf, size_t size, const char *fmt, ...) {
+    va_list args;
+    size_t i = 0, j = 0;
+    va_start(args, fmt);
+    while (fmt[i] && j + 1 < size) {
+        if (fmt[i] == '%' && fmt[i+1]) {
+            i++;
+            if (fmt[i] == 's') {
+                const char *s = va_arg(args, const char *);
+                while (*s && j + 1 < size) buf[j++] = *s++;
+            } else if (fmt[i] == 'd') {
+                int val = va_arg(args, int);
+                char tmp[12];
+                int n = 0, v = val;
+                if (v < 0) { buf[j++] = '-'; v = -v; }
+                do { tmp[n++] = '0' + (v % 10); v /= 10; } while (v && n < 11);
+                while (n-- && j + 1 < size) buf[j++] = tmp[n];
+            } else {
+                buf[j++] = fmt[i];
+            }
+        } else {
+            buf[j++] = fmt[i];
+        }
+        i++;
+    }
+    if (size) buf[j < size ? j : size-1] = 0;
+    va_end(args);
+    return (int)j;
+}
+
 #include "frosted.h"
 #include "string.h"
 #include "stat.h"
@@ -308,11 +347,11 @@ static struct fnode *_fno_search(const char *path, struct fnode *dir, int follow
     if( (dir->flags & FL_LINK ) == FL_LINK ){
         /* passing through a symlink */
         const char *walk = path_walk(path);
-        int needed = snprintf(NULL, 0, "%s/%s", dir->linkname, walk ? walk : "");
+        int needed = ksnprintf(NULL, 0, "%s/%s", dir->linkname, walk ? walk : "");
         if (needed >= MAX_FILE) {
             return (struct fnode *)-ENAMETOOLONG;
         }
-        snprintf(link, MAX_FILE, "%s/%s", dir->linkname, walk ? walk : "");
+        ksnprintf(link, MAX_FILE, "%s/%s", dir->linkname, walk ? walk : "");
         return _fno_search(link, &FNO_ROOT, follow);
     }
     return _fno_search(path_walk(path), dir->children, follow);
@@ -1026,7 +1065,7 @@ int vfs_umount(char *target, uint32_t flags)
             }
             kfree(mp);
             break;
-        
+        }
         prev = mp;
         mp = mp->next;
     }

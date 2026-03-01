@@ -173,49 +173,8 @@ static int build_addrinfo(uint32_t addr,
 
 static int resolve_hostname(const char *node, uint32_t *addr)
 {
-    uint16_t id;
-    uint32_t start;
-    int ret;
-
-    if (!IPStack)
-        return -EAI_FAIL;
-
-    dns_mutex_init();
-retry_lock:
-    if (mutex_trylock(dns_mutex) != 0)
-        return SYS_CALL_AGAIN;
-    dns_result_ready = 0;
-    dns_result_ip = 0;
-
-    if (tcpip_trylock() != 0) {
-        mutex_unlock(dns_mutex);
-        return SYS_CALL_AGAIN;
-    }
-    ret = nslookup(IPStack, node, &id, wolfip_dns_cb);
-    tcpip_unlock();
-
-    if (ret < 0) {
-        mutex_unlock(dns_mutex);
-        if (ret == -16)
-            return -EAI_AGAIN;
-        if (ret == -101)
-            return -EAI_FAIL;
-        return -EAI_FAIL;
-    }
-
-    start = jiffies;
-    while (!dns_result_ready) {
-        uint32_t elapsed = jiffies - start;
-        if (elapsed >= DNS_TIMEOUT_MS) {
-            mutex_unlock(dns_mutex);
-            return -EAI_AGAIN;
-        }
-        kthread_sleep_ms(10);
-    }
-
-    *addr = dns_result_ip;
-    mutex_unlock(dns_mutex);
-    return 0;
+    // TCP/IP stack not present in this build
+    return -EAI_FAIL;
 }
 
 static int dns_getaddrinfo(const char *node,
