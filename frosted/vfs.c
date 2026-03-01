@@ -731,7 +731,7 @@ int sys_readdir_hdlr(void *dir_obj, struct dirent *ep)
     }
     fno->dir_ptr = (int)next->next;
     ep->d_ino = 0;
-    strncpy(ep->d_name, next->fname, 256);
+    strncpy(ep->d_name, next->fname, sizeof(ep->d_name));
     return 0;
 }
 
