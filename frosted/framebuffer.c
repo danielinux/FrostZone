@@ -69,10 +69,8 @@ static int fb_write(struct fnode *fno, const void *buf, unsigned int len)
 
     //mutex_lock(fb->dev->mutex);
     off = task_fd_get_off(fno);
-    len_left = fno->size - off;
-    if (len > len_left)
-        len = len_left;
-
+    if (off + len > fno->size)
+        len = (off < fno->size) ? (fno->size - off) : 0;
     if (!len)
         return 0;
 

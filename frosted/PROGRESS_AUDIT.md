@@ -19,6 +19,7 @@ This file tracks the status of each finding from AUDIT.md as they are addressed.
 | MED-3   | Medium    | Race condition in pipe_close              | fixed       | Mutex added to protect close/free sequence |
 | MED-4   | Medium    | Stale pointer in TTY tasklet callback     | fixed       | PID copied to heap for tasklet, callback checks validity |
 | MED-5   | Medium    | Integer underflow in ILI9341 framebuffer  | fixed       | Added zero-size and bounds checks to ili9341_fb_update |
+| MED-6   | Medium    | Unvalidated offset in framebuffer write   | fixed       | Added bounds check for off+len in fb_write |
 | HIGH-1  | High      | Unbounded copy in basename_r              | fixed       | Remediated: size param, bound strncpy, all callers updated |
 | CRIT-1  | Critical  | Stack buffer overflow in symlink traversal | fixed       | Remediated with snprintf and bounds check in _fno_search() |
 | CRIT-2  | Critical  | Mount table corruption in vfs_umount      | fixed       | strncpy 256→sizeof(ep->d_name) in sys_readdir_hdlr |
