@@ -93,7 +93,7 @@ static int _fno_fullpath(struct fnode *f, char *dst, char **p, int len)
     *p += nlen;
     *(*p) = '/';
     *p += 1;
-    *(*p + 1) = '\0';
+    *(*p) = '\0';
     return 0;
 }
 
@@ -305,11 +305,14 @@ static struct fnode *_fno_search(const char *path, struct fnode *dir, int follow
 
     /* path is correct, need to walk more */
     if( (dir->flags & FL_LINK ) == FL_LINK ){
-    /* passing through a symlink */
-        strcpy( link, dir->linkname );
-        strcat( link, "/" );
-        strcat( link, path_walk(path));
-        return _fno_search( link, &FNO_ROOT, follow );
+        /* passing through a symlink */
+        const char *walk = path_walk(path);
+        int needed = snprintf(NULL, 0, "%s/%s", dir->linkname, walk ? walk : "");
+        if (needed >= MAX_FILE) {
+            return (struct fnode *)-ENAMETOOLONG;
+        }
+        snprintf(link, MAX_FILE, "%s/%s", dir->linkname, walk ? walk : "");
+        return _fno_search(link, &FNO_ROOT, follow);
     }
     return _fno_search(path_walk(path), dir->children, follow);
 }
@@ -389,7 +392,8 @@ struct fnode *fno_create(struct module *owner, const char *name, struct fnode *p
     struct fnode *fno = _fno_create(owner, name, parent);
     if (fno && parent && parent->owner && parent->owner->ops.creat)
         parent->owner->ops.creat(fno);
-    fno->flags |= FL_RDWR;
+    if (fno)
+        fno->flags |= FL_RDWR;
     return fno;
 }
 
@@ -599,7 +603,7 @@ int sys_seek_hdlr(int fd, int off, int whence)
     struct fnode *fno = task_filedesc_get(fd);
     if (!fno)
         return -EINVAL;
-    if (fno->owner->ops.seek) {
+    if (fno->owner && fno->owner->ops.seek) {
         return fno->owner->ops.seek(fno, off, whence);
     } else return -EOPNOTSUPP;
 }
@@ -1017,11 +1021,11 @@ int vfs_umount(char *target, uint32_t flags)
                 MTAB = mp->next;
                 break;
             } else {
-                prev->next = mp;
-
+                prev->next = mp->next;
             }
             kfree(mp);
-        }
+            break;
+        
         prev = mp;
         mp = mp->next;
     }
