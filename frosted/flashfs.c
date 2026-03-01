@@ -147,6 +147,9 @@ char *get_page_filename(uint16_t page)
         fs_bmp_clear(page);
         return NULL;
     }
+    /* Force null-termination for filename in RAM copy */
+    char *fname = (char *)hdr + sizeof(struct flashfs_file_hdr);
+    fname[MAX_FNAME] = '\0';
     if (*((char *)PART_MAP_BASE + page * FLASH_PAGE_SIZE +
             sizeof(struct flashfs_file_hdr) + hdr->fname_len) != 0) {
         fs_bmp_clear(page);
