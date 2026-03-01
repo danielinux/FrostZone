@@ -411,7 +411,7 @@ static int sock_accept(int fd, struct sockaddr *addr, unsigned int *addrlen)
     if (sock_fd >= 0) {
         s = sockfd_inet(sock_fd);
         if (!s) {
-            wolfIP_sock_close(IPStack, s->sock_fd);
+            wolfIP_sock_close(IPStack, sock_fd);
             return -ENOMEM;
         }
         s->sock_fd = sock_fd;
