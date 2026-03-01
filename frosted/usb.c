@@ -637,6 +637,7 @@ int ttyusb_init(void)
 /* Two static buffers for RX frames from USB host */
 __attribute__((section(".usb_tud"))) uint8_t tusb_net_rxbuf[LINK_MTU][2];
 uint8_t tusb_net_rxbuf_used[2] =  {0, 0};
+uint16_t tusb_net_rxbuf_size[2] = {0, 0};
 
 /* Two static buffers for TX frames to USB host */
 __attribute__((section(".usb_tud"))) uint8_t tusb_net_txbuf[LINK_MTU][4];
@@ -731,6 +732,7 @@ static void tusb_net_push_rx(const uint8_t *src, uint16_t size) {
         if (size > LINK_MTU) return;
         memcpy(dst, src, size);
         tusb_net_rxbuf_used[i] = 1;
+        tusb_net_rxbuf_size[i] = size;
     }
 }
 
@@ -753,9 +755,12 @@ int  ll_usb_poll(struct wolfIP_ll_dev *dev, void *frame, uint32_t sz) {
         return 0;
     for (i = 0; i < 2; i++) {
         if (tusb_net_rxbuf_used[i]) {
-            memcpy(frame, tusb_net_rxbuf[i], sz);
+            uint16_t actual_size = tusb_net_rxbuf_size[i];
+            uint32_t to_copy = (sz < actual_size) ? sz : actual_size;
+            memcpy(frame, tusb_net_rxbuf[i], to_copy);
             tusb_net_rxbuf_used[i] = 0;
-            return (int)sz;
+            tusb_net_rxbuf_size[i] = 0;
+            return (int)to_copy;
         }
     }
     return 0;
