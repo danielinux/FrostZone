@@ -15,6 +15,7 @@ This file tracks the status of each finding from AUDIT.md as they are addressed.
 
 | ID      | Severity  | Short Description                        | Status      | Notes/Commit |
 |---------|-----------|------------------------------------------|-------------|--------------|
+| MED-2   | Medium    | DHCP option parsing loop missing bounds   | fixed       | Bounds check added to dhcp_parse_offer() |
 | HIGH-1  | High      | Unbounded copy in basename_r              | fixed       | Remediated: size param, bound strncpy, all callers updated |
 | CRIT-1  | Critical  | Stack buffer overflow in symlink traversal | fixed       | Remediated with snprintf and bounds check in _fno_search() |
 | CRIT-2  | Critical  | Mount table corruption in vfs_umount      | fixed       | strncpy 256→sizeof(ep->d_name) in sys_readdir_hdlr |
@@ -25,3 +26,4 @@ This file tracks the status of each finding from AUDIT.md as they are addressed.
 | CRIT-7  | High      | Off-by-one NUL in _fno_fullpath           | fixed       | NUL terminator written at correct position in vfs.c |
 | HIGH-4  | High      | NULL deref in vfs.c:sys_seek_hdlr (fno->owner) | fixed | Added NULL check for fno->owner in sys_seek_hdlr (see commit for details); Also fixed missing return in sys_ioctl_hdlr (commit 550d589) |
 | HIGH-3  | High      | NULL pointer deref in fno_create          | fixed       | fno->flags set only if fno is non-NULL (commit: fix applied) |
+| MED-1   | Medium    | Always-false unsigned comparison in sys_sleep_hdlr/sys_alarm_hdlr | fixed | Cast to int32_t before comparison; see commit for details |

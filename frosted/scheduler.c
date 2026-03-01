@@ -2540,7 +2540,7 @@ void sleepy_task_wakeup(uint32_t now, void *arg)
 
 int sys_sleep_hdlr(uint32_t arg1, uint32_t arg2)
 {
-    if (arg1 < 0)
+    if ((int32_t)arg1 < 0)
         return -EINVAL;
     if (!arg2)
         return -EINVAL;
@@ -2579,7 +2579,7 @@ int sys_alarm_hdlr(uint32_t arg1)
 {
     int ret = 0;
 
-    if (arg1 < 0)
+    if ((int32_t)arg1 < 0)
         return -EINVAL;
 
     if (_cur_task->tb.timer_id >= 0) {
