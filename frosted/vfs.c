@@ -620,7 +620,7 @@ int sys_ioctl_hdlr(int fd, uint32_t req, void *val)
         return -EBADF;
 
     if (fno->owner->ops.ioctl) {
-        fno->owner->ops.ioctl(fno, req, val);
+        return fno->owner->ops.ioctl(fno, req, val);
     } else return -EOPNOTSUPP;
 }
 
