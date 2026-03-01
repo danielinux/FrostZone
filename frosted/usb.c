@@ -728,6 +728,7 @@ static void tusb_net_push_rx(const uint8_t *src, uint16_t size) {
         }
     }
     if (dst) {
+        if (size > LINK_MTU) return;
         memcpy(dst, src, size);
         tusb_net_rxbuf_used[i] = 1;
     }
