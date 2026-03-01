@@ -34,10 +34,12 @@ struct mountpoint *MTAB = NULL;
 static struct fnode FNO_ROOT = {
 };
 
-static void basename_r(const char *path, char *res)
+static void basename_r(const char *path, char *res, size_t res_size)
 {
     char *p;
-    strncpy(res, path, strlen(path) + 1);
+    if (res_size == 0) return;
+    strncpy(res, path, res_size - 1);
+    res[res_size - 1] = '\0';
     p = res + strlen(res) - 1;
     while (p >= res) {
         if (*p == '/') {
@@ -50,7 +52,6 @@ static void basename_r(const char *path, char *res)
         res[0] = '/';
         res[1] = '\0';
     }
-
 }
 
 static char *filename(char *path)
@@ -143,7 +144,7 @@ static struct fnode *fno_create_file(char *path)
     struct fnode *f = NULL;
     if (!base)
         return NULL;
-    basename_r(path, base);
+    basename_r(path, base, strlen(path) + 1);
     parent = fno_search(base);
     kfree(base);
     if (!parent)
@@ -208,7 +209,7 @@ static void mkdir_links(struct fnode *fno)
     strcat(parentl, "/..");
     if (fno) {
         fno_link(path, selfl);
-        basename_r(path, path_basename);
+        basename_r(path, path_basename, sizeof(path_basename));
         fno_link(path_basename, parentl);
     }
 }
