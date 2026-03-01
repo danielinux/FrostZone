@@ -129,6 +129,7 @@ static int pipe_poll(struct fnode *f, uint16_t events, uint16_t *revents)
 
 static int pipe_close(struct fnode *f)
 {
+    static mutex_t *pipe_mutex = NULL;
     struct pipe_priv *pp;
     struct task *t;
     t = this_task();
@@ -142,6 +143,10 @@ static int pipe_close(struct fnode *f)
     if (!pp)
         return -EINVAL;
 
+    if (!pipe_mutex) {
+        pipe_mutex = mutex_init();
+    }
+    mutex_lock(pipe_mutex);
 
     if (f == pp->fno_r) {
         pp->fno_r = NULL;
@@ -159,6 +164,8 @@ static int pipe_close(struct fnode *f)
     }
     if ((!pp->fno_w) && (!pp->fno_r))
         kfree(pp);
+
+    mutex_unlock(pipe_mutex);
     return 0;
 }
 
