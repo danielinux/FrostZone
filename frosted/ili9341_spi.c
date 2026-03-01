@@ -416,7 +416,8 @@ static int ili9341_fb_update(struct fb_info *info, uint32_t x, uint32_t y, uint3
 
     if (x >= ILI9341_WIDTH || y >= ILI9341_HEIGHT)
         return -EINVAL;
-
+    if (w == 0 || h == 0)
+        return -EINVAL;
     if (x + w > ILI9341_WIDTH)
         w = ILI9341_WIDTH - x;
     if (y + h > ILI9341_HEIGHT)
