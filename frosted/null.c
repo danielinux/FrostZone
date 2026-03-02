@@ -65,7 +65,8 @@ static struct module mod_devnull = {
 
 void devnull_init(struct fnode *dev)
 {
-    strcpy(mod_devnull.name,"devnull");
+    strncpy(mod_devnull.name, "devnull", sizeof(mod_devnull.name) - 1);
+    mod_devnull.name[sizeof(mod_devnull.name) - 1] = '\0';
     mod_devnull.family = FAMILY_FILE;
     mod_devnull.ops.open = devnull_open;
     mod_devnull.ops.read = devnull_read;
