@@ -19,15 +19,19 @@
  */
 
 #include "frosted.h"
+#include "pool.h"
 #include "string.h"
 
 static struct module mod_memfs;
 
+#define CONFIG_MAX_MEMFS_FNODES 32
 
 struct memfs_fnode {
     struct fnode *fnode;
     uint8_t *content;
 };
+
+POOL_DEFINE(memfs_fnode_pool, struct memfs_fnode, CONFIG_MAX_MEMFS_FNODES);
 
 
 static int memfs_read(struct fnode *fno, void *buf, unsigned int len)
@@ -132,7 +136,7 @@ static int memfs_close(struct fnode *fno)
 
 static int memfs_creat(struct fnode *fno)
 {
-    struct memfs_fnode *mfs = kalloc(sizeof(struct memfs_fnode));
+    struct memfs_fnode *mfs = pool_alloc(&memfs_fnode_pool);
     if (mfs) {
         mfs->fnode = fno;
         mfs->content = NULL;
@@ -151,7 +155,7 @@ static int memfs_unlink(struct fnode *fno)
     mfno = fno->priv;
     if (mfno && mfno->content)
         kfree(mfno->content);
-    kfree(mfno);
+    pool_free(&memfs_fnode_pool, mfno);
     return 0;
 }
 
@@ -222,6 +226,7 @@ static int memfs_mount_info(struct fnode *fno, char *buf, int len)
 
 void memfs_init(void)
 {
+    pool_init(&memfs_fnode_pool);
     mod_memfs.family = FAMILY_FILE;
     strcpy(mod_memfs.name,"memfs");
 

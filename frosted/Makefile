@@ -98,6 +98,9 @@ CFLAGS += -DCONFIG_SPI3=$(CONFIG_SPI3)
 CFLAGS += -DCONFIG_DEVFRAMEBUFFER=$(CONFIG_DEVFRAMEBUFFER)
 CFLAGS += -DCONFIG_DEVFBCON=$(CONFIG_DEVFBCON)
 CFLAGS += -DCONFIG_DEVTTY_CONSOLE=$(CONFIG_DEVTTY_CONSOLE)
+ifneq ($(PHASE0_TRACE),)
+CFLAGS += -DCONFIG_PHASE0_TRACE=1
+endif
 # Enable FlashFS when requested.
 ifeq ($(CONFIG_FLASHFS),1)
 CFLAGS += -DCONFIG_FLASHFS=1
@@ -118,6 +121,7 @@ endif
 SRCS = startup_ns.c ns_main.c \
 	    bflt.c \
 		cirbuf.c \
+		pool.c \
 		device.c \
 		fpb.c \
 		mpu.c \

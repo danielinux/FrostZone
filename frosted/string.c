@@ -72,51 +72,36 @@ char *strcat(char *dest, const char *src)
 
 int strcmp(const char *s1, const char *s2)
 {
-    int diff = 0;
-
-    while (!diff && *s1) {
-        diff = (int)*s1 - (int)*s2;
+    while (*s1 && (*s1 == *s2)) {
         s1++;
         s2++;
     }
+    return (int)*(unsigned char *)s1 - (int)*(unsigned char *)s2;
+}
 
-    return diff;
+static inline int _tolower(int c)
+{
+    return (c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c;
 }
 
 int strcasecmp(const char *s1, const char *s2)
 {
-    int diff = 0;
-
-    while (!diff && *s1) {
-        diff = (int)*s1 - (int)*s2;
-
-        if ((diff == 'A' - 'a') || (diff == 'a' - 'A'))
-            diff = 0;
-
+    while (*s1 && (_tolower(*(unsigned char *)s1) == _tolower(*(unsigned char *)s2))) {
         s1++;
         s2++;
     }
-
-    return diff;
+    return _tolower(*(unsigned char *)s1) - _tolower(*(unsigned char *)s2);
 }
 
 int strncasecmp(const char *s1, const char *s2, size_t n)
 {
-    int diff = 0;
-    size_t i = 0;
-
-    while (!diff && *s1) {
-        diff = (int)*s1 - (int)*s2;
-
-        if ((diff == 'A' - 'a') || (diff == 'a' - 'A'))
-            diff = 0;
-
+    if (!n)
+        return 0;
+    while (--n && *s1 && (_tolower(*(unsigned char *)s1) == _tolower(*(unsigned char *)s2))) {
         s1++;
         s2++;
-        if (++i > n)
-            break;
     }
-    return diff;
+    return _tolower(*(unsigned char *)s1) - _tolower(*(unsigned char *)s2);
 }
 
 char *strncat(char *dest, const char *src, size_t n)

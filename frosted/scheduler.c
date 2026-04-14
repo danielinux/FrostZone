@@ -32,6 +32,7 @@ typedef void * _PTR;
 #include "sys/fcntl.h"
 #include "fpb.h"
 #include "frosted.h"
+#include "pool.h"
 #include "taskmem.h"
 
 /* Minimal libc */
@@ -316,10 +317,13 @@ struct filedesc {
     uint32_t flags;
 };
 
+#define CONFIG_MAX_FDS 16
+#define CONFIG_MAX_TASKS 16
+
 struct filedesc_table {
     uint32_t n_files;
     uint32_t usage_count;
-    struct filedesc *fdesc;
+    struct filedesc fdesc[CONFIG_MAX_FDS];
 };
 
 struct task_handler {
@@ -371,6 +375,7 @@ struct __attribute__((packed)) task_block {
     sigset_t sigmask;
     sigset_t sigpend;
     struct filedesc_table *filedesc_table;
+    int cur_fd;
     void *sp;
     void *osp;
     void *cur_stack;
@@ -385,6 +390,19 @@ struct __attribute__((packed)) task {
     uint32_t *stack;
     struct task_block tb;
 };
+
+POOL_DEFINE(task_pool, struct task, CONFIG_MAX_TASKS);
+POOL_DEFINE(ftable_pool, struct filedesc_table, CONFIG_MAX_TASKS);
+
+void *task_space_alloc(void)
+{
+    return pool_alloc(&task_pool);
+}
+
+void task_space_free(void *x)
+{
+    pool_free(&task_pool, x);
+}
 
 static struct task struct_task_kernel;
 static struct task *const kernel = (struct task *)(&struct_task_kernel);
@@ -628,7 +646,7 @@ static struct filedesc_table *ftable_create(struct task *t)
     struct filedesc_table *ft = t->tb.filedesc_table;
     if (ft)
         return ft;
-    ft = kcalloc(sizeof(struct filedesc_table), 1);
+    ft = pool_alloc(&ftable_pool);
     if (!ft)
         return NULL;
     ft->usage_count = 1;
@@ -641,9 +659,7 @@ static void ftable_destroy(struct task *t)
     struct filedesc_table *ft = t->tb.filedesc_table;
     if (ft) {
         if (--ft->usage_count == 0) {
-            if (ft->fdesc)
-                kfree(ft->fdesc);
-            kfree(ft);
+            pool_free(&ftable_pool, ft);
         }
     }
     t->tb.filedesc_table = NULL;
@@ -652,7 +668,6 @@ static void ftable_destroy(struct task *t)
 static int task_filedesc_add_to_task(struct task *t, struct fnode *f)
 {
     int i;
-    void *re;
     struct filedesc_table *ft = t->tb.filedesc_table;
     if (!t || !f)
         return -EINVAL;
@@ -660,18 +675,16 @@ static int task_filedesc_add_to_task(struct task *t, struct fnode *f)
     if (!ft)
         ft = ftable_create(t);
 
-    for (i = 0; i < ft->n_files; i++) {
+    for (i = 0; i < (int)ft->n_files; i++) {
         if (ft->fdesc[i].fno == NULL) {
             f->usage_count++;
             ft->fdesc[i].fno = f;
             return i;
         }
     }
+    if (ft->n_files >= CONFIG_MAX_FDS)
+        return -ENOMEM;
     ft->n_files++;
-    re = (void *)krealloc(ft->fdesc, ft->n_files * sizeof(struct filedesc));
-    if (!re)
-        return -1;
-    ft->fdesc = re;
     memset(&(ft->fdesc[ft->n_files - 1]), 0, sizeof(struct filedesc));
     ft->fdesc[ft->n_files - 1].fno = f;
     if (f->flags & FL_TTY) {
@@ -798,24 +811,32 @@ uint32_t task_fd_get_flags(int fd)
     return fdesc->flags;
 }
 
+void task_set_cur_fd(int fd)
+{
+    _cur_task->tb.cur_fd = fd;
+}
+
 uint32_t task_fd_set_off(struct fnode *fno, uint32_t off)
 {
     struct filedesc_table *ft;
     int fd;
-    int found = 0;
     ft = _cur_task->tb.filedesc_table;
     if (!ft)
         return 0;
 
-    /* Set offset to all instances of the file in the ft */
-    for (fd = 0; fd < ft->n_files; fd++) {
+    fd = _cur_task->tb.cur_fd;
+    if (fd >= 0 && fd < (int)ft->n_files && ft->fdesc[fd].fno == fno) {
+        ft->fdesc[fd].off = off;
+        return off;
+    }
+
+    /* Fallback: search by fnode (for callers that don't set cur_fd) */
+    for (fd = 0; fd < (int)ft->n_files; fd++) {
         if (ft->fdesc[fd].fno == fno) {
             ft->fdesc[fd].off = off;
-            found++;
+            return off;
         }
     }
-    if (found)
-        return off;
     return 0;
 }
 
@@ -827,7 +848,12 @@ uint32_t task_fd_get_off(struct fnode *fno)
     if (!ft)
         return 0;
 
-    for (fd = 0; fd < ft->n_files; fd++) {
+    fd = _cur_task->tb.cur_fd;
+    if (fd >= 0 && fd < (int)ft->n_files && ft->fdesc[fd].fno == fno)
+        return ft->fdesc[fd].off;
+
+    /* Fallback: search by fnode */
+    for (fd = 0; fd < (int)ft->n_files; fd++) {
         if (ft->fdesc[fd].fno == fno)
             return ft->fdesc[fd].off;
     }
@@ -902,16 +928,23 @@ int sys_dup2_hdlr(int fd, int newfd)
     if (newfd < 0)
         return -1;
     if (newfd == fd)
-        return -1;
+        return fd;
     if (!f)
         return -1;
 
-    /* TODO: create empty fnodes up until newfd */
-    if (newfd >= ft->n_files)
+    if (newfd >= CONFIG_MAX_FDS)
         return -1;
+    while ((int)ft->n_files <= newfd) {
+        memset(&(ft->fdesc[ft->n_files]), 0, sizeof(struct filedesc));
+        ft->n_files++;
+    }
     if (ft->fdesc[newfd].fno != NULL)
         task_filedesc_del(newfd);
+    f->usage_count++;
     ft->fdesc[newfd].fno = f;
+    ft->fdesc[newfd].mask = ft->fdesc[fd].mask;
+    ft->fdesc[newfd].flags = ft->fdesc[fd].flags;
+    ft->fdesc[newfd].off = ft->fdesc[fd].off;
     return newfd;
 }
 
@@ -1371,6 +1404,15 @@ static void task_create_real(struct task *new, void *arg, unsigned int nice)
         struct task *pt = tasklist_get(&tasks_idling, new->tb.ppid);
         if (!pt)
             pt = tasklist_get(&tasks_running, new->tb.ppid);
+
+        /* Copy argv to child's stack BEFORE restoring parent's stack,
+         * because arg points into the parent's stack which will be
+         * overwritten by the restore below.
+         */
+        new->tb.cur_stack = new->stack;
+        sp = (((uint8_t *)(new->stack)) + SCHEDULER_STACK_SIZE - 72);
+        new->tb.arg = task_pass_args(arg, new->tb.pid, &sp);
+
         if (pt) {
             /* Restore parent's stack and put it back in the schedule */
             memcpy(pt->stack, new->stack, SCHEDULER_STACK_SIZE);
@@ -1380,17 +1422,16 @@ static void task_create_real(struct task *new, void *arg, unsigned int nice)
         new->tb.flags &= (~TASK_FLAG_VFORK_CHILD);
     } else {
         new->stack = secure_mmap_stack(SCHEDULER_STACK_SIZE, new->tb.pid);
+        if (!new->stack)
+            return;
+
+        /* Base/Top of the stack memory */
+        new->tb.cur_stack = new->stack;
+        sp = (((uint8_t *)(new->stack)) + SCHEDULER_STACK_SIZE - 72);
+
+        /* Push the arguments at the top */
+        new->tb.arg = task_pass_args(arg, new->tb.pid, &sp);
     }
-    if (!new->stack)
-        return;
-
-    /* Base/Top of the stack memory */
-    new->tb.cur_stack = new->stack;
-    sp = (((uint8_t *)(new->stack)) + SCHEDULER_STACK_SIZE - 72);
-
-
-    /* Push the arguments at the top */
-    new->tb.arg = task_pass_args(arg, new->tb.pid, &sp);
 
     while(((uintptr_t)sp & 0x07) != 0)
         sp--;
@@ -1444,8 +1485,18 @@ int task_create(struct task_exec_info *exec_info, void *arg, unsigned int nice)
     if (new->tb.ppid > 1) { /* Start from parent #2 */
         new->tb.cwd = task_getcwd();
         for (i = 0; (ft) && (i < ft->n_files); i++) {
-            task_filedesc_add_to_task(new, ft->fdesc[i].fno);
-            new->tb.filedesc_table->fdesc[i].mask = ft->fdesc[i].mask;
+            if (!new->tb.filedesc_table)
+                ftable_create(new);
+            new->tb.filedesc_table->fdesc[i] = ft->fdesc[i];
+            if (ft->fdesc[i].fno) {
+                ft->fdesc[i].fno->usage_count++;
+                if (ft->fdesc[i].fno->flags & FL_TTY) {
+                    struct module *mod = ft->fdesc[i].fno->owner;
+                    if (mod && mod->ops.tty_attach)
+                        mod->ops.tty_attach(ft->fdesc[i].fno, new->tb.pid);
+                }
+            }
+            new->tb.filedesc_table->n_files = i + 1;
         }
     }
 
@@ -1508,8 +1559,18 @@ int sys_vfork_hdlr(void)
     /* Inherit cwd, file descriptors from parent */
     if (new->tb.ppid > 1) { /* Start from parent #2 */
         for (i = 0; (ft) && (i < ft->n_files); i++) {
-            task_filedesc_add_to_task(new, ft->fdesc[i].fno);
-            new->tb.filedesc_table->fdesc[i].mask = ft->fdesc[i].mask;
+            if (!new->tb.filedesc_table)
+                ftable_create(new);
+            new->tb.filedesc_table->fdesc[i] = ft->fdesc[i];
+            if (ft->fdesc[i].fno) {
+                ft->fdesc[i].fno->usage_count++;
+                if (ft->fdesc[i].fno->flags & FL_TTY) {
+                    struct module *mod = ft->fdesc[i].fno->owner;
+                    if (mod && mod->ops.tty_attach)
+                        mod->ops.tty_attach(ft->fdesc[i].fno, new->tb.pid);
+                }
+            }
+            new->tb.filedesc_table->n_files = i + 1;
         }
         /* Inherit signal mask */
         new->tb.sigmask = _cur_task->tb.sigmask;
@@ -2303,6 +2364,8 @@ void __naked pend_sv_handler(void)
 
 void kernel_task_init(void)
 {
+    pool_init(&task_pool);
+    pool_init(&ftable_pool);
     /* task0 = kernel */
     irq_off();
     kernel->tb.sp = msp_read(); // SP needs to be current SP
@@ -2702,7 +2765,7 @@ int sys_waitpid_hdlr(int pid, int *status , int options)
         t = tasklist_get(&tasks_running, pid);
         /* Check if pid is running, but it's not a child */
         if (t) {
-            if (t->tb.ppid != _cur_task->tb.ppid)
+            if (t->tb.ppid != _cur_task->tb.pid)
                 return -ESRCH;
             else {
                 if ((options & WNOHANG) != 0)
@@ -3395,7 +3458,13 @@ int __naked sv_call_handler(void)
     call(*a1, *a2, *a3, *a4, *a5);
 
     /* sys_exec uses r0 as args for main()*/
-    if (n_syscall != SYS_EXEC) {
+    if (n_syscall == SYS_VFORK) {
+        /* After vfork's stack swap, _cur_task->tb.sp points to the child's
+         * stack.  The parent's return value (child pid) was already written
+         * before the copy+swap.  Write 0 here so the child sees vfork()=0.
+         */
+        *((uint32_t *)(_cur_task->tb.sp + EXTRA_FRAME_SIZE)) = 0;
+    } else if (n_syscall != SYS_EXEC) {
         asm volatile(
             "mov %0, r0"
             : "=r"(*((uint32_t *)(_cur_task->tb.sp + EXTRA_FRAME_SIZE))));

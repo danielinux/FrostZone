@@ -232,7 +232,8 @@ static void history_load(void)
 static void history_init(void)
 {
     history_set_path();
-    history_load();
+    /* Disable history loading while debugging early shell startup. */
+    /* history_load(); */
 }
 
 static void history_reset_cursor(void)
@@ -391,6 +392,9 @@ static int builtin_source(char **args, int argc)
     return ret;
 }
 
+static int fresh_tty_trace_enabled = 0;
+static int fresh_prompt_trace_done = 0;
+
 /**
  * Function used to initialize our shell. We used the approach explained in
  * http://www.gnu.org/software/libc/manual/html_node/Initializing-the-Shell.html
@@ -400,6 +404,9 @@ void shell_init(char *file)
     int stdin_fileno, stdout_fileno, stderr_fileno;
 
     if (file) {
+        if (strcmp(file, "/dev/ttyS0") == 0) {
+            fresh_tty_trace_enabled = 1;
+        }
         close(0);
         close(1);
         close(2);
@@ -569,7 +576,6 @@ static int launchProg(char **args, int background)
         printf("stat: Command not found.\r\n");
         return 1;
     }
-
     child_pid = 0;
     pid = vfork();
 
@@ -1326,6 +1332,13 @@ static int parseLine(char *line)
     char *saveptr;
     int numTokens;
 
+    if (!line)
+        return 0;
+
+    /* Ignore script shebang lines without treating them as comments. */
+    if (line[0] == '#' && line[1] == '!')
+        return 0;
+
     /* Find inline comments */
     end = strchr(line, '#');
     if (end)
@@ -1367,6 +1380,7 @@ static int fresh_exec(char *arg0, char **argv)
     int fd;
     int r, count = 0;
     char *line, *eol;
+    int line_no = 0;
 
     if (stat(arg0, &st) < 0) {
         fprintf(stderr, "Error: cannot stat script %s\n", arg0);
@@ -1384,7 +1398,6 @@ static int fresh_exec(char *arg0, char **argv)
         free(script_mem);
         return 254;
     }
-
     while ((r = read(fd, script_mem + count, st.st_size - count)) > 0) {
         count += r;
     }
@@ -1398,6 +1411,7 @@ static int fresh_exec(char *arg0, char **argv)
     line = script_mem;
     r = 0;
     while (line) {
+        line_no++;
         eol = strchr(line, '\n');
         if (eol)
             *(eol++) = '\0';
@@ -1428,7 +1442,6 @@ int icebox_fresh(int argc, char *argv[])
 
     sigaction(SIGINT, &sigint_a, NULL);
     sigaction(SIGCHLD, &sigcld_a, NULL);
-
     /* Check for "-t" arg */
     if ((argc > 2) && (strcmp(argv[1], "-t") == 0)) {
         shell_init(argv[2]);
@@ -1453,6 +1466,9 @@ int icebox_fresh(int argc, char *argv[])
     fprintf(stdout, "Current pid = %d\r\n", getpid());
 
     while (1) {
+        if (fresh_tty_trace_enabled && !fresh_prompt_trace_done) {
+            fresh_prompt_trace_done = 1;
+        }
         if (no_reprint_prmpt == 0)
             shellPrompt();
         no_reprint_prmpt = 0;

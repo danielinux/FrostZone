@@ -3,6 +3,7 @@ CFLAGS?=
 CC?=arm-frosted-eabi-cc
 
 APPS-y:=tz_guard_demo
+APPS-$(APP_PHASE0_MEMFS)+=phase0_memfs
 
 BIN:=$(patsubst %,../out/%,$(APPS-y))
 OBJ:=$(patsubst %,%.o,$(APPS-y))

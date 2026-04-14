@@ -28,12 +28,16 @@
 #define TCPIP_UNLOCK() do {} while (0)
 #endif
 
+#define MAX_ADDRESS_FAMILIES 8
+
 struct address_family {
     struct module *mod;
     uint16_t family;
     struct address_family *next;
 };
 
+static struct address_family af_table[MAX_ADDRESS_FAMILIES];
+static int af_count = 0;
 struct address_family *AF = NULL;
 
 int register_module(struct module *m)
@@ -79,9 +83,9 @@ int register_addr_family(struct module *m, uint16_t family)
    struct address_family *af;
    if (af_to_module(family))
        return -1; /* Another module already claimed this AF */
-   af = kalloc(sizeof(struct address_family));
-   if (!af)
+   if (af_count >= MAX_ADDRESS_FAMILIES)
        return -1;
+   af = &af_table[af_count++];
    af->family = family;
    af->mod = m;
    af->next = AF;
@@ -104,6 +108,7 @@ int sys_read_hdlr(int fd, void *buf, int len)
 
     fno = task_filedesc_get(fd);
     if (fno && fno->owner->ops.read) {
+        task_set_cur_fd(fd);
         return fno->owner->ops.read(fno, buf, len);
     } else if (fno->owner && fno->owner->ops.recvfrom) {
         return fno->owner->ops.recvfrom(fd, buf, len, 0, NULL, NULL);
@@ -130,6 +135,7 @@ int sys_write_hdlr(int fd, void *buf, int len)
         return -ENOENT;
 
     if (fno->owner && fno->owner->ops.write) {
+        task_set_cur_fd(fd);
         return fno->owner->ops.write(fno, buf, len);
     } else if (fno->owner && fno->owner->ops.sendto) {
         return fno->owner->ops.sendto(fd, buf, len, 0, NULL, 0);

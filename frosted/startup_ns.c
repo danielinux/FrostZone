@@ -56,7 +56,15 @@ extern void pend_sv_handler(void);
 extern void sys_tick_handler(void);
 extern void secure_violation_handler(void);
 
-void debug_mon_handler(void) { while (1); }
+void debug_mon_handler(void)
+{
+    /* Skip past the BKPT instruction so execution can continue.
+     * The stacked PC points at the BKPT; advance it by 2 (Thumb).
+     */
+    register uint32_t *sp __asm("sp");
+    /* PC is at offset 6 words (r0-r3, r12, lr, pc, xpsr) in the exception frame */
+    sp[6] += 2;
+}
 
 void usb_irq_handler(void);
 #if defined(TARGET_stm32h563)

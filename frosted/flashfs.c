@@ -19,6 +19,7 @@
  */
 
 #include "frosted.h"
+#include "pool.h"
 #include "string.h"
 #include "locks.h"
 
@@ -51,10 +52,14 @@ struct __attribute__((packed)) flashfs_file_hdr {
     uint16_t fsize;
 };
 
+#define CONFIG_MAX_FLASHFS_FNODES 16
+
 struct flashfs_fnode {
     struct fnode *fno;
     uint32_t startpage;
 };
+
+POOL_DEFINE(flashfs_fnode_pool, struct flashfs_fnode, CONFIG_MAX_FLASHFS_FNODES);
 
 /* Bitmap in last flash page. Inverted logic (starts at 0xFFFFFFFF when formatted */
 static uint8_t *fs_bmp = (uint8_t *)PART_MAP_BASE + PART_SIZE - FLASH_PAGE_SIZE;
@@ -530,7 +535,7 @@ static int flashfs_creat(struct fnode *fno)
         }
     }
 
-    mfs = kalloc(sizeof(struct flashfs_fnode));
+    mfs = pool_alloc(&flashfs_fnode_pool);
     if (mfs) {
         mfs->fno = fno;
         mfs->startpage = first_page;
@@ -620,12 +625,12 @@ static int flashfs_mount(char *source, char *tgt, uint32_t flags, void *arg)
             if (hdr) {
                 fname = get_page_filename(page);
                 if (fname) {
-                    fpriv = kalloc(sizeof(struct flashfs_fnode));
+                    fpriv = pool_alloc(&flashfs_fnode_pool);
                     if (!fpriv)
                         return -ENOMEM;
                     fno = fno_create_raw(&mod_flashfs, fname, tgt_dir);
                     if (!fno) {
-                        kfree(fpriv);
+                        pool_free(&flashfs_fnode_pool, fpriv);
                         return -ENOMEM;
                     }
                     fno->priv = fpriv;
@@ -656,6 +661,7 @@ static int flashfs_mount_info(struct fnode *fno, char *buf, int len)
 
 void flashfs_init(void)
 {
+    pool_init(&flashfs_fnode_pool);
     mod_flashfs.family = FAMILY_FILE;
     strcpy(mod_flashfs.name,"flashfs");
     flashfs_lock = mutex_init();

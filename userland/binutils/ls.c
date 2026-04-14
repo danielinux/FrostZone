@@ -41,6 +41,18 @@ static char ls_abspath_buf[PATH_BUF];
 static char ls_fullpath_buf[PATH_BUF];
 static char ls_target_buf[PATH_BUF];
 
+static void emit_stdout(const char *text)
+{
+    size_t len = strlen(text);
+    while (len > 0) {
+        ssize_t wrote = write(STDOUT_FILENO, text, len);
+        if (wrote <= 0)
+            return;
+        text += wrote;
+        len -= (size_t)wrote;
+    }
+}
+
 static void format_size(char *buf, size_t len, off_t size, unsigned int flags)
 {
     if (flags & HUMANFLAG) {
@@ -60,12 +72,14 @@ static void print_entry(const char *name, const char *fullpath,
                         struct stat *st, unsigned int flags)
 {
     char size_buf[32] = "";
+    char line_buf[128];
     char type = '-';
-    size_t name_len;
-    size_t pad;
+    int line_len;
 
     if (!(flags & LONGFLAG)) {
-        printf("%s\n", name);
+        line_len = snprintf(line_buf, sizeof(line_buf), "%s\n", name);
+        if (line_len > 0)
+            emit_stdout(line_buf);
         return;
     }
 
@@ -88,15 +102,9 @@ static void print_entry(const char *name, const char *fullpath,
         format_size(size_buf, sizeof(size_buf), st->st_size, flags);
     }
 
-    printf("%s", name);
-    printf("  ");
-    name_len = strlen(name);
-    if (name_len < 30) {
-        pad = 30 - name_len;
-        while (pad--)
-            putchar(' ');
-    }
-    printf("%c  %s\n", type, size_buf);
+    line_len = snprintf(line_buf, sizeof(line_buf), "%-32s%c  %s\n", name, type, size_buf);
+    if (line_len > 0)
+        emit_stdout(line_buf);
 }
 
 static void build_path(char *out, size_t len, const char *dir, const char *entry)
@@ -244,6 +252,7 @@ static int list_directory(const char *path, unsigned int flags)
     long file_count = 0;
     long dir_count = 0;
     off_t total_bytes = 0;
+    int saw_entry = 0;
     DIR *d;
     struct dirent *ent;
     struct stat st;
@@ -259,6 +268,7 @@ static int list_directory(const char *path, unsigned int flags)
     }
 
     while ((ent = readdir(d)) != NULL) {
+        saw_entry = 1;
         if (!(flags & ALLFLAG) && ent->d_name[0] == '.')
             continue;
         build_path(ls_fullpath_buf, sizeof(ls_fullpath_buf), ls_abspath_buf, ent->d_name);
@@ -298,9 +308,9 @@ static int list_path(const char *path, unsigned int flags)
         fprintf(stderr, "ls: cannot access '%s': %s\n", path, strerror(errno));
         return -1;
     }
-
-    if (S_ISDIR(st.st_mode))
+    if (S_ISDIR(st.st_mode)) {
         return list_directory(path, flags);
+    }
 
     print_entry(path, ls_abspath_buf, &st, flags);
     return 0;
@@ -318,6 +328,9 @@ int icebox_ls(int argc, char *argv[])
     int targets;
     int i;
     extern int optind, optopt;
+
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
 
     while ((c = getopt(argc, argv, "ahl")) != -1) {
         switch (c) {
@@ -342,6 +355,8 @@ int icebox_ls(int argc, char *argv[])
         targets = 1;
         if (list_path(def, flags) != 0)
             status = 1;
+        fflush(stdout);
+        fflush(stderr);
         return status;
     }
 
@@ -355,5 +370,7 @@ int icebox_ls(int argc, char *argv[])
         if (targets > 1 && i != targets - 1)
             putchar('\n');
     }
+    fflush(stdout);
+    fflush(stderr);
     return status;
 }

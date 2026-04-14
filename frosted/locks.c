@@ -19,10 +19,15 @@
  */
 #include "frosted.h"
 #include "locks.h"
+#include "pool.h"
 #include "time.h"
 
 #define SIGN_MUTEX (0xCAFEC0C0)
 #define SIGN_SEMAP (0xCAFECAFE)
+
+#define CONFIG_MAX_MUTEXES 32
+POOL_DEFINE(mutex_pool, mutex_t, CONFIG_MAX_MUTEXES);
+static int mutex_pool_inited = 0;
 
 static int __attribute__((naked)) _mutex_lock(void *m) {
     __asm__ volatile (
@@ -219,8 +224,6 @@ int sem_post(sem_t *s)
 
 int sem_destroy(sem_t *sem)
 {
-    if (sem->listener)
-        kfree(sem->listener);
     kfree(sem);
     return 0;
 }
@@ -230,9 +233,8 @@ int sem_init(sem_t *s, int val)
     int i;
     s->signature = SIGN_SEMAP;
     s->value = val;
-    s->listeners = 8;
+    s->listeners = SEM_MAX_LISTENERS;
     s->last = -1;
-    s->listener = kalloc(sizeof(struct task *) * (s->listeners + 1));
     for (i = 0; i < s->listeners; i++)
         s->listener[i] = NULL;
 
@@ -307,14 +309,18 @@ int suspend_on_sem_wait(sem_t *s)
 /* Mutex: API */
 mutex_t *mutex_init()
 {
-    mutex_t *s = kalloc(sizeof(mutex_t));
+    int i;
+    mutex_t *s;
+    if (!mutex_pool_inited) {
+        pool_init(&mutex_pool);
+        mutex_pool_inited = 1;
+    }
+    s = pool_alloc(&mutex_pool);
     if (s) {
-        int i;
         s->signature = SIGN_MUTEX;
         s->value = 1; /* Unlocked. */
-        s->listeners = 8;
+        s->listeners = SEM_MAX_LISTENERS;
         s->last = -1;
-        s->listener = kalloc(sizeof(struct task *) * (s->listeners + 1));
         for (i = 0; i < s->listeners; i++)
             s->listener[i] = NULL;
     }
@@ -323,9 +329,7 @@ mutex_t *mutex_init()
 
 void mutex_destroy(mutex_t *s)
 {
-    if (s->listener)
-        kfree(s->listener);
-    kfree(s);
+    pool_free(&mutex_pool, s);
 }
 
 static int mutex_spinlock(mutex_t *s)

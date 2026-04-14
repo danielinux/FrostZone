@@ -1,13 +1,16 @@
 #include "frosted.h"
 #ifndef LOCKS_H
 #define LOCKS_H
+
+#define SEM_MAX_LISTENERS 8
+
 /* Structures */
 struct semaphore {
     int value;
     uint32_t signature;
     int listeners;
     int last;
-    struct task **listener;
+    struct task *listener[SEM_MAX_LISTENERS];
 };
 
 

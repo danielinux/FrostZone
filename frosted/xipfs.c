@@ -17,7 +17,7 @@
  *      Authors:
  *
  */
- 
+
 #include "frosted.h"
 #include <string.h>
 #include "bflt.h"
@@ -25,59 +25,85 @@
 #include "sys/fs/xipfs.h"
 #define GDB_PATH "frosted-userland/gdb/"
 
-static struct fnode *xipfs;
 static struct module mod_xipfs;
+volatile int phase0_bflt_trace_tag;
 
-struct xipfs_fnode {
-    struct fnode *fnode;
-    void (*init)(void *);
-};
-
-static volatile int xipfs_dbg_offset;
-static volatile uint32_t xipfs_dbg_magic;
-static volatile uint32_t xipfs_dbg_len;
-static volatile uintptr_t xipfs_dbg_payload;
-
+/*
+ * Lazy xipfs: mount is O(1).  The blob pointer is stored in the
+ * mount-point fnode's ->priv.  Individual files are looked up by
+ * scanning the FAT on demand.  File fnodes store the payload pointer
+ * directly in ->priv (no intermediate xipfs_fnode struct).
+ */
 
 #define SECTOR_SIZE (512)
 
+/* Helper: get the blob pointer from a file's parent (the mount dir) */
+static const uint8_t *xipfs_blob(struct fnode *fno)
+{
+    if (fno->parent)
+        return (const uint8_t *)fno->parent->priv;
+    return NULL;
+}
+
+/* Helper: scan FAT for entry at given index.  Returns offset to fhdr, or -1. */
+static int xipfs_fat_offset(const uint8_t *blob, int idx)
+{
+    const struct xipfs_fat *fat = (const struct xipfs_fat *)blob;
+    const struct xipfs_fhdr *f;
+    int i;
+    int offset;
+
+    if (!fat || idx < 0 || idx >= (int)fat->fs_files)
+        return -1;
+
+    offset = sizeof(struct xipfs_fat);
+    for (i = 0; i < idx; i++) {
+        f = (const struct xipfs_fhdr *)(blob + offset);
+        if (f->magic == XIPFS_MAGIC)
+            offset += f->len + sizeof(struct xipfs_fhdr);
+        else
+            offset += sizeof(struct xipfs_fhdr);
+        while ((offset % 4) != 0)
+            offset++;
+    }
+    return offset;
+}
+
 static int xipfs_read(struct fnode *fno, void *buf, unsigned int len)
 {
-    struct xipfs_fnode *xfno;
+    void *payload;
     uint32_t off = task_fd_get_off(fno);
     if (len <= 0)
         return len;
 
-    xfno = FNO_MOD_PRIV(fno, &mod_xipfs);
-    if (!xfno)
+    payload = FNO_MOD_PRIV(fno, &mod_xipfs);
+    if (!payload)
         return -1;
 
-    if (fno->size <= (off))
+    if (fno->size <= off)
         return -1;
 
     if (len > (fno->size - off))
         len = fno->size - off;
 
-    memcpy(buf, ((char *)xfno->init) + off, len);
+    memcpy(buf, (char *)payload + off, len);
     off += len;
-    task_fd_set_off(fno,off);
+    task_fd_set_off(fno, off);
     return len;
 }
 
 static int xipfs_block_read(struct fnode *fno, void *buf, uint32_t sector, int offset, int count)
 {
     uint32_t off = sector * SECTOR_SIZE + offset;
-    task_fd_set_off(fno,off);
+    task_fd_set_off(fno, off);
     if (off > fno->size) {
-        task_fd_set_off(fno,0);
+        task_fd_set_off(fno, 0);
         return -1;
     }
     if (xipfs_read(fno, buf, count) == count)
         return 0;
     return -1;
 }
-
-
 
 static int xipfs_write(struct fnode *fno, const void *buf, unsigned int len)
 {
@@ -102,12 +128,11 @@ static int xipfs_close(struct fnode *fno)
 static int xipfs_creat(struct fnode *fno)
 {
     return -1;
-
 }
 
 static int xipfs_exe(struct fnode *fno, void *arg, struct task_exec_info *info)
 {
-    struct xipfs_fnode *xip = (struct xipfs_fnode *)fno->priv;
+    void *payload = fno->priv;
     void *reloc_text, *reloc_data, *reloc_bss;
     size_t stack_size;
     void *init = NULL;
@@ -115,17 +140,29 @@ static int xipfs_exe(struct fnode *fno, void *arg, struct task_exec_info *info)
     void *got_loc;
     memset(info, 0, sizeof(struct task_exec_info));
 
-    if (!xip)
+    if (!payload)
         return -1;
 
-    /* note: xip->init is bFLT load address! */
-    if (bflt_load((uint8_t*)xip->init, &reloc_text, &reloc_data, &reloc_bss, &init, &stack_size, (uint32_t *)&got_loc, &text_size, &data_size))
+    if (strcmp(fno->fname, "fresh") == 0)
+        phase0_bflt_trace_tag = 1;
+    else if (strcmp(fno->fname, "phase0_memfs") == 0)
+        phase0_bflt_trace_tag = 2;
+    else
+        phase0_bflt_trace_tag = 0;
+
+    /* payload is the bFLT load address */
+    if (bflt_load((uint8_t *)payload, &reloc_text, &reloc_data, &reloc_bss,
+                  &init, &stack_size, (uint32_t *)&got_loc, &text_size, &data_size))
     {
+        phase0_bflt_trace_tag = 0;
         kprintf("xipfs: bFLT loading failed.\n");
         return -1;
     }
 
-    kprintf("xipfs: GDB: add-symbol-file %s%s.gdb 0x%p -s .data 0x%p -s .bss 0x%p\n", GDB_PATH, fno->fname, reloc_text, reloc_data, reloc_bss);
+    phase0_bflt_trace_tag = 0;
+
+    kprintf("xipfs: GDB: add-symbol-file %s%s.gdb 0x%p -s .data 0x%p -s .bss 0x%p\n",
+            GDB_PATH, fno->fname, reloc_text, reloc_data, reloc_bss);
 
     info->init = init;
     info->flags |= EXEC_TYPE_BFLT;
@@ -141,60 +178,100 @@ static int xipfs_unlink(struct fnode *fno)
     return -1; /* Cannot unlink */
 }
 
-static int xip_add(const char *name, const void (*init), uint32_t size)
+/*
+ * Lazy lookup: scan the FAT for a file by name.
+ * Creates an fnode on demand from the static pool.
+ * For ICELINK entries, creates a symlink to /bin/icebox.
+ */
+static struct fnode *xipfs_lookup(struct fnode *dir, const char *name)
 {
-    struct xipfs_fnode *xip = kalloc(sizeof(struct xipfs_fnode));
-    if (!xip)
-        return -1;
-    xip->fnode = fno_create(&mod_xipfs, name, fno_search("/bin"));
-    if (!xip->fnode) {
-        kfree(xip);
-        return -1;
-    }
-    xip->fnode->priv = xip;
-
-    /* Make executable */
-    xip->fnode->flags |= FL_EXEC;
-    xip->fnode->size = size;
-    xip->init = init;
-    return 0;
-}
-
-static int xipfs_parse_blob(const uint8_t *blob)
-{
-    const struct xipfs_fat *fat = (const struct xipfs_fat *)blob;
+    const uint8_t *blob = (const uint8_t *)dir->priv;
+    const struct xipfs_fat *fat;
     const struct xipfs_fhdr *f;
+    struct fnode *fno;
     int i, offset;
-    if (!fat)
-        return -1;
 
+    if (!blob)
+        return NULL;
+
+    fat = (const struct xipfs_fat *)blob;
     offset = sizeof(struct xipfs_fat);
-    for (i = 0; i < fat->fs_files; i++) {
-        f = (const struct xipfs_fhdr *) (blob + offset);
-        xipfs_dbg_offset = offset;
-        xipfs_dbg_magic = f->magic;
-        xipfs_dbg_len = f->len;
-        xipfs_dbg_payload = (uintptr_t)f->payload;
+
+    for (i = 0; i < (int)fat->fs_files; i++) {
+        f = (const struct xipfs_fhdr *)(blob + offset);
         if ((f->magic != XIPFS_MAGIC) && (f->magic != XIPFS_MAGIC_ICELINK))
-            return -1;
-        if (f->magic == XIPFS_MAGIC) {
-            xip_add(f->name, f->payload, f->len);
-            offset += f->len + sizeof(struct xipfs_fhdr);
-        } else {
-            char fullname[64] = "/bin/";
-            strcpy(fullname + 5, f->name);
-            vfs_symlink("/bin/icebox", fullname);
-            offset += sizeof(struct xipfs_fhdr);
+            return NULL;
+
+        if (strcmp(f->name, name) == 0) {
+            if (f->magic == XIPFS_MAGIC) {
+                /* Regular executable: create fnode with payload ptr */
+                fno = fno_create(&mod_xipfs, name, dir);
+                if (!fno)
+                    return NULL;
+                fno->priv = (void *)f->payload;
+                fno->flags |= FL_EXEC;
+                fno->size = f->len;
+                return fno;
+            } else {
+                /* ICELINK: create symlink to /bin/icebox */
+                fno = fno_create(&mod_xipfs, name, dir);
+                if (!fno)
+                    return NULL;
+                fno->flags |= FL_LINK;
+                strncpy(fno->linkname, "/bin/icebox", MAX_FILE - 1);
+                fno->linkname[MAX_FILE - 1] = '\0';
+                return fno;
+            }
         }
+
+        if (f->magic == XIPFS_MAGIC)
+            offset += f->len + sizeof(struct xipfs_fhdr);
+        else
+            offset += sizeof(struct xipfs_fhdr);
         while ((offset % 4) != 0)
             offset++;
     }
+    return NULL;
+}
+
+/*
+ * Lazy readdir: walk the FAT using cursor as the file index.
+ * Returns 0 on success, -1 when no more entries.
+ */
+static int xipfs_readdir(struct fnode *dir, uint32_t *cursor, struct dirent *ep)
+{
+    const uint8_t *blob = (const uint8_t *)dir->priv;
+    const struct xipfs_fat *fat;
+    const struct xipfs_fhdr *f;
+    int offset;
+
+    if (!blob)
+        return -1;
+
+    fat = (const struct xipfs_fat *)blob;
+    if (*cursor >= fat->fs_files)
+        return -1;
+
+    offset = xipfs_fat_offset(blob, *cursor);
+    if (offset < 0)
+        return -1;
+
+    f = (const struct xipfs_fhdr *)(blob + offset);
+    if ((f->magic != XIPFS_MAGIC) && (f->magic != XIPFS_MAGIC_ICELINK))
+        return -1;
+
+    ep->d_ino = 0;
+    strncpy(ep->d_name, f->name, sizeof(ep->d_name));
+    ep->d_name[sizeof(ep->d_name) - 1] = '\0';
+    (*cursor)++;
     return 0;
 }
 
 static int xipfs_mount(char *source, char *tgt, uint32_t flags, void *arg)
 {
     struct fnode *tgt_dir = NULL;
+    const struct xipfs_fat *fat;
+
     /* Source must NOT be NULL */
     if (!source)
         return -1;
@@ -204,16 +281,19 @@ static int xipfs_mount(char *source, char *tgt, uint32_t flags, void *arg)
         return -1;
 
     tgt_dir = fno_search(tgt);
-
-    if (!tgt_dir || ((tgt_dir->flags & FL_DIR) == 0)) {
-        /* Not a valid mountpoint. */
+    if (!tgt_dir || ((tgt_dir->flags & FL_DIR) == 0))
         return -1;
-    }
 
+    /* Validate the FAT header */
+    fat = (const struct xipfs_fat *)source;
+    if (fat->fs_magic != XIPFS_MAGIC)
+        return -1;
+    if (!fat->fs_files && !fat->fs_size)
+        return -1;
+
+    /* O(1) mount: just store the blob pointer */
     tgt_dir->owner = &mod_xipfs;
-    if (xipfs_parse_blob((uint8_t *)source) < 0)
-        return -1;
-
+    tgt_dir->priv = source;
     return 0;
 }
 
@@ -222,8 +302,8 @@ static int xipfs_mount_info(struct fnode *fno, char *buf, int len)
     const char desc[] = "Applications and executables in bFLT format";
     if (len < 0)
         return -1;
-    strncpy(buf,desc,len);
-    if (len > strlen(desc)) {
+    strncpy(buf, desc, len);
+    if (len > (int)strlen(desc)) {
         len = strlen(desc);
         buf[len++] = 0;
     } else
@@ -236,7 +316,7 @@ void xipfs_init(void)
 {
     mod_xipfs.family = FAMILY_FILE;
     mod_xipfs.mount = xipfs_mount;
-    strcpy(mod_xipfs.name,"xipfs");
+    strcpy(mod_xipfs.name, "xipfs");
     mod_xipfs.mount_info = xipfs_mount_info;
     mod_xipfs.ops.read = xipfs_read;
     mod_xipfs.ops.poll = xipfs_poll;
@@ -246,7 +326,8 @@ void xipfs_init(void)
     mod_xipfs.ops.unlink = xipfs_unlink;
     mod_xipfs.ops.close = xipfs_close;
     mod_xipfs.ops.exe = xipfs_exe;
-
     mod_xipfs.ops.block_read = xipfs_block_read;
+    mod_xipfs.ops.lookup = xipfs_lookup;
+    mod_xipfs.ops.readdir = xipfs_readdir;
     register_module(&mod_xipfs);
 }

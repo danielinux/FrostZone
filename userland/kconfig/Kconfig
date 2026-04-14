@@ -202,6 +202,10 @@ menu "Test suites"
             default y
     endif
 
+    config APP_PHASE0_MEMFS
+        bool "Phase 0 memfs harness"
+        default n
+
     menuconfig HWTESTS
     bool "Hardware test suite"
     default n

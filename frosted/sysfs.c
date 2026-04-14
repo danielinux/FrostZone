@@ -19,11 +19,15 @@
  */
  
 #include "frosted.h"
+#include "pool.h"
 #include "string.h"
 #include "gpio.h"
 #include "lowpower.h"
 
 #define MAX_SYSFS_BUFFER 1024
+#define CONFIG_MAX_SYSFS_FNODES 16
+
+POOL_DEFINE(sysfs_fnode_pool, struct sysfs_fnode, CONFIG_MAX_SYSFS_FNODES);
 
 static struct fnode *sysfs;
 static struct module mod_sysfs;
@@ -675,6 +679,8 @@ int sysfs_mtab_read(struct sysfs_fnode *sfs, void *buf, int len)
                 l = m->target->owner->mount_info(m->target, mem_txt + off, MAX_SYSFS_BUFFER - off);
             }
             if (l > 0) {
+                if (mem_txt[off + l - 1] == '\0')
+                    l--;
                 off += l;
             } else {
                 strcpy(mem_txt + off, "None");
@@ -723,7 +729,7 @@ int sysfs_register(char *name, char *dir,
     if (!fno)
         return -1;
 
-    mfs = kalloc(sizeof(struct sysfs_fnode));
+    mfs = pool_alloc(&sysfs_fnode_pool);
     if (mfs) {
         mfs->fnode = fno;
         fno->priv = mfs;
@@ -790,6 +796,7 @@ static int sysfs_mount_info(struct fnode *fno, char *buf, int len)
 
 void sysfs_init(void)
 {
+    pool_init(&sysfs_fnode_pool);
     mod_sysfs.family = FAMILY_FILE;
     strcpy(mod_sysfs.name, "sysfs");
 

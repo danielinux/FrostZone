@@ -141,6 +141,7 @@ uint32_t task_fd_set_flags(int fd, uint32_t flags);
 uint32_t task_fd_get_flags(int fd);
 uint32_t task_fd_set_off(struct fnode *fno, uint32_t off);
 uint32_t task_fd_get_off(struct fnode *fno);
+void task_set_cur_fd(int fd);
 struct fnode *task_filedesc_get(int fd);
 #define FAULT_TYPE_MPU 0x01
 #define FAULT_TYPE_BUS 0x02
@@ -255,10 +256,15 @@ void fno_use(struct fnode *f);
 #endif
 
 
+#define CONFIG_MAX_FNAME 32
+#define CONFIG_MAX_FNODES 128
+#define CONFIG_MAX_MOUNTS 8
+#define CONFIG_MAX_DEVICES 16
+
 struct fnode {
     struct module *owner;
-    char *fname;
-    char *linkname;
+    char fname[CONFIG_MAX_FNAME];
+    char linkname[MAX_FILE];
     uint32_t flags;
     struct fnode *parent;
     struct fnode *children;
@@ -360,6 +366,10 @@ struct module {
         int (*block_read)(struct fnode *fno, void *buf, uint32_t sector, int offset, int count);
         int (*block_write)(struct fnode *fno, const void *buf, uint32_t sector, int offset, int count);
 
+        /* Lazy VFS: on-demand directory enumeration */
+        struct fnode *(*lookup)(struct fnode *dir, const char *name);
+        int (*readdir)(struct fnode *dir, uint32_t *cursor, struct dirent *entry);
+
     } ops;
     struct module *next;
 };
@@ -374,8 +384,9 @@ void *kcalloc(uint32_t nmemb, uint32_t size);
 void *krealloc(void *ptr, uint32_t size);
 void kfree(void *ptr);
 
-#define task_space_alloc() kalloc(sizeof(struct task))
-#define task_space_free(x) kfree(x)
+/* task_space_alloc/free: implemented via static pool in scheduler.c */
+void *task_space_alloc(void);
+void task_space_free(void *x);
 
 int mem_lock(void);
 int mem_trylock(void);

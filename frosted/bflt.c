@@ -21,6 +21,7 @@
 #include "flat.h"
 #include "string.h"
 
+extern volatile int phase0_bflt_trace_tag;
 
 
 #ifndef kprintf
@@ -83,19 +84,24 @@ static unsigned long * calc_reloc(uint8_t * base, uint32_t offset)
     return (unsigned long *)(base + (offset & 0x00FFFFFFu));
 }
 
-static int process_got_relocs(struct flat_hdr * hdr, uint8_t * base, uint8_t * got_start)
+static int process_got_relocs(struct flat_hdr *hdr, uint8_t *base, uint8_t *got_start)
 {
     /*
      * Addresses in header are relative to start of FILE (so including flat_hdr)
      * Addresses in the relocs are relative to start of .text (so excluding flat_hdr)
      */
-    unsigned long * rp = (unsigned long * )got_start;
+    unsigned long *rp = (unsigned long *)got_start;
     unsigned long data_start = long_be(hdr->data_start) - sizeof(struct flat_hdr);
     unsigned long bss_end = long_be(hdr->bss_end) - sizeof(struct flat_hdr);
     uint8_t * text_start_dest = base + sizeof(struct flat_hdr);
     uint8_t * data_start_dest = got_start;
+    unsigned long got_words = (long_be(hdr->data_end) - long_be(hdr->data_start))
+                              / sizeof(unsigned long);
+    unsigned long idx;
 
-    for (rp; *rp != 0xffffffff; rp++) {
+    for (idx = 0; idx < got_words; idx++, rp++) {
+        if (*rp == 0xffffffff)
+            return 0;
         if (*rp) {
             unsigned long addr = RELOC_FAILED;
             if (*rp < data_start) {
@@ -114,7 +120,8 @@ static int process_got_relocs(struct flat_hdr * hdr, uint8_t * base, uint8_t * g
             *rp = addr;
         }
     }
-    return 0;
+    kprintf("bFLT: GOT terminator missing from data segment\r\n");
+    return -1;
 }
 
 /* works only for FLAT v4 */
@@ -316,7 +323,6 @@ int bflt_load(uint8_t* from, void **reloc_text, void **reloc_data, void **reloc_
         goto error;
     }
 
-
     /*
      * We just load the allocations into some temporary memory to
      * help simplify all this mumbo jumbo
@@ -330,7 +336,7 @@ int bflt_load(uint8_t* from, void **reloc_text, void **reloc_data, void **reloc_
      * image.
      */
 
-    /* init relocations */
+        /* init relocations */
     if (flags & FLAT_FLAG_GOTPIC) {
         //printf("GOT-PIC!\n");
         if (process_got_relocs(&hdr, address_zero, data_dest)) // .data section is beginning of GOT
@@ -341,7 +347,9 @@ int bflt_load(uint8_t* from, void **reloc_text, void **reloc_data, void **reloc_
     /*
      * Now run through the relocation entries.
      */
-    process_relocs(&hdr, (unsigned long*)address_zero, (uint32_t)data_dest, (unsigned long *)relocs_src, relocs);
+    if (process_relocs(&hdr, (unsigned long *)address_zero, (uint32_t)data_dest,
+                       (unsigned long *)relocs_src, relocs) != 0)
+        goto error;
 
     return 0;
 
@@ -354,4 +362,3 @@ error:
     kprintf("bFLT: Caught error - exiting\r\n");
     return -1;
 }
-

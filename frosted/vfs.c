@@ -57,6 +57,7 @@ int ksnprintf(char *buf, size_t size, const char *fmt, ...) {
 }
 
 #include "frosted.h"
+#include "pool.h"
 #include "string.h"
 #include "stat.h"
 #include "fcntl.h"
@@ -64,6 +65,9 @@ int ksnprintf(char *buf, size_t size, const char *fmt, ...) {
 
 #define O_MODE(o) ((o & O_ACCMODE))
 #define O_BLOCKING(f) ((f->flags & O_NONBLOCK) == 0)
+
+POOL_DEFINE(fnode_pool, struct fnode, CONFIG_MAX_FNODES);
+POOL_DEFINE(mountpoint_pool, struct mountpoint, CONFIG_MAX_MOUNTS);
 
 struct mountpoint *MTAB = NULL;
 
@@ -177,15 +181,12 @@ static int path_abs(char *src, char *dst, int len)
 
 static struct fnode *fno_create_file(char *path)
 {
-    char *base = kalloc(strlen(path) + 1);
+    char base[MAX_FILE];
     struct module *owner = NULL;
     struct fnode *parent;
     struct fnode *f = NULL;
-    if (!base)
-        return NULL;
-    basename_r(path, base, strlen(path) + 1);
+    basename_r(path, base, MAX_FILE);
     parent = fno_search(base);
-    kfree(base);
     if (!parent)
         return NULL;
     if ((parent->flags & FL_DIR) == 0)
@@ -222,12 +223,12 @@ static struct fnode *fno_link(char *src, char *dst)
     file_name_len = strlen(p_src);
 
     link->flags |= FL_LINK;
-    link->linkname = kalloc(file_name_len + 1);
-    if (!link->linkname) {
+    if (file_name_len >= MAX_FILE) {
         fno_unlink(link);
         return NULL;
     }
-    strncpy(link->linkname, p_src, file_name_len + 1);
+    strncpy(link->linkname, p_src, MAX_FILE - 1);
+    link->linkname[MAX_FILE - 1] = '\0';
     return link;
 }
 
@@ -253,11 +254,12 @@ static void mkdir_links(struct fnode *fno)
     }
 }
 
-static struct fnode *fno_create_dir(char *path, uint32_t flags)
+static struct fnode *fno_create_dir(char *path, uint32_t mode)
 {
     struct fnode *fno = fno_create_file(path);
+    (void)mode;
     if (fno) {
-        fno->flags |= (FL_DIR | flags);
+        fno->flags |= FL_DIR;
     }
     mkdir_links(fno);
     return fno;
@@ -354,23 +356,41 @@ static struct fnode *_fno_search(const char *path, struct fnode *dir, int follow
         ksnprintf(link, MAX_FILE, "%s/%s", dir->linkname, walk ? walk : "");
         return _fno_search(link, &FNO_ROOT, follow);
     }
-    return _fno_search(path_walk(path), dir->children, follow);
+    {
+        const char *rest = path_walk(path);
+        struct fnode *result = _fno_search(rest, dir->children, follow);
+        if (!result && rest && dir->owner && dir->owner->ops.lookup) {
+            /* Extract next path component name */
+            char name[CONFIG_MAX_FNAME];
+            int i = 0;
+            while (rest[i] && rest[i] != '/' && i < CONFIG_MAX_FNAME - 1) {
+                name[i] = rest[i];
+                i++;
+            }
+            name[i] = '\0';
+            result = dir->owner->ops.lookup(dir, name);
+            if (result && follow && ((result->flags & FL_LINK) == FL_LINK)) {
+                return _fno_search(result->linkname, &FNO_ROOT, 1);
+            }
+            if (result && rest[i] == '/') {
+                /* More path to walk */
+                result = _fno_search(path_walk(rest), result->children, follow);
+            }
+        }
+        return result;
+    }
 }
 
 struct fnode *fno_search(const char *_path)
 {
     int i, len;
     struct fnode *fno = NULL;
-    char *path = NULL;
+    char path[MAX_FILE];
     if (!_path)
         return NULL;
 
     len = strlen(_path);
-    if (!len)
-        return NULL;
-
-    path = kcalloc(len + 1, 1);
-    if (!path)
+    if (!len || len >= MAX_FILE)
         return NULL;
 
     memcpy(path, _path, len + 1);
@@ -386,7 +406,6 @@ struct fnode *fno_search(const char *_path)
     if (strlen(path) > 0) {
         fno = _fno_search(path, &FNO_ROOT, 1);
     }
-    kfree(path);
     return fno;
 }
 
@@ -397,14 +416,13 @@ struct fnode *fno_search_nofollow(const char *path)
 
 static struct fnode *_fno_create(struct module *owner, const char *name, struct fnode *parent)
 {
-    struct fnode *fno = kcalloc(sizeof(struct fnode), 1);
+    struct fnode *fno = pool_alloc(&fnode_pool);
     int nlen = strlen(name);
     if (!fno)
         return NULL;
 
-    fno->fname = kalloc(nlen + 1);
-    if (!fno->fname){
-        kfree(fno);
+    if (nlen >= CONFIG_MAX_FNAME) {
+        pool_free(&fnode_pool, fno);
         return NULL;
     }
 
@@ -495,8 +513,7 @@ void fno_unlink(struct fnode *fno)
     }
 
 
-    kfree(fno->fname);
-    kfree(fno);
+    pool_free(&fnode_pool, fno);
 }
 
 int sys_readlink_hdlr(char *path, char *buf, size_t size)
@@ -531,7 +548,6 @@ int sys_exec_hdlr(char *path, char *arg)
 {
     struct fnode *f;
     struct task_exec_info exe_info = {};
-
 
     if (!path || !arg)
         return -EFAULT;
@@ -572,6 +588,7 @@ int sys_open_hdlr(char *rel_path, uint32_t flags, uint32_t perm)
         if (ret >= 0) {
             task_fd_setmask(ret, flags);
             task_fd_set_flags(ret, flags);
+            task_set_cur_fd(ret);
             task_fd_set_off(f, 0);
         }
         return ret;
@@ -607,6 +624,7 @@ int sys_open_hdlr(char *rel_path, uint32_t flags, uint32_t perm)
                 if (ret >= 0) {
                     task_fd_setmask(ret, flags);
                     task_fd_set_flags(ret, flags);
+                    task_set_cur_fd(ret);
                     task_fd_set_off(f, 0);
                 }
                 return ret;
@@ -622,6 +640,7 @@ int sys_open_hdlr(char *rel_path, uint32_t flags, uint32_t perm)
     ret = task_filedesc_add(f);
     task_fd_setmask(ret, flags);
     task_fd_set_flags(ret,flags);
+    task_set_cur_fd(ret);
     task_fd_set_off(f, 0);
     if (flags & O_APPEND)
         task_fd_set_off(f, f->size);
@@ -644,6 +663,7 @@ int sys_seek_hdlr(int fd, int off, int whence)
     if (!fno)
         return -EINVAL;
     if (fno->owner && fno->owner->ops.seek) {
+        task_set_cur_fd(fd);
         return fno->owner->ops.seek(fno, off, whence);
     } else return -EOPNOTSUPP;
 }
@@ -736,9 +756,13 @@ int sys_opendir_hdlr(char *path)
             return (int)NULL;
         fd = task_filedesc_add(fno);
         /* Rewind pointer to the beginning of the
-         * list of children, set IN_USE flag
+         * list of children, set IN_USE flag.
+         * For lazy FS (readdir op), dir_ptr starts at 0.
          */
-        fno->dir_ptr = (int)fno->children;
+        if (fno->owner && fno->owner->ops.readdir)
+            fno->dir_ptr = 0;
+        else
+            fno->dir_ptr = (int)fno->children;
         fno->flags |= FL_INUSE;
         return fd;
     } else {
@@ -750,8 +774,6 @@ int sys_readdir_hdlr(void *dir_obj, struct dirent *ep)
 {
     struct fnode *fno;
     struct fnode *next;
-    struct filedesc_table *ft;
-    int i;
     int fd;
 
     fd = (int)(dir_obj);
@@ -764,6 +786,13 @@ int sys_readdir_hdlr(void *dir_obj, struct dirent *ep)
         return -ENOENT;
     if ((fno->flags & FL_DIR) == 0)
         return -ENOENT;
+
+    /* Lazy FS with readdir op: iterate on-storage entries directly */
+    if (fno->owner && fno->owner->ops.readdir) {
+        return fno->owner->ops.readdir(fno, &fno->dir_ptr, ep);
+    }
+
+    /* Default: walk fnode children linked list */
     next = (struct fnode *)fno->dir_ptr;
     if (!next) {
         return -1;
@@ -1030,7 +1059,7 @@ int vfs_mount(char *source, char *target, char *module, uint32_t flags, void *ar
     if (!m || !m->mount)
         return -EOPNOTSUPP;
     if (m->mount(source, target, flags, args) == 0) {
-        struct mountpoint *mp = kalloc(sizeof(struct mountpoint));
+        struct mountpoint *mp = pool_alloc(&mountpoint_pool);
         if (mp) {
             mp->target = fno_search(target);
             mp->next = MTAB;
@@ -1063,7 +1092,7 @@ int vfs_umount(char *target, uint32_t flags)
             } else {
                 prev->next = mp->next;
             }
-            kfree(mp);
+            pool_free(&mountpoint_pool, mp);
             break;
         }
         prev = mp;
@@ -1105,9 +1134,15 @@ int sys_fcntl_hdlr(int fd, int cmd, uint32_t fl_set)
 void vfs_init(void)
 {
     struct fnode *dev = NULL;
+    extern void device_pool_init(void);
+    pool_init(&fnode_pool);
+    pool_init(&mountpoint_pool);
+    device_pool_init();
+
     /* Initialize "/" */
     FNO_ROOT.owner = NULL;
-    FNO_ROOT.fname = "/";
+    FNO_ROOT.fname[0] = '/';
+    FNO_ROOT.fname[1] = '\0';
     FNO_ROOT.parent = &FNO_ROOT;
     FNO_ROOT.children = NULL;
     FNO_ROOT.next = NULL ;
@@ -1131,4 +1166,3 @@ void vfs_init(void)
     /* Init "/var" dir */
     fno_mkdir(NULL, "var", NULL);
 }
-

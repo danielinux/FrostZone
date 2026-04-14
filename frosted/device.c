@@ -20,7 +20,15 @@
 
 #include "frosted.h"
 #include "device.h"
+#include "pool.h"
 #include "locks.h"
+
+POOL_DEFINE(device_pool, struct device, CONFIG_MAX_DEVICES);
+
+void device_pool_init(void)
+{
+    pool_init(&device_pool);
+}
 
 int device_open(const char *path, int flags)
 {
@@ -32,12 +40,18 @@ int device_open(const char *path, int flags)
 
 struct device *  device_fno_init(struct module * mod, const char * name, struct fnode *node, uint32_t flags, void * priv)
 {
-    struct device * device = kalloc(sizeof(struct device));
+    struct device * device = pool_alloc(&device_pool);
+    if (!device)
+        return NULL;
     device->fno = NULL;
     /* Only create a device node if there is a name */
     if(name)
     {
         device->fno =  fno_create(mod, name, node);
+        if (!device->fno) {
+            pool_free(&device_pool, device);
+            return NULL;
+        }
         device->fno->priv = priv;
         device->fno->flags |= flags;
     }

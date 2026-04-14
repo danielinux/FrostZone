@@ -56,7 +56,6 @@ int main(void *arg)
     int sh_fd = open(initsh, O_RDONLY);
     char line[80];
     char *pline;
-
     if (sh_fd >= 0) {
         int r;
         sh_args[1] = initsh;
