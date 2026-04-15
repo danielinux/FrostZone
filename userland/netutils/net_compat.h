@@ -3,12 +3,7 @@
 
 #include <arpa/inet.h>
 
-#ifndef HAVE_INET_ATON
-static inline int frosted_inet_aton(const char *cp, struct in_addr *inp)
-{
-    return inet_pton(AF_INET, cp, &inp->s_addr) == 1;
-}
-#define inet_aton(_cp, _inp) frosted_inet_aton((_cp), (_inp))
-#endif
+/* frosted libc provides inet_aton — no shim needed */
+#define HAVE_INET_ATON 1
 
 #endif /* NET_COMPAT_H */

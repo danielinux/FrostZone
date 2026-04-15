@@ -2,6 +2,44 @@
 #define WOLFIP_H
 #include <stdint.h>
 
+#if !defined(_SIZE_T) && !defined(_SIZE_T_DEFINED) && !defined(_SIZE_T_DECLARED) && \
+    !defined(_BSD_SIZE_T_DEFINED_) && !defined(__DEFINED_size_t) && \
+    !defined(__size_t_defined)
+#if defined(__SIZE_TYPE__)
+typedef __SIZE_TYPE__ size_t;
+#elif defined(_MSC_VER)
+#ifdef _WIN64
+typedef unsigned __int64 size_t;
+#else
+typedef unsigned int size_t;
+#endif
+#else
+typedef unsigned long size_t;
+#endif
+#define _SIZE_T
+#define _SIZE_T_DEFINED
+#define _SIZE_T_DECLARED
+#define _BSD_SIZE_T_DEFINED_
+#define __DEFINED_size_t
+#define __size_t_defined
+#endif
+
+#ifndef WOLFIP_SOL_IP
+#ifdef SOL_IP
+#define WOLFIP_SOL_IP SOL_IP
+#else
+#define WOLFIP_SOL_IP 0
+#endif
+#endif
+
+#ifndef WOLFIP_IP_RECVTTL
+#ifdef IP_RECVTTL
+#define WOLFIP_IP_RECVTTL IP_RECVTTL
+#else
+#define WOLFIP_IP_RECVTTL 12
+#endif
+#endif
+
 /* Types */
 struct wolfIP;
 typedef uint32_t ip4;
@@ -10,17 +48,45 @@ typedef uint32_t ip4;
 #define PACKED __attribute__((packed))
 #define ee16(x) __builtin_bswap16(x)
 #define ee32(x) __builtin_bswap32(x)
-#define DEBUG
-
-#ifndef WOLFIP_EINVAL
-#define WOLFIP_EINVAL (22)
-#endif
 #ifndef WOLFIP_EAGAIN
+#ifdef EAGAIN
+#define WOLFIP_EAGAIN EAGAIN
+#else
 #define WOLFIP_EAGAIN (11)
 #endif
+#endif
+
+#ifndef WOLFIP_EINVAL
+#ifdef EINVAL
+#define WOLFIP_EINVAL EINVAL
+#else
+#define WOLFIP_EINVAL (22)
+#endif
+#endif
+
+#ifndef WOLFIP_ENOMEM
+#ifdef ENOMEM
+#define WOLFIP_ENOMEM ENOMEM
+#else
+#define WOLFIP_ENOMEM (12)
+#endif
+#endif
+
+#ifndef WOLFIP_EACCES
+#ifdef EACCES
+#define WOLFIP_EACCES EACCES
+#else
+#define WOLFIP_EACCES (13)
+#endif
+#endif
 
 
-#define LOG(fmt, ...) do { (void)sizeof(fmt); } while (0)
+#ifdef DEBUG
+#include <stdio.h>
+#define LOG(fmt, ...) printf(fmt, ##__VA_ARGS__)
+#else
+#define LOG(fmt, ...) do{}while(0)
+#endif
 
 /* Device driver interface */
 /* Struct to contain link-layer (ll) device description
@@ -28,10 +94,14 @@ typedef uint32_t ip4;
 struct wolfIP_ll_dev {
     uint8_t mac[6];
     char ifname[16];
+    uint8_t non_ethernet;
+    uint32_t mtu;
     /* poll function */
     int (*poll)(struct wolfIP_ll_dev *ll, void *buf, uint32_t len);
     /* send function */
     int (*send)(struct wolfIP_ll_dev *ll, void *buf, uint32_t len);
+    /* optional context private pointer */
+    void *priv;
 };
 
 /* Struct to contain an IP device configuration */
@@ -45,11 +115,20 @@ struct ipconf {
 /* Socket interface */
 #define MARK_TCP_SOCKET 0x100 /* Mark a socket as TCP */
 #define MARK_UDP_SOCKET 0x200 /* Mark a socket as UDP */
+#define MARK_ICMP_SOCKET 0x400 /* Mark a socket as ICMP */
 
+#define IS_SOCKET_TCP(fd) (((fd) & MARK_TCP_SOCKET) == MARK_TCP_SOCKET)
+#define IS_SOCKET_UDP(fd) (((fd) & MARK_UDP_SOCKET) == MARK_UDP_SOCKET)
+#define IS_SOCKET_ICMP(fd)(((fd) & MARK_ICMP_SOCKET) == MARK_ICMP_SOCKET)
+#define SOCKET_UNMARK(fd) ((fd) & 0xFF)
 
 /* Compile-time sanity check for socket marks & number of sockets */
 #if (MARK_TCP_SOCKET >= MARK_UDP_SOCKET)
 #error "MARK_TCP_SOCKET must be less than MARK_UDP_SOCKET"
+#endif
+
+#if (MARK_UDP_SOCKET >= MARK_ICMP_SOCKET)
+#error "MARK_UDP_SOCKET must be less than MARK_ICMP_SOCKET"
 #endif
 
 #if MAX_TCPSOCKETS > 255
@@ -60,6 +139,9 @@ struct ipconf {
 #error "MAX_UDPSOCKETS must be less than 256"
 #endif
 
+#if MAX_ICMPSOCKETS > 255
+#error "MAX_ICMPSOCKETS must be less than 256"
+#endif
 
 
 
@@ -72,9 +154,28 @@ struct wolfIP_sockaddr_in {
     uint16_t sin_family;
     uint16_t sin_port;
     struct sin_addr { uint32_t s_addr; } sin_addr;
+    unsigned char sin_zero[8];
 };
-struct wolfIP_sockaddr { uint16_t sa_family; };
+struct wolfIP_sockaddr { uint16_t sa_family; uint8_t sa_data[14]; };
 typedef uint32_t socklen_t;
+
+/* Frosted kernel build: libc headers exist on the include path but depend
+ * on newlib internals unavailable in freestanding mode.  Use the standalone
+ * struct definitions below instead of auto-detecting via __has_include. */
+
+#ifndef WOLFIP_HAVE_POSIX_TYPES
+struct iovec { void *iov_base; size_t iov_len; };
+struct msghdr {
+    void *msg_name;
+    socklen_t msg_namelen;
+    struct iovec *msg_iov;
+    size_t msg_iovlen;
+    void *msg_control;
+    size_t msg_controllen;
+    int msg_flags;
+};
+#endif
+
 #ifndef AF_INET
 #define AF_INET 2
 #endif
@@ -83,57 +184,87 @@ typedef uint32_t socklen_t;
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <sys/uio.h>
 #define wolfIP_sockaddr_in sockaddr_in
 #define wolfIP_sockaddr sockaddr
 #endif
 
 int wolfIP_sock_socket(struct wolfIP *s, int domain, int type, int protocol);
-int wolfIP_sock_bind(struct wolfIP *s, int sockfd, const struct wolfIP_sockaddr *addr, socklen_t addrlen);
+int wolfIP_sock_bind(struct wolfIP *s, int sockfd, const struct wolfIP_sockaddr *addr,
+                     socklen_t addrlen);
 int wolfIP_sock_listen(struct wolfIP *s, int sockfd, int backlog);
-int wolfIP_sock_accept(struct wolfIP *s, int sockfd, struct wolfIP_sockaddr *addr, socklen_t *addrlen);
-int wolfIP_sock_connect(struct wolfIP *s, int sockfd, const struct wolfIP_sockaddr *addr, socklen_t addrlen);
-int wolfIP_sock_sendto(struct wolfIP *s, int sockfd, const void *buf, size_t len, int flags, const struct wolfIP_sockaddr *dest_addr, socklen_t addrlen);
-int wolfIP_sock_send(struct wolfIP *s, int sockfd, const void *buf, size_t len, int flags);
+int wolfIP_sock_accept(struct wolfIP *s, int sockfd, struct wolfIP_sockaddr *addr,
+                       socklen_t *addrlen);
+int wolfIP_sock_connect(struct wolfIP *s, int sockfd, const struct wolfIP_sockaddr *addr,
+                        socklen_t addrlen);
+int wolfIP_sock_sendto(struct wolfIP *s, int sockfd, const void *buf, size_t len,
+                       int flags, const struct wolfIP_sockaddr *dest_addr,
+                       socklen_t addrlen);
+int wolfIP_sock_send(struct wolfIP *s, int sockfd, const void *buf, size_t len,
+                     int flags);
 int wolfIP_sock_write(struct wolfIP *s, int sockfd, const void *buf, size_t len);
-int wolfIP_sock_recvfrom(struct wolfIP *s, int sockfd, void *buf, size_t len, int flags, struct wolfIP_sockaddr *src_addr, socklen_t *addrlen);
+int wolfIP_sock_recvfrom(struct wolfIP *s, int sockfd, void *buf, size_t len,
+                         int flags, struct wolfIP_sockaddr *src_addr, socklen_t *addrlen);
 int wolfIP_sock_recv(struct wolfIP *s, int sockfd, void *buf, size_t len, int flags);
+int wolfIP_sock_sendmsg(struct wolfIP *s, int sockfd, const struct msghdr *msg,
+                        int flags);
+int wolfIP_sock_recvmsg(struct wolfIP *s, int sockfd, struct msghdr *msg,
+                        int flags);
+int wolfIP_dns_ptr_lookup(struct wolfIP *s, uint32_t ip, uint16_t *id,
+                          void (*lookup_cb)(const char *name));
+int wolfIP_sock_get_recv_ttl(struct wolfIP *s, int sockfd, int *ttl);
+int wolfIP_sock_setsockopt(struct wolfIP *s, int sockfd, int level, int optname,
+                           const void *optval, socklen_t optlen);
+int wolfIP_sock_getsockopt(struct wolfIP *s, int sockfd, int level, int optname,
+                           void *optval, socklen_t *optlen);
 int wolfIP_sock_read(struct wolfIP *s, int sockfd, void *buf, size_t len);
 int wolfIP_sock_close(struct wolfIP *s, int sockfd);
-int wolfIP_sock_getpeername(struct wolfIP *s, int sockfd, struct wolfIP_sockaddr *addr, const socklen_t *addrlen);
-int wolfIP_sock_getsockname(struct wolfIP *s, int sockfd, struct wolfIP_sockaddr *addr, const socklen_t *addrlen);
+int wolfIP_sock_getpeername(struct wolfIP *s, int sockfd, struct wolfIP_sockaddr *addr,
+                            const socklen_t *addrlen);
+int wolfIP_sock_getsockname(struct wolfIP *s, int sockfd, struct wolfIP_sockaddr *addr,
+                            const socklen_t *addrlen);
+int wolfIP_sock_can_read(struct wolfIP *s, int sockfd);
+int wolfIP_sock_can_write(struct wolfIP *s, int sockfd);
 
+void wolfIP_set_dns_server(struct wolfIP *s, ip4 addr);
 int dhcp_client_init(struct wolfIP *s);
 int dhcp_bound(struct wolfIP *s);
+int dhcp_client_is_running(struct wolfIP *s);
 
 /* DNS client */
 
-int nslookup(struct wolfIP *s, const char *name, uint16_t *id, void (*lookup_cb)(uint32_t ip));
+int nslookup(struct wolfIP *s, const char *name, uint16_t *id,
+             void (*lookup_cb)(uint32_t ip));
+
+#if CONFIG_IPFILTER
+#include "wolfip-filter.h"
+#endif
 
 /* IP stack interface */
 void wolfIP_init(struct wolfIP *s);
-#ifndef CONFIG_WOLFIP_NOSTATIC
 void wolfIP_init_static(struct wolfIP **s);
-#endif
 size_t wolfIP_instance_size(void);
 int wolfIP_poll(struct wolfIP *s, uint64_t now);
 void wolfIP_recv(struct wolfIP *s, void *buf, uint32_t len);
 void wolfIP_recv_ex(struct wolfIP *s, unsigned int if_idx, void *buf, uint32_t len);
 void wolfIP_ipconfig_set(struct wolfIP *s, ip4 ip, ip4 mask, ip4 gw);
 void wolfIP_ipconfig_get(struct wolfIP *s, ip4 *ip, ip4 *mask, ip4 *gw);
-void wolfIP_set_dns_server(struct wolfIP *s, ip4 addr);
 
 struct wolfIP_ll_dev *wolfIP_getdev(struct wolfIP *s);
 struct wolfIP_ll_dev *wolfIP_getdev_ex(struct wolfIP *s, unsigned int if_idx);
+int wolfIP_mtu_set(struct wolfIP *s, unsigned int if_idx, uint32_t mtu);
+int wolfIP_mtu_get(struct wolfIP *s, unsigned int if_idx, uint32_t *mtu);
 void wolfIP_ipconfig_set_ex(struct wolfIP *s, unsigned int if_idx, ip4 ip, ip4 mask, ip4 gw);
 void wolfIP_ipconfig_get_ex(struct wolfIP *s, unsigned int if_idx, ip4 *ip, ip4 *mask, ip4 *gw);
-int nslookup(struct wolfIP *s, const char *name, uint16_t *id, void (*lookup_cb)(uint32_t ip));
 
 /* Callback flags */
 #define CB_EVENT_READABLE 0x01 /* Accepted connection or data available */
 #define CB_EVENT_TIMEOUT 0x02  /* Timeout */
 #define CB_EVENT_WRITABLE 0x04 /* Connected or space available to send */
 #define CB_EVENT_CLOSED 0x10   /* Connection closed by peer */
-void wolfIP_register_callback(struct wolfIP *s, int sock_fd, void (*cb)(int sock_fd, uint16_t events, void *arg), void *arg);
+typedef void (*tsocket_cb)(int sock_fd, uint16_t events, void *arg);
+void wolfIP_register_callback(struct wolfIP *s, int sock_fd, tsocket_cb cb,
+                              void *arg);
 
 /* External requirements */
 uint32_t wolfIP_getrandom(void);
@@ -143,7 +274,7 @@ static inline uint32_t atou(const char *s)
 {
     uint32_t ret = 0;
     while (*s >= '0' && *s <= '9') {
-        ret = ret * 10 + (*s - '0');
+        ret = (ret * 10u) + (uint32_t)(*s - '0');
         s++;
     }
     return ret;
@@ -169,24 +300,31 @@ static inline void iptoa(ip4 ip, char *buf)
     buf[0] = 0;
     for (i = 0; i < 4; i++) {
         uint8_t x = (ip >> (24 - i * 8)) & 0xFF;
-        if (x > 99) buf[j++] = x / 100 + '0';
-        if (x > 9) buf[j++] = (x / 10) % 10 + '0';
-        buf[j++] = x % 10 + '0';
+        if (x > 99) buf[j++] = (char)(x / 100 + '0');
+        if (x > 9) buf[j++] = (char)(((x / 10) % 10) + '0');
+        buf[j++] = (char)((x % 10) + '0');
         if (i < 3) buf[j++] = '.';
     }
     buf[j] = 0;
 }
 
 #ifdef WOLFSSL_WOLFIP
-#ifdef WOLFSSL_USER_SETTINGS
-#include "user_settings.h"
-#else
-#include <wolfssl/options.h>
-#endif
-#include <wolfssl/wolfcrypt/settings.h>
-#include <wolfssl/ssl.h>
-int wolfSSL_SetIO_wolfIP(WOLFSSL* ssl, int fd);
-int wolfSSL_SetIO_wolfIP_CTX(WOLFSSL_CTX *ctx, struct wolfIP *s);
-#endif
+    #ifdef WOLFSSL_USER_SETTINGS
+        #include "user_settings.h"
+    #else
+        #include <wolfssl/options.h>
+    #endif /* WOLFSSL_USER_SETTINGS */
+    #include <wolfssl/wolfcrypt/settings.h>
+    #include <wolfssl/ssl.h>
+    int wolfSSL_SetIO_wolfIP(WOLFSSL* ssl, int fd);
+    int wolfSSL_SetIO_wolfIP_CTX(WOLFSSL_CTX *ctx, struct wolfIP *s);
 
-#endif
+    #ifdef  WOLFIP_ESP
+        #include <wolfssl/wolfcrypt/aes.h>
+        #include <wolfssl/wolfcrypt/des3.h>
+        #include <wolfssl/wolfcrypt/hmac.h>
+        #include <wolfssl/wolfcrypt/random.h>
+    #endif /* WOLFIP_ESP */
+#endif /* WOLFSSL_WOLFIP */
+
+#endif /* !WOLFIP_H */

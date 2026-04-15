@@ -158,6 +158,7 @@ struct frosted_inet_socket {
 
 struct frosted_inet_socket tcp_socket[MAX_TCPSOCKETS];
 struct frosted_inet_socket udp_socket[MAX_UDPSOCKETS];
+struct frosted_inet_socket icmp_socket[MAX_ICMPSOCKETS];
 
 static struct frosted_inet_socket *fd_inet(int fd)
 {
@@ -175,15 +176,20 @@ static struct frosted_inet_socket *fd_inet(int fd)
 
 static struct frosted_inet_socket *sockfd_inet(int fd)
 {
-    if ((fd & MARK_TCP_SOCKET) == MARK_TCP_SOCKET) {
-        fd &= ~MARK_TCP_SOCKET;
-        if (fd < MAX_TCPSOCKETS)
-            return &tcp_socket[fd];
+    if ((fd & MARK_ICMP_SOCKET) == MARK_ICMP_SOCKET) {
+        fd &= ~MARK_ICMP_SOCKET;
+        if (fd < MAX_ICMPSOCKETS)
+            return &icmp_socket[fd];
     }
     else if ((fd & MARK_UDP_SOCKET) == MARK_UDP_SOCKET) {
         fd &= ~MARK_UDP_SOCKET;
         if (fd < MAX_UDPSOCKETS)
             return &udp_socket[fd];
+    }
+    else if ((fd & MARK_TCP_SOCKET) == MARK_TCP_SOCKET) {
+        fd &= ~MARK_TCP_SOCKET;
+        if (fd < MAX_TCPSOCKETS)
+            return &tcp_socket[fd];
     }
     return NULL;
 } 
@@ -295,11 +301,11 @@ static int sock_recvfrom(int fd, void *buf, unsigned int len, int flags, struct 
             ret = wolfIP_sock_read(IPStack, s->sock_fd, buf + s->bytes, len - s->bytes);
         }
 
-        if ((ret < 0) && (ret != (-11))) {
+        if ((ret < 0) && (ret != -WOLFIP_EAGAIN)) {
             goto out;
         }
 
-        if ((ret == 0) || (ret == -11)) {
+        if ((ret == 0) || (ret == -WOLFIP_EAGAIN)) {
             s->revents &= (~CB_EVENT_READABLE);
             if (SOCK_BLOCKING(s))  {
                 s->events = CB_EVENT_READABLE;
@@ -320,8 +326,12 @@ static int sock_recvfrom(int fd, void *buf, unsigned int len, int flags, struct 
     if ((ret == 0) && !SOCK_BLOCKING(s)) {
         ret = -EAGAIN;
     }
+    if ((ret > 0) && addr && addrlen && (*addrlen >= sizeof(struct sockaddr_in))) {
+        memcpy(addr, &paddr, sizeof(struct sockaddr_in));
+        *addrlen = sizeof(struct sockaddr_in);
+    }
 out:
-    
+
     return ret;
 }
 
@@ -343,7 +353,7 @@ static int sock_sendto(int fd, const void *buf, unsigned int len, int flags, str
         } else {
             ret = wolfIP_sock_write(IPStack, s->sock_fd, buf + s->bytes, len - s->bytes);
         }
-        if (ret == 0) {
+        if (ret == 0 || ret == -WOLFIP_EAGAIN) {
             s->revents &= (~CB_EVENT_WRITABLE);
             if (SOCK_BLOCKING(s)) {
                 s->events = CB_EVENT_WRITABLE;
@@ -352,13 +362,19 @@ static int sock_sendto(int fd, const void *buf, unsigned int len, int flags, str
                 ret = SYS_CALL_AGAIN;
                 goto out;
             }
+            if (ret == -WOLFIP_EAGAIN) {
+                ret = (s->bytes > 0) ? s->bytes : -EAGAIN;
+                s->bytes = 0;
+                goto out;
+            }
         }
         if (ret < 0) {
             goto out;
         }
 
         s->bytes += ret;
-        if (((s->sock_fd & MARK_UDP_SOCKET) == MARK_UDP_SOCKET) && (s->bytes > 0))
+        if ((((s->sock_fd & MARK_UDP_SOCKET) == MARK_UDP_SOCKET) ||
+             ((s->sock_fd & MARK_ICMP_SOCKET) == MARK_ICMP_SOCKET)) && (s->bytes > 0))
             break;
     }
     ret = s->bytes;
@@ -397,9 +413,9 @@ static int sock_accept(int fd, struct sockaddr *addr, unsigned int *addrlen)
     l->events = CB_EVENT_READABLE;
 
     sock_fd = wolfIP_sock_accept(IPStack, l->sock_fd, (struct wolfIP_sockaddr *)addr, addrlen);
-    if ((sock_fd < 0) && (sock_fd != -11))
+    if ((sock_fd < 0) && (sock_fd != -WOLFIP_EAGAIN))
         return sock_fd;
-    if (sock_fd == -11) {
+    if (sock_fd == -WOLFIP_EAGAIN) {
         if (SOCK_BLOCKING(l)) {
             l->task = this_task();
             task_suspend();
@@ -433,27 +449,30 @@ static int sock_accept(int fd, struct sockaddr *addr, unsigned int *addrlen)
 static int sock_connect(int fd, struct sockaddr *addr, unsigned int addrlen)
 {
     struct frosted_inet_socket *s;
-    int ret = -1;
+    int ret;
     s = fd_inet(fd);
     if (!s) {
         return -EINVAL;
     }
 
-    s->events = CB_EVENT_READABLE;
-    if ((s->revents & CB_EVENT_READABLE) == 0) {
-        ret = wolfIP_sock_connect(IPStack, s->sock_fd, (struct wolfIP_sockaddr *)addr, addrlen);
+    ret = wolfIP_sock_connect(IPStack, s->sock_fd, (struct wolfIP_sockaddr *)addr, addrlen);
+    if (ret == 0) {
+        /* Already connected (UDP or TCP_ESTABLISHED). */
+        s->events  &= ~(CB_EVENT_WRITABLE);
+        s->revents &= ~(CB_EVENT_WRITABLE);
+        return 0;
+    }
+    if (ret == -WOLFIP_EAGAIN) {
+        /* TCP handshake in progress — wait for writable event. */
+        s->revents &= ~(CB_EVENT_WRITABLE);
         if (SOCK_BLOCKING(s)) {
+            s->events = CB_EVENT_WRITABLE | CB_EVENT_CLOSED;
             s->task = this_task();
             task_suspend();
-            ret = SYS_CALL_AGAIN;
-        } else {
-            ret = -EAGAIN;
+            return SYS_CALL_AGAIN;
         }
+        return -EAGAIN;
     }
-    /* CB_EVENT_READABLE received. Successfully connected. */
-    ret = 0;
-    s->events  &= ~(CB_EVENT_READABLE);
-    s->revents &= ~(CB_EVENT_READABLE);
     return ret;
 }
 
@@ -951,12 +970,20 @@ int sysfs_net_route_list(struct sysfs_fnode *sfs, void *buf, int len)
 
 static int sock_getsockopt(int sd, int level, int optname, void *optval, unsigned int *optlen)
 {
-    return -EIO;
+    struct frosted_inet_socket *s;
+    s = fd_inet(sd);
+    if (!s)
+        return -EINVAL;
+    return wolfIP_sock_getsockopt(IPStack, s->sock_fd, level, optname, optval, optlen);
 }
 
 static int sock_setsockopt(int sd, int level, int optname, void *optval, unsigned int optlen)
 {
-    return -EIO;
+    struct frosted_inet_socket *s;
+    s = fd_inet(sd);
+    if (!s)
+        return -EINVAL;
+    return wolfIP_sock_setsockopt(IPStack, s->sock_fd, level, optname, optval, optlen);
 }
 
 static int sock_getsockname(int sd, struct sockaddr *addr, unsigned int *addrlen)

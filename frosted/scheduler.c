@@ -1482,7 +1482,7 @@ int task_create(struct task_exec_info *exec_info, void *arg, unsigned int nice)
     ft = _cur_task->tb.filedesc_table;
 
     /* Inherit cwd, file descriptors from parent */
-    if (new->tb.ppid > 1) { /* Start from parent #2 */
+    if (new->tb.ppid >= 1) {
         new->tb.cwd = task_getcwd();
         for (i = 0; (ft) && (i < ft->n_files); i++) {
             if (!new->tb.filedesc_table)
@@ -1557,7 +1557,7 @@ int sys_vfork_hdlr(void)
     new->tb.n_specifics = 0;
 
     /* Inherit cwd, file descriptors from parent */
-    if (new->tb.ppid > 1) { /* Start from parent #2 */
+    if (new->tb.ppid >= 1) {
         for (i = 0; (ft) && (i < ft->n_files); i++) {
             if (!new->tb.filedesc_table)
                 ftable_create(new);

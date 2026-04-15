@@ -25,35 +25,36 @@ struct icmp_hdr {
 
 static uint8_t payload[DEFAULT_LEN];
 
-static void tvsub(register struct timeval *out, register struct timeval *in)
+/* Use sys_clock_gettime directly — libgloss _gettimeofday_r in syscalls.c
+ * has a broken signature (missing reent pointer), so gettimeofday() returns
+ * uninitialized stack garbage. */
+extern int sys_clock_gettime(int clock_id, struct timespec *tp);
+
+static uint32_t gettime_ms(void)
 {
-    if ((out->tv_usec -= in->tv_usec) < 0) {
-        --out->tv_sec;
-        out->tv_usec += 1000000;
-    }
-    out->tv_sec -= in->tv_sec;
+    struct timespec tp;
+    sys_clock_gettime(CLOCK_REALTIME, &tp);
+    return (uint32_t)(tp.tv_sec * 1000 + tp.tv_nsec / 1000000);
 }
 
 int ping(struct sockaddr_in *dst, int count, int len)
 {
     struct icmphdr *icmp_hdr = (struct icmphdr *)payload;
-    struct timeval tv, *tp;
+    uint32_t t_send, t_recv;
     int i;
     int sequence = 0;
     int sock = socket(AF_INET,SOCK_DGRAM,IPPROTO_ICMP);
-    struct pollfd pfd;
     struct sockaddr_in reply_from;
-    uint32_t now, echo_time;
     socklen_t sockaddr_in_len = sizeof(struct sockaddr_in);
-
+    uint8_t *a;
 
     if (sock < 0) {
         perror("socket");
         return -1;
     }
-    pfd.events = POLLIN;
-    pfd.fd = sock;
 
+    a = (uint8_t *)&dst->sin_addr.s_addr;
+    printf("PING %d.%d.%d.%d: %d data bytes\r\n", a[0], a[1], a[2], a[3], len);
 
     i = 0;
     while((count == 0) || (i < count)) {
@@ -65,37 +66,33 @@ int ping(struct sockaddr_in *dst, int count, int len)
             payload[i] = i & 0xFF;
         }
         icmp_hdr->un.echo.sequence = sequence++;
-        gettimeofday((struct timeval *)(payload + sizeof (struct icmp_hdr)),
-            (struct timezone *)NULL);
-        if(sendto(sock, payload, len, 0, (struct sockaddr *)dst, sizeof(struct sockaddr_in)) < 0)
+        t_send = gettime_ms();
         {
-            perror("send");
-            sleep(1);
-        } else {
-            int pollret = poll(&pfd, 1, 1000);
-            if (pollret == 0) {
-                printf("Timeout\r\n");
-            } else if (pollret == -1) {
-                perror("poll");
-                return -1;
+            int sr = sendto(sock, payload, len, 0, (struct sockaddr *)dst, sizeof(struct sockaddr_in));
+            if (sr < 0) {
+                sleep(1);
+                continue;
+            }
+        }
+        {
+            int r;
+            r = recvfrom(sock, payload, DEFAULT_LEN, 0, (struct sockaddr *)&reply_from, &sockaddr_in_len);
+            if (r <= 0) {
+                sleep(1);
             } else {
                 uint32_t triptime;
-                char *ip;
-                int r = recvfrom(sock, payload, DEFAULT_LEN, 0, (struct sockaddr *)&reply_from, &sockaddr_in_len);
-                if (r <= 0) {
-                    perror("recvfrom");
-                    return -1;
-                }
-                gettimeofday(&tv, (struct timezone *)NULL);
-                tp = (struct timeval *)(payload + sizeof (struct icmp_hdr));
-                tvsub(&tv, tp);
-                triptime = tv.tv_sec * 1000 + (tv.tv_usec / 1000);
-                ip = inet_ntoa(reply_from.sin_addr);
-                printf("%d bytes from %s: icmp seq=%d time=%d ms\r\n", r, ip, icmp_hdr->un.echo.sequence, triptime);
-                usleep(1000000 - (1000 * (triptime)));
+                t_recv = gettime_ms();
+                triptime = (t_recv >= t_send) ? (t_recv - t_send) : 0;
+                a = (uint8_t *)&reply_from.sin_addr.s_addr;
+                printf("%d bytes from %d.%d.%d.%d: icmp_seq=%d time=%lu ms\r\n",
+                       r, a[0], a[1], a[2], a[3],
+                       icmp_hdr->un.echo.sequence,
+                       (unsigned long)triptime);
+                sleep(1);
             }
         }
     }
+    return 0;
 }
 
 
