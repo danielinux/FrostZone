@@ -2,8 +2,27 @@
 #include <reent.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+/*
+ * Frosted's VFS doesn't support lstat/symlink resolution, and newlib's
+ * realpath allocates ~2.4 KB on the stack (2x PATH_MAX) which is too
+ * much for the 8 KB task stack.  Return a copy of the input path.
+ */
+char *realpath(const char *path, char *resolved_path) {
+    if (!path) {
+        errno = EINVAL;
+        return NULL;
+    }
+    if (resolved_path) {
+        strcpy(resolved_path, path);
+        return resolved_path;
+    }
+    return strdup(path);
+}
 
 int mkdir(const char *path, mode_t mode) {
     (void)path;

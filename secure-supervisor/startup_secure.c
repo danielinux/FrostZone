@@ -29,6 +29,13 @@ void Reset_Handler(void) {
         *(dst++) = *(src++);
     for (dst = &__bss_start__; dst < &__bss_end__; dst++)
         *dst = 0;
+
+    /* Set MSPLIM_S to end of bss — prevents secure MSP from overflowing
+     * into the data/bss region.  On ARMv8-M any push past this limit
+     * triggers a UsageFault (STKOF).
+     */
+    __asm volatile("msr msplim, %0" : : "r"((uint32_t)&__bss_end__));
+
     main();
     while (1);
 }

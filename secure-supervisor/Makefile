@@ -25,6 +25,19 @@ kconfig_bool = $(strip $(if $(filter y Y 1,$(1)),1,0))
 CONFIG_ETH := $(call kconfig_bool,$(ETH))
 CONFIG_FLASHFS_VERIFY := $(call kconfig_bool,$(FLASHFS_VERIFY))
 
+ifndef MEMPOOL_START
+MEMPOOL_START := 0x20060000
+endif
+ifndef MEMPOOL_SIZE
+MEMPOOL_SIZE := 0x38000
+endif
+ifndef TASK_STACK_SIZE
+TASK_STACK_SIZE := 8192
+endif
+ifndef TASK_MAX_MEM
+TASK_MAX_MEM := 131072
+endif
+
 ifeq ($(TARGET_STM32H563),y)
 TARGET := stm32h563
 LINKER_SCRIPT := stm32h563.ld
@@ -52,6 +65,10 @@ SRCS = ivt.c startup_secure.c secure_main.c sg.c mempool.c task.c random.c flash
 
 CFLAGS += -DCONFIG_ETH=$(CONFIG_ETH)
 CFLAGS += -DCONFIG_FLASHFS_VERIFY=$(CONFIG_FLASHFS_VERIFY)
+CFLAGS += -DCONFIG_MEMPOOL_START=$(MEMPOOL_START)
+CFLAGS += -DCONFIG_MEMPOOL_SIZE=$(MEMPOOL_SIZE)
+CFLAGS += -DCONFIG_TASK_STACK_SIZE=$(TASK_STACK_SIZE)
+CFLAGS += -DCONFIG_TASK_MAX_MEM=$(TASK_MAX_MEM)
 endif
 
 OBJS = $(SRCS:.c=.o)

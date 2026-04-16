@@ -26,3 +26,38 @@ config FLASHFS_VERIFY
     help
       When enabled, every secure-world FlashFS operation is immediately
       verified with a read-back compare.
+
+menu "Memory Layout"
+
+config MEMPOOL_START
+    hex "Mempool start address"
+    default 0x20060000 if TARGET_STM32H563
+    default 0x30030000 if TARGET_STM32U585
+    default 0x20020000 if TARGET_RP2350
+    help
+      Base address of the non-secure memory pool used for task heap and
+      stack allocations.  Must be aligned to the SRAM bank layout and
+      fall within the SAU non-secure RAM window.
+
+config MEMPOOL_SIZE
+    hex "Mempool size (bytes)"
+    default 0x38000 if TARGET_STM32H563
+    default 0x50000 if TARGET_STM32U585
+    default 0x60000 if TARGET_RP2350
+    help
+      Total size of the memory pool region.  On STM32H563 the pool must
+      end before the USB and Ethernet DMA buffers (0x20098000).
+
+config TASK_STACK_SIZE
+    int "Default task stack size (bytes)"
+    default 8192
+    help
+      Stack size allocated for each new task from the memory pool.
+
+config TASK_MAX_MEM
+    int "Maximum memory per task (bytes)"
+    default 131072
+    help
+      Hard limit on total memory (stack + heap) a single task may hold.
+
+endmenu

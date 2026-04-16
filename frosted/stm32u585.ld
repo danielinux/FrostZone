@@ -45,6 +45,8 @@ SECTIONS
 
     __core1_ns_stack_top = ORIGIN(STACK_MEM) + LENGTH(STACK_MEM);
 
+    _sstack = ORIGIN(STACK_MEM);
+
     PROVIDE(_ns_sidata = LOADADDR(.data));
 
 }

@@ -79,19 +79,17 @@ int icebox_tee(int argc, char *args[])
                 fdfn[slot++][1] = i;
         }
     }
-    i = 0;
-    while( inputline(line, BUFSIZE) != 0 ){
+    while ((n = read(0, line, BUFSIZE)) > 0) {
         for( i = 0; i < slot; i++ ){
-            count = strlen( line );
+            count = n;
             while( count > 0 ){
                 written = write( fdfn[i][0], line, count);
+                if (written <= 0)
+                    break;
                 count -= written;
             }
         }
     }
-
-    if (n < 0)
-        printf("error\n");
 
     for (i = 1; i < slot; i++)
         if (close(fdfn[i][0]) == -1)

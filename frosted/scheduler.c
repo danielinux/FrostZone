@@ -384,6 +384,7 @@ struct __attribute__((packed)) task_block {
     int timer_id;
     uint32_t *specifics;
     uint32_t n_specifics;
+    char name[16];
 };
 
 struct __attribute__((packed)) task {
@@ -577,6 +578,8 @@ static void task_destroy(void *arg)
     /* Remove heap allocations spawned by this pid. */
     secure_munmap_task(t->tb.pid);
 #endif
+    /* Remove /sys/proc/<pid> entry */
+    procfs_pid_destroy(t->tb.pid);
     /* Get rid of stack space allocation, timer. */
     if (t->tb.timer_id >= 0)
         ktimer_del(t->tb.timer_id);
@@ -1238,6 +1241,25 @@ int scheduler_task_state(int pid)
         return TASK_OVER;
 }
 
+int scheduler_get_pids(uint16_t *pids, int max)
+{
+    struct task *t;
+    int n = 0;
+    t = tasks_running;
+    while (t && n < max) {
+        if (t->tb.tid == 1 && t->tb.pid != 0)
+            pids[n++] = t->tb.pid;
+        t = t->tb.next;
+    }
+    t = tasks_idling;
+    while (t && n < max) {
+        if (t->tb.tid == 1 && t->tb.pid != 0)
+            pids[n++] = t->tb.pid;
+        t = t->tb.next;
+    }
+    return n;
+}
+
 int scheduler_can_sleep(void)
 {
     if (tasklist_len(&tasks_running) == 1)
@@ -1263,11 +1285,8 @@ char *scheduler_task_name(int pid)
     struct task *t = tasklist_get(&tasks_running, pid);
     if (!t)
         t = tasklist_get(&tasks_idling, pid);
-    if (t) {
-        char **argv = t->tb.arg;
-        if (argv)
-            return argv[0];
-    }
+    if (t && t->tb.name[0])
+        return t->tb.name;
     return NULL;
 }
 
@@ -1508,6 +1527,7 @@ int task_create(struct task_exec_info *exec_info, void *arg, unsigned int nice)
     secure_mempool_chown(new->tb.exec_info.mmap_base, new->tb.pid, 0);
     task_create_real(new, arg, nice);
     new->tb.state = TASK_RUNNABLE;
+    procfs_pid_create(new->tb.pid);
     irq_on();
     return new->tb.pid;
 }
@@ -1517,6 +1537,15 @@ int scheduler_exec(struct task_exec_info *info, void *args)
     struct task *t = _cur_task;
     memcpy(&t->tb.exec_info, info, sizeof(struct task_exec_info));
     secure_mempool_chown(t->tb.exec_info.mmap_base, t->tb.pid, 0);
+    /* Save task name before args move to task stack */
+    t->tb.name[0] = '\0';
+    if (args) {
+        char **argv = (char **)args;
+        if (argv[0]) {
+            strncpy(t->tb.name, argv[0], sizeof(t->tb.name) - 1);
+            t->tb.name[sizeof(t->tb.name) - 1] = '\0';
+        }
+    }
     task_create_real(t, (void *)args, t->tb.nice);
     asm volatile("msr " PSP ", %0" ::"r"(_cur_task->tb.sp));
     t->tb.state = TASK_RUNNING;
@@ -1599,6 +1628,7 @@ int sys_vfork_hdlr(void)
         new->tb.cur_stack = _cur_task->tb.cur_stack;
         new->tb.state = TASK_RUNNABLE;
     }
+    procfs_pid_create(new->tb.pid);
     /* Vfork: Caller task suspends until child calls exec or exits */
     asm volatile("msr " PSP ", %0" ::"r"(new->tb.sp));
     task_suspend_to(TASK_FORKED);

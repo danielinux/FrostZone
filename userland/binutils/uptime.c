@@ -18,35 +18,45 @@
  *
  */
 
- #include <stdlib.h>
- #include <stdio.h>
- #include <sys/time.h>
- #include <time.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <sys/time.h>
+#include <time.h>
+
+#ifndef CLOCK_MONOTONIC
+#define CLOCK_MONOTONIC 4
+#endif
+
+extern int sys_clock_gettime(int clock_id, struct timespec *tp);
 
 #ifndef APP_UPTIME_MODULE
 int main(int argc, char *args[])
 #else
 int icebox_uptime(int argc, char *args[])
 #endif
- {
-	 struct timespec ts;
-	 time_t now, hours, mins;
-	 long days = 0;
+{
+	struct timespec ts;
+	struct tm *tm;
+	time_t now, up_hours, up_mins;
+	long days = 0;
 
-	 clock_gettime(CLOCK_MONOTONIC, &ts);
-	 now = ts.tv_sec;
+	sys_clock_gettime(CLOCK_MONOTONIC, &ts);
+	now = ts.tv_sec;
 
-	 if (now > 86400) {
-		 days = now / 86400;
-	 }
+	days = now / 86400;
+	up_hours = (now % 86400) / 3600;
+	up_mins = (now % 3600) / 60;
 
-	 struct tm *tm = localtime(&now);
-	 hours = tm->tm_hour;
-	 mins = tm->tm_min;
+	sys_clock_gettime(CLOCK_REALTIME, &ts);
+	tm = localtime(&ts.tv_sec);
+	if (tm) {
+		printf(" %02d:%02d:%02d up %ld days, %02ld:%02ld, 1 user\r\n",
+		       tm->tm_hour, tm->tm_min, tm->tm_sec,
+		       days, up_hours, up_mins);
+	} else {
+		printf(" up %ld days, %02ld:%02ld, 1 user\r\n",
+		       days, up_hours, up_mins);
+	}
 
-	 clock_gettime(CLOCK_REALTIME, &ts);
-	 tm = localtime(&ts.tv_sec);
-	 printf(" %02d:%02d:%02d up %ld days, %02d:%02d, 1 user\r\n", tm->tm_hour, tm->tm_min, tm->tm_sec, days, hours, mins);
-
-	 exit(0);
- }
+	exit(0);
+}

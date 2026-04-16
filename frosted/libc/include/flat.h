@@ -56,5 +56,29 @@ struct flat_hdr {
 #define FLAT_FLAG_GZIP   0x0004 /* all but the header is compressed */
 #define FLAT_FLAG_GZDATA 0x0008 /* only data/relocs are compressed (for XIP) */
 #define FLAT_FLAG_KTRACE 0x0010 /* output useful kernel trace for debugging */
+#define FLAT_FLAG_SHLIB  0x0040 /* shared library with export table */
+
+/*
+ * Shared library extensions (FLAT_FLAG_SHLIB):
+ *
+ * filler[0] = export table offset from file start (big-endian)
+ * filler[1] = export count (big-endian)
+ * filler[2] = library ID, 1-255 (big-endian)
+ *
+ * The export table is stored after the relocation records:
+ *
+ *   struct shlib_export_hdr {
+ *       uint32_t version;      // API version (big-endian)
+ *       uint32_t count;        // number of exports (big-endian)
+ *       uint32_t offsets[];    // .text-relative offsets (big-endian)
+ *   };
+ *
+ * Applications reference library functions via GOT entries tagged
+ * with (lib_id << 24) | ordinal.  The kernel resolves these at load
+ * time using the export table.
+ */
+#define FLAT_SHLIB_EXPORT_OFF  0  /* filler[] index for export table offset */
+#define FLAT_SHLIB_EXPORT_CNT  1  /* filler[] index for export count */
+#define FLAT_SHLIB_LIB_ID      2  /* filler[] index for library ID */
 
 #endif /* _FROSTED_FLAT_H */

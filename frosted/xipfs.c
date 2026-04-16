@@ -37,13 +37,25 @@ volatile int phase0_bflt_trace_tag;
 
 #define SECTOR_SIZE (512)
 
-/* Helper: get the blob pointer from a file's parent (the mount dir) */
-static const uint8_t *xipfs_blob(struct fnode *fno)
-{
-    if (fno->parent)
-        return (const uint8_t *)fno->parent->priv;
-    return NULL;
-}
+#ifdef CONFIG_SHLIB
+/* --- Shared library registry --- */
+#define MAX_SHLIBS 8
+
+struct loaded_shlib {
+    uint8_t  lib_id;
+    uint32_t version;
+    const uint8_t *flash_base;     /* pointer to bFLT start in flash */
+    const uint8_t *text_base;      /* .text start (XIP) */
+    uint32_t text_len;
+    uint32_t data_len;
+    uint32_t bss_len;
+    uint32_t export_count;
+    const uint32_t *export_table;  /* ordinal→offset array in flash */
+};
+
+static struct loaded_shlib shlibs[MAX_SHLIBS];
+static const uint8_t *xipfs_blob_ptr; /* cached blob pointer from mount */
+#endif
 
 /* Helper: scan FAT for entry at given index.  Returns offset to fhdr, or -1. */
 static int xipfs_fat_offset(const uint8_t *blob, int idx)
@@ -59,7 +71,11 @@ static int xipfs_fat_offset(const uint8_t *blob, int idx)
     offset = sizeof(struct xipfs_fat);
     for (i = 0; i < idx; i++) {
         f = (const struct xipfs_fhdr *)(blob + offset);
-        if (f->magic == XIPFS_MAGIC)
+        if (f->magic == XIPFS_MAGIC
+#ifdef CONFIG_SHLIB
+                || f->magic == XIPFS_MAGIC_SHLIB
+#endif
+           )
             offset += f->len + sizeof(struct xipfs_fhdr);
         else
             offset += sizeof(struct xipfs_fhdr);
@@ -199,12 +215,20 @@ static struct fnode *xipfs_lookup(struct fnode *dir, const char *name)
 
     for (i = 0; i < (int)fat->fs_files; i++) {
         f = (const struct xipfs_fhdr *)(blob + offset);
-        if ((f->magic != XIPFS_MAGIC) && (f->magic != XIPFS_MAGIC_ICELINK))
+        if ((f->magic != XIPFS_MAGIC) && (f->magic != XIPFS_MAGIC_ICELINK)
+#ifdef CONFIG_SHLIB
+                && (f->magic != XIPFS_MAGIC_SHLIB)
+#endif
+           )
             return NULL;
 
         if (strcmp(f->name, name) == 0) {
-            if (f->magic == XIPFS_MAGIC) {
-                /* Regular executable: create fnode with payload ptr */
+            if (f->magic == XIPFS_MAGIC
+#ifdef CONFIG_SHLIB
+                    || f->magic == XIPFS_MAGIC_SHLIB
+#endif
+               ) {
+                /* Regular executable or shared library */
                 fno = fno_create(&mod_xipfs, name, dir);
                 if (!fno)
                     return NULL;
@@ -224,7 +248,11 @@ static struct fnode *xipfs_lookup(struct fnode *dir, const char *name)
             }
         }
 
-        if (f->magic == XIPFS_MAGIC)
+        if (f->magic == XIPFS_MAGIC
+#ifdef CONFIG_SHLIB
+                || f->magic == XIPFS_MAGIC_SHLIB
+#endif
+           )
             offset += f->len + sizeof(struct xipfs_fhdr);
         else
             offset += sizeof(struct xipfs_fhdr);
@@ -257,7 +285,11 @@ static int xipfs_readdir(struct fnode *dir, uint32_t *cursor, struct dirent *ep)
         return -1;
 
     f = (const struct xipfs_fhdr *)(blob + offset);
-    if ((f->magic != XIPFS_MAGIC) && (f->magic != XIPFS_MAGIC_ICELINK))
+    if ((f->magic != XIPFS_MAGIC) && (f->magic != XIPFS_MAGIC_ICELINK)
+#ifdef CONFIG_SHLIB
+            && (f->magic != XIPFS_MAGIC_SHLIB)
+#endif
+       )
         return -1;
 
     ep->d_ino = 0;
@@ -266,6 +298,96 @@ static int xipfs_readdir(struct fnode *dir, uint32_t *cursor, struct dirent *ep)
     (*cursor)++;
     return 0;
 }
+
+#ifdef CONFIG_SHLIB
+/*
+ * Scan xipfs for a shared library bFLT with the given lib_id.
+ * Parse its header and register it in shlibs[].  Returns the
+ * registry entry, or NULL on failure.
+ */
+static struct loaded_shlib *shlib_register(uint8_t lib_id)
+{
+    const uint8_t *blob = xipfs_blob_ptr;
+    const struct xipfs_fat *fat;
+    const struct xipfs_fhdr *f;
+    struct flat_hdr hdr;
+    int i, offset;
+    uint32_t export_off, export_cnt, flags;
+    struct loaded_shlib *sl;
+
+    if (!blob)
+        return NULL;
+
+    fat = (const struct xipfs_fat *)blob;
+    offset = sizeof(struct xipfs_fat);
+
+    for (i = 0; i < (int)fat->fs_files; i++) {
+        f = (const struct xipfs_fhdr *)(blob + offset);
+
+        if (f->magic == XIPFS_MAGIC_SHLIB) {
+            /* Check if this library's bFLT has the right lib_id */
+            memcpy(&hdr, f->payload, sizeof(struct flat_hdr));
+            flags = long_be(hdr.flags);
+            if ((flags & FLAT_FLAG_SHLIB) &&
+                (long_be(hdr.filler[FLAT_SHLIB_LIB_ID]) == lib_id)) {
+                /* Found it — register */
+                int slot;
+                for (slot = 0; slot < MAX_SHLIBS; slot++) {
+                    if (shlibs[slot].lib_id == 0)
+                        break;
+                }
+                if (slot >= MAX_SHLIBS) {
+                    kprintf("xipfs: shlib registry full\n");
+                    return NULL;
+                }
+                sl = &shlibs[slot];
+                sl->lib_id = lib_id;
+                sl->flash_base = f->payload;
+                sl->text_base = f->payload + sizeof(struct flat_hdr);
+                sl->text_len = long_be(hdr.data_start) - sizeof(struct flat_hdr);
+                sl->data_len = long_be(hdr.data_end) - long_be(hdr.data_start);
+                sl->bss_len = long_be(hdr.bss_end) - long_be(hdr.data_end);
+
+                export_off = long_be(hdr.filler[FLAT_SHLIB_EXPORT_OFF]);
+                export_cnt = long_be(hdr.filler[FLAT_SHLIB_EXPORT_CNT]);
+                sl->export_count = export_cnt;
+
+                /* Export table: version(4) + count(4) + offsets[] */
+                if (export_off && export_cnt) {
+                    const uint32_t *etab = (const uint32_t *)(f->payload + export_off);
+                    sl->version = long_be(etab[0]);
+                    /* etab[1] is count (redundant), offsets start at etab[2] */
+                    sl->export_table = &etab[2];
+                } else {
+                    sl->export_table = NULL;
+                }
+                kprintf("xipfs: registered shlib id=%d (%s) version=%lu exports=%lu\n",
+                        lib_id, f->name, sl->version, (unsigned long)export_cnt);
+                return sl;
+            }
+        }
+
+        if (f->magic == XIPFS_MAGIC || f->magic == XIPFS_MAGIC_SHLIB)
+            offset += f->len + sizeof(struct xipfs_fhdr);
+        else
+            offset += sizeof(struct xipfs_fhdr);
+        while ((offset % 4) != 0)
+            offset++;
+    }
+    return NULL;
+}
+
+/* Look up a shared library by ID.  Registers on first access. */
+const struct loaded_shlib *xipfs_shlib_find(uint8_t lib_id)
+{
+    int i;
+    for (i = 0; i < MAX_SHLIBS; i++) {
+        if (shlibs[i].lib_id == lib_id)
+            return &shlibs[i];
+    }
+    return shlib_register(lib_id);
+}
+#endif
 
 static int xipfs_mount(char *source, char *tgt, uint32_t flags, void *arg)
 {
@@ -294,6 +416,9 @@ static int xipfs_mount(char *source, char *tgt, uint32_t flags, void *arg)
     /* O(1) mount: just store the blob pointer */
     tgt_dir->owner = &mod_xipfs;
     tgt_dir->priv = source;
+#ifdef CONFIG_SHLIB
+    xipfs_blob_ptr = (const uint8_t *)source;
+#endif
     return 0;
 }
 

@@ -486,7 +486,11 @@ int main(int argc, char **argv) {
     #endif
 
     // Define a reasonable stack limit to detect stack overflow.
+    #ifdef MICROPY_UNIX_STACK_SIZE
+    mp_uint_t stack_size = MICROPY_UNIX_STACK_SIZE;
+    #else
     mp_uint_t stack_size = 40000 * UNIX_STACK_MULTIPLIER;
+    #endif
 
     // We should capture stack top ASAP after start, and it should be
     // captured guaranteedly before any other stack variables are allocated.
@@ -517,6 +521,10 @@ MP_NOINLINE int main_(int argc, char **argv) {
     #if MICROPY_ENABLE_GC
     #if !MICROPY_GC_SPLIT_HEAP
     char *heap = malloc(heap_size);
+    if (heap == NULL) {
+        fprintf(stderr, "fatal: out of memory for GC heap (%ld bytes)\n", heap_size);
+        return 1;
+    }
     gc_init(heap, heap + heap_size);
     #else
     assert(MICROPY_GC_SPLIT_HEAP_N_HEAPS > 0);

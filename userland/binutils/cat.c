@@ -34,7 +34,7 @@ int icebox_cat(int argc, char *args[])
     int fd;
     int i = 1;
     while (args[i]) {
-        fd = open(args[1], O_RDONLY);
+        fd = open(args[i], O_RDONLY);
         if (fd < 0) {
             printf("File not found.\r\n");
             exit(5);

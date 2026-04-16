@@ -678,6 +678,33 @@ int sys_ioctl_hdlr(int fd, uint32_t req, void *val)
     if (!fno)
         return -EBADF;
 
+    /* Terminal window size — handled generically for any fd so that
+     * programs like kilo/vi work whether the fd is a PTY slave, a UART
+     * console, or even a raw socket (telnetd).  Default 80x24.
+     */
+    if (req == 0x5413 /* TIOCGWINSZ */) {
+        struct winsize {
+            unsigned short ws_row, ws_col, ws_xpixel, ws_ypixel;
+        } *ws = (struct winsize *)val;
+        if (!ws)
+            return -EINVAL;
+        ws->ws_row = fno->ws_row ? fno->ws_row : 24;
+        ws->ws_col = fno->ws_col ? fno->ws_col : 80;
+        ws->ws_xpixel = 0;
+        ws->ws_ypixel = 0;
+        return 0;
+    }
+    if (req == 0x5414 /* TIOCSWINSZ */) {
+        struct winsize {
+            unsigned short ws_row, ws_col, ws_xpixel, ws_ypixel;
+        } *ws = (struct winsize *)val;
+        if (!ws)
+            return -EINVAL;
+        fno->ws_row = ws->ws_row;
+        fno->ws_col = ws->ws_col;
+        return 0;
+    }
+
     if (fno->owner->ops.ioctl) {
         return fno->owner->ops.ioctl(fno, req, val);
     } else return -EOPNOTSUPP;

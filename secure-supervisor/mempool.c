@@ -26,7 +26,10 @@
 #include "task.h"
 #include "taskmem.h"
 
-#define MEMPOOL_SIZE        (0x50000) /* 20030000 ~ 2006FFFF */
+#ifndef CONFIG_MEMPOOL_SIZE
+#define CONFIG_MEMPOOL_SIZE (0x38000)
+#endif
+#define MEMPOOL_SIZE        CONFIG_MEMPOOL_SIZE
 #define MAX_MEMPOOL_BLOCKS  512         /* Max blocks in tracking table */
 #define ALIGNMENT           8
 #define ALIGN_UP(x)         (((x) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1))
@@ -131,25 +134,41 @@ void mempool_unmap(void *ptr, uint16_t task_id) {
     }
     /* Put the memory back to the mempool */
     if ((tmp.base != NULL) && tmp.size != 0) {
-        /* First, try to find a contiguous block to extend */
+        int merged = -1;
+
+        /* Forward merge: freed block comes right after an existing free block */
         for (i = 0; i < MAX_MEMPOOL_BLOCKS; i++) {
-            if (mempool_blocks[i].base + mempool_blocks[i].size == tmp.base) {
+            if (mempool_blocks[i].base &&
+                mempool_blocks[i].base + mempool_blocks[i].size == tmp.base) {
                 mempool_blocks[i].size += tmp.size;
-                /* Check if we can merge other blocks after extending */
-                for (j = i; j < MAX_MEMPOOL_BLOCKS; j++) {
-                    if (mempool_blocks[j].base == mempool_blocks[i].base +
-                            mempool_blocks[j].size) {
-                        mempool_blocks[i].size += mempool_blocks[j].size;
-                        mempool_blocks[j].base = NULL;
-                        mempool_blocks[j].size = 0;
-                    }
-                }
-                return;
+                merged = i;
+                break;
             }
         }
-        /* If extending existing blocks is not possible, create a new block in
-         * the first available slot
-         */
+
+        /* Backward merge: freed block sits right before an existing free block */
+        for (i = 0; i < MAX_MEMPOOL_BLOCKS; i++) {
+            if (mempool_blocks[i].base &&
+                tmp.base + tmp.size == mempool_blocks[i].base) {
+                if (merged >= 0) {
+                    /* Both sides adjacent: absorb block[i] into merged block */
+                    mempool_blocks[merged].size += mempool_blocks[i].size;
+                    mempool_blocks[i].base = NULL;
+                    mempool_blocks[i].size = 0;
+                } else {
+                    /* Only backward: extend block[i] downward */
+                    mempool_blocks[i].base = tmp.base;
+                    mempool_blocks[i].size += tmp.size;
+                    merged = i;
+                }
+                break;
+            }
+        }
+
+        if (merged >= 0)
+            return;
+
+        /* No adjacent free block found — create a new entry */
         for (i = 0; i < MAX_MEMPOOL_BLOCKS; i++) {
             if (mempool_blocks[i].base == NULL) {
                 mempool_blocks[i].base = tmp.base;
@@ -545,5 +564,16 @@ int secure_mempool_stats(struct mempool_stats *stats)
     stats->task_reserved = task_used;
     stats->free = (kernel_used + task_used >= total) ?
                   0 : (total - (kernel_used + task_used));
+
+    /* Walk free list: count chunks and find largest contiguous block */
+    stats->largest_free = 0;
+    stats->n_free_chunks = 0;
+    for (int i = 0; i < MAX_MEMPOOL_BLOCKS; i++) {
+        if (mempool_blocks[i].base && mempool_blocks[i].size > 0) {
+            stats->n_free_chunks++;
+            if (mempool_blocks[i].size > stats->largest_free)
+                stats->largest_free = mempool_blocks[i].size;
+        }
+    }
     return 0;
 }

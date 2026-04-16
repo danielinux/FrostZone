@@ -88,6 +88,20 @@ config PIPE
     help
       Build pipe syscall support (pipe2 handler, buffering, polling).
 
+config SHLIB
+    bool "Enable bFLT shared libraries"
+    default n
+    help
+      Enable kernel support for shared-library bFLT objects stored in xipfs.
+      Keep this disabled to preserve the classic standalone bFLT loader path.
+
+config PROCFS
+    bool "Enable /sys/proc/<pid>/mem process info"
+    default y
+    help
+      Expose per-process memory diagnostics under /sys/proc/<pid>/mem.
+      Shows stack, RAM (data+bss), and heap region details for each task.
+
 config CORE_DUMP
     bool "Generate ELF core on segfault"
     default n
@@ -154,5 +168,63 @@ config USB_NET
     depends on DEVUSB && TCPIP
     default y if TARGET_STM32H563
     default y if TARGET_RP2350
+
+config LOOPBACK
+    bool "Loopback interface (127.0.0.1)"
+    depends on TCPIP
+    default y
+    help
+      Enable the software loopback network interface. Requires
+      WOLFIP_MAX_INTERFACES >= 2.
+
+config IP_FORWARD
+    bool "IP forwarding between interfaces"
+    depends on TCPIP
+    default n
+    help
+      Forward IP packets between network interfaces (router mode).
+
+menu "TCP/IP Settings"
+    depends on TCPIP
+
+config MAX_TCPSOCKETS
+    int "Maximum TCP sockets"
+    default 4
+    help
+      Number of simultaneous TCP connections the stack can handle.
+
+config MAX_UDPSOCKETS
+    int "Maximum UDP sockets"
+    default 2
+    help
+      Number of simultaneous UDP endpoints.
+
+config MAX_ICMPSOCKETS
+    int "Maximum ICMP sockets"
+    default 1
+    help
+      Number of raw ICMP sockets (used by ping).
+
+config RXBUF_SIZE
+    int "Socket receive buffer size (bytes)"
+    default 1024
+
+config TXBUF_SIZE
+    int "Socket transmit buffer size (bytes)"
+    default 1024
+
+config MAX_NEIGHBORS
+    int "Maximum neighbor table entries"
+    default 4
+    help
+      ARP / neighbor-discovery cache slots.
+
+config WOLFIP_MAX_INTERFACES
+    int "Maximum network interfaces"
+    default 2
+    help
+      Must be >= 2 when loopback is enabled.
+
+endmenu
 
 endmenu

@@ -25,7 +25,7 @@
 #include "lowpower.h"
 
 #define MAX_SYSFS_BUFFER 1024
-#define CONFIG_MAX_SYSFS_FNODES 16
+#define CONFIG_MAX_SYSFS_FNODES 32
 
 POOL_DEFINE(sysfs_fnode_pool, struct sysfs_fnode, CONFIG_MAX_SYSFS_FNODES);
 
@@ -444,13 +444,14 @@ int sysfs_tasks_read(struct sysfs_fnode *sfs, void *buf, int len)
     struct fnode *fno = sfs->fnode;
     static char *task_txt;
     static uint32_t off;
-    int i;
+    int i, n_pids;
     int stack_used;
     struct task_meminfo meminfo;
     uint32_t heap_bytes;
     char *name;
     int p_state;
     int nice;
+    uint16_t pids[16];
     const char legend[]="pid\tstate\tstack\theap\tnice\tname\r\n";
     uint32_t cur_off = task_fd_get_off(fno);
     if (cur_off == 0) {
@@ -463,10 +464,12 @@ int sysfs_tasks_read(struct sysfs_fnode *sfs, void *buf, int len)
         strcpy(task_txt, legend);
         off += strlen(legend);
 
-        for (i = 1; i <= 0xFFFF; i++) {
-            p_state = scheduler_task_state(i);
+        n_pids = scheduler_get_pids(pids, 16);
+        for (i = 0; i < n_pids; i++) {
+            uint16_t pid = pids[i];
+            p_state = scheduler_task_state(pid);
             if ((p_state != TASK_IDLE) && (p_state != TASK_OVER)) {
-                off += ul_to_str(i, task_txt + off);
+                off += ul_to_str(pid, task_txt + off);
                 task_txt[off++] = '\t';
                 if (p_state == TASK_RUNNABLE)
                     task_txt[off++] = 'r';
@@ -482,12 +485,12 @@ int sysfs_tasks_read(struct sysfs_fnode *sfs, void *buf, int len)
                     task_txt[off++] = 'S';
 
                 task_txt[off++] = '\t';
-                stack_used = scheduler_stack_used(i);
+                stack_used = scheduler_stack_used(pid);
                 off += ul_to_str(stack_used, task_txt + off);
-                
+
                 task_txt[off++] = '\t';
                 heap_bytes = 0;
-                if (task_meminfo(i, &meminfo) == 0) {
+                if (task_meminfo(pid, &meminfo) == 0) {
                     uint32_t h;
                     uint32_t regions = meminfo.n_heap_regions;
                     uint32_t max_regions = sizeof(meminfo.heap) / sizeof(meminfo.heap[0]);
@@ -497,13 +500,13 @@ int sysfs_tasks_read(struct sysfs_fnode *sfs, void *buf, int len)
                         heap_bytes += meminfo.heap[h].size;
                 }
                 off += ul_to_str(heap_bytes, task_txt + off);
-                
+
                 task_txt[off++] = '\t';
-                nice = scheduler_get_nice(i);
+                nice = scheduler_get_nice(pid);
                 off += nice_to_str(nice, task_txt + off);
 
                 task_txt[off++] = '\t';
-                name = scheduler_task_name(i);
+                name = scheduler_task_name(pid);
                 if (name)
                 {
                     strcpy(&task_txt[off], name);
@@ -576,6 +579,8 @@ int sysfs_mem_read(struct sysfs_fnode *sfs, void *buf, int len)
         off = sysfs_mem_append_line(mem_txt, off, "processes", stats.task_reserved);
         off = sysfs_mem_append_line(mem_txt, off, "kernel   ", stats.kernel_reserved);
         off = sysfs_mem_append_line(mem_txt, off, "heap_free", stats.free);
+        off = sysfs_mem_append_line(mem_txt, off, "largest  ", stats.largest_free);
+        off = sysfs_mem_append_line(mem_txt, off, "chunks   ", stats.n_free_chunks);
         mem_txt[off++] = '\0';
     }
 
@@ -740,6 +745,131 @@ int sysfs_register(char *name, char *dir,
     return -1;
 }
 
+/* ---- /sys/proc/<pid>/mem (CONFIG_PROCFS) ---- */
+#if CONFIG_PROCFS
+
+static struct fnode *procfs_dir;
+
+static int procfs_mem_read(struct sysfs_fnode *sfs, void *buf, int len)
+{
+    struct fnode *fno = sfs->fnode;
+    static char *mem_txt;
+    static int off;
+    uint32_t cur_off = task_fd_get_off(fno);
+
+    if (cur_off == 0) {
+        uint16_t pid = (uint16_t)(uintptr_t)fno->dir_ptr; /* stashed PID */
+        struct task_meminfo mi;
+
+        mutex_lock(sysfs_mutex);
+        mem_txt = kalloc(MAX_SYSFS_BUFFER);
+        if (!mem_txt) {
+            mutex_unlock(sysfs_mutex);
+            return -1;
+        }
+        off = 0;
+
+        if (task_meminfo(pid, &mi) != 0) {
+            strcpy(mem_txt, "no info\r\n");
+            off = 9;
+        } else {
+            off = sysfs_mem_append_line(mem_txt, off, "xip_base ", mi.xip_base);
+            off = sysfs_mem_append_line(mem_txt, off, "xip_size ", mi.xip_size);
+            off = sysfs_mem_append_line(mem_txt, off, "ram_base ", mi.ram_base);
+            off = sysfs_mem_append_line(mem_txt, off, "ram_size ", mi.ram_size);
+            off = sysfs_mem_append_line(mem_txt, off, "stack_base", mi.stack_base);
+            off = sysfs_mem_append_line(mem_txt, off, "stack_size", mi.stack_size);
+            {
+                uint32_t h;
+                uint32_t regions = mi.n_heap_regions;
+                uint32_t max_r = sizeof(mi.heap) / sizeof(mi.heap[0]);
+                if (regions > max_r)
+                    regions = max_r;
+                off = sysfs_mem_append_line(mem_txt, off, "heap_segs", regions);
+                for (h = 0; h < regions; h++) {
+                    off = sysfs_mem_append_line(mem_txt, off, "heap_base", mi.heap[h].base);
+                    off = sysfs_mem_append_line(mem_txt, off, "heap_size", mi.heap[h].size);
+                }
+            }
+        }
+        mem_txt[off++] = '\0';
+    }
+
+    cur_off = task_fd_get_off(fno);
+    if (off == cur_off) {
+        kfree(mem_txt);
+        mutex_unlock(sysfs_mutex);
+        return -1;
+    }
+    if (len > (off - cur_off))
+        len = off - cur_off;
+    memcpy(buf, mem_txt + cur_off, len);
+    cur_off += len;
+    task_fd_set_off(fno, cur_off);
+    return len;
+}
+
+/* Called from scheduler when a new task is created. */
+void procfs_pid_create(uint16_t pid)
+{
+    char name[8];
+    struct fnode *pid_dir, *fno;
+    struct sysfs_fnode *mfs;
+
+    if (!procfs_dir)
+        return;
+
+    ul_to_str(pid, name);
+    pid_dir = fno_mkdir(&mod_sysfs, name, procfs_dir);
+    if (!pid_dir)
+        return;
+
+    fno = fno_create(&mod_sysfs, "mem", pid_dir);
+    if (!fno)
+        return;
+    fno->dir_ptr = (uint32_t)pid;
+
+    mfs = pool_alloc(&sysfs_fnode_pool);
+    if (!mfs) {
+        fno_unlink(fno);
+        return;
+    }
+    mfs->fnode = fno;
+    fno->priv = mfs;
+    mfs->do_read = procfs_mem_read;
+    mfs->do_write = NULL;
+}
+
+/* Called from scheduler when a task is destroyed. */
+void procfs_pid_destroy(uint16_t pid)
+{
+    char name[8];
+    struct fnode *pid_dir, *child;
+
+    if (!procfs_dir)
+        return;
+
+    ul_to_str(pid, name);
+
+    /* Find the /sys/proc/<pid> directory */
+    for (pid_dir = procfs_dir->children; pid_dir; pid_dir = pid_dir->next) {
+        if (strcmp(pid_dir->fname, name) == 0)
+            break;
+    }
+    if (!pid_dir)
+        return;
+
+    /* Remove children (the "mem" file) */
+    while ((child = pid_dir->children) != NULL) {
+        if (child->priv)
+            pool_free(&sysfs_fnode_pool, child->priv);
+        fno_unlink(child);
+    }
+    fno_unlink(pid_dir);
+}
+
+#endif /* CONFIG_PROCFS */
+
 static int sysfs_mount(char *source, char *tgt, uint32_t flags, void *args)
 {
     struct fnode *tgt_dir = NULL;
@@ -775,6 +905,9 @@ static int sysfs_mount(char *source, char *tgt, uint32_t flags, void *args)
 #ifdef CONFIG_LOWPOWER
     sysfs_register("suspend","/sys/power", sysfs_no_read, sysfs_suspend_write);
     sysfs_register("standby","/sys/power", sysfs_no_read, sysfs_standby_write);
+#endif
+#if CONFIG_PROCFS
+    procfs_dir = fno_mkdir(&mod_sysfs, "proc", sysfs);
 #endif
     return 0;
 }

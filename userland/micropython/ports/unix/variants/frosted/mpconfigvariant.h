@@ -28,6 +28,9 @@
 
 #define MICROPY_CONFIG_ROM_LEVEL (MICROPY_CONFIG_ROM_LEVEL_MINIMUM)
 
+// Frosted doesn't need sys.executable (avoids realpath at startup)
+#define MICROPY_PY_SYS_EXECUTABLE (0)
+
 // Disable native emitters.
 #define MICROPY_EMIT_X86 (0)
 #define MICROPY_EMIT_X64 (0)

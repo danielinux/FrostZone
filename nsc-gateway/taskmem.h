@@ -27,6 +27,8 @@ struct mempool_stats {
     uint32_t kernel_reserved;
     uint32_t task_reserved;
     uint32_t free;
+    uint32_t largest_free;
+    uint32_t n_free_chunks;
 };
 
 #define MMAP_NEWPAGE (1 << 1)

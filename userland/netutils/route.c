@@ -49,29 +49,33 @@
 static int route_add(char *dst, char *nm, char *gw, int metric, char *dev)
 {
     struct rtentry rte;
-    int sck;
-	sck = socket(AF_INET, SOCK_DGRAM, 0);
-	if(sck < 0){
-		return -1;
-	}
-	memset(&rte, 0, sizeof(struct rtentry));
-	if(ioctl(sck, SIOCADDRT, &rte) < 0)
+    int sck, ret;
+    if (!dst || !nm)
         return -1;
-    return 0;
+    sck = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sck < 0)
+        return -1;
+    memset(&rte, 0, sizeof(struct rtentry));
+    /* TODO: fill rte from parsed arguments */
+    ret = ioctl(sck, SIOCADDRT, &rte);
+    close(sck);
+    return (ret < 0) ? -1 : 0;
 }
 
 static int route_del(char *dst, char *nm, int metric)
 {
     struct rtentry rte;
-    int sck;
-	sck = socket(AF_INET, SOCK_DGRAM, 0);
-	if(sck < 0){
-		return -1;
-	}
-	memset(&rte, 0, sizeof(struct rtentry));
-	if(ioctl(sck, SIOCDELRT, &rte) < 0)
+    int sck, ret;
+    if (!dst || !nm)
         return -1;
-    return 0;
+    sck = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sck < 0)
+        return -1;
+    memset(&rte, 0, sizeof(struct rtentry));
+    /* TODO: fill rte from parsed arguments */
+    ret = ioctl(sck, SIOCDELRT, &rte);
+    close(sck);
+    return (ret < 0) ? -1 : 0;
 }
 
 #define SYS_NET_ROUTE "/sys/net/route"
@@ -124,12 +128,14 @@ int icebox_route(int argc, char *argv[])
         usage();
     }
 
-    if (strcmp(argv[1],"add") == 0) 
+    if (strcmp(argv[1],"add") == 0)
     {
         /* TODO: parse arguments */
-        route_add(dest, nm, gw, atoi(metric), dev);
+        fprintf(stderr, "route add: argument parsing not implemented\r\n");
+        exit(1);
     } else if (strcmp(argv[1],"del") == 0) {
         /* TODO: parse arguments */
-        route_del(dest, nm, atoi(metric));
+        fprintf(stderr, "route del: argument parsing not implemented\r\n");
+        exit(1);
     } else usage();
 }

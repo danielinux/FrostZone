@@ -21,11 +21,15 @@ static int xipfs_ls(const uint8_t *blob)
         if (f->magic == XIPFS_MAGIC) {
             printf("%s (%d bytes)\n", f->name, f->len);
             offset += f->len + sizeof(struct xipfs_fhdr);
-        } 
-        if (f->magic == XIPFS_MAGIC_ICELINK) {
+        } else if (f->magic == XIPFS_MAGIC_SHLIB) {
+            printf("%s (%d bytes) [shlib]\n", f->name, f->len);
+            offset += f->len + sizeof(struct xipfs_fhdr);
+        } else if (f->magic == XIPFS_MAGIC_ICELINK) {
             printf("%s (link to icebox)\n", f->name);
             offset += sizeof(struct xipfs_fhdr);
         }
+        while ((offset % 4) != 0)
+            offset++;
     }
     return 0;
 }

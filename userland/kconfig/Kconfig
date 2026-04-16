@@ -4,6 +4,11 @@ menu "Libraries"
     bool "WolfSSL TLS + Encryption"
     default n
 
+    config LIB_WOLFSSH
+    bool "WolfSSH (SSH server/client)"
+    depends on LIB_WOLFSSL
+    default n
+
     config LIB_MONGOOSE
     bool "Cesanta's Mongoose REST API library"
     default n
@@ -137,11 +142,14 @@ config APP_NETCAT
 #    depends on LIB_WOLFSSL
 config APP_SSHD
     bool "sshd"
-    depends on LIB_WOLFSSL
+    depends on LIB_WOLFSSH
 config APP_NTPC
     tristate "ntpc"
 config APP_STARWARS
     tristate "starwars"
+config APP_SHA256
+    bool "sha256 (wolfSSL shared library demo)"
+    depends on LIB_WOLFSSL
 endmenu
 
 menu "Interpreters"

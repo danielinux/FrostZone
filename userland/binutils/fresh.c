@@ -404,23 +404,28 @@ void shell_init(char *file)
     int stdin_fileno, stdout_fileno, stderr_fileno;
 
     if (file) {
+        int retries;
         if (strcmp(file, "/dev/ttyS0") == 0) {
             fresh_tty_trace_enabled = 1;
         }
         close(0);
         close(1);
         close(2);
-        do {
+        for (retries = 0; retries < 100; retries++) {
             stdin_fileno = open(file, O_RDWR, 0);
-        } while (stdin_fileno < 0);
+            if (stdin_fileno >= 0)
+                break;
+        }
+        if (stdin_fileno < 0)
+            _exit(1);
 
-        do {
-            stdout_fileno = dup(stdin_fileno);
-        } while (stdout_fileno < 0);
+        stdout_fileno = dup(stdin_fileno);
+        if (stdout_fileno < 0)
+            _exit(1);
 
-        do {
-            stderr_fileno = dup(stdin_fileno);
-        } while (stderr_fileno < 0);
+        stderr_fileno = dup(stdin_fileno);
+        if (stderr_fileno < 0)
+            _exit(1);
     }
 
     // See if we are running interactively
@@ -556,23 +561,34 @@ static enum x_type get_x_type(char *arg)
     return X_UNK;
 }
 
+/* Resolve command name to full path in /bin/.
+ * Returns 0 on success, -1 if not found. Result written to buf. */
+static int resolve_cmd(const char *cmd, char *buf, int bufsz)
+{
+    struct stat st;
+    if (!strchr(cmd, '/') || (stat(cmd, &st) < 0)) {
+        strncpy(buf, "/bin/", bufsz - 1);
+        strncpy(buf + 5, cmd, bufsz - 6);
+        buf[bufsz - 1] = '\0';
+    } else {
+        strncpy(buf, cmd, bufsz - 1);
+        buf[bufsz - 1] = '\0';
+    }
+    if (stat(buf, &st) < 0)
+        return -1;
+    return 0;
+}
+
 static int launchProg(char **args, int background)
 {
     int err = -1;
     struct stat st;
-    char bin_arg0[60] = "/bin/";
+    char bin_arg0[60];
     char interpreter[30] = "/bin/fresh";
     enum x_type xt;
     int pid;
 
-    /* Try to look for path */
-    if (!strchr(args[0], '/') || (stat(args[0], &st) < 0))
-        strcpy(bin_arg0 + 5, args[0]);
-    else
-        strcpy(bin_arg0, args[0]);
-
-    /* Find in path: executable command */
-    if (stat(bin_arg0, &st) < 0) {
+    if (resolve_cmd(args[0], bin_arg0, sizeof(bin_arg0)) < 0) {
         printf("stat: Command not found.\r\n");
         return 1;
     }
@@ -651,51 +667,72 @@ static int launchProg(char **args, int background)
 }
 
 /**
-* Method used to manage I/O redirection
+* Set up I/O redirections in the current process (parent).
+* Returns 0 on success, -1 on failure.
+* Saves original fds in saved_in/saved_out/saved_err for later restore.
 */
-void fileIO(char *args[], char *inputFile, char *outputFile, int option)
+static int redir_setup(char *inputFile, char *outputFile, int option,
+                       int *saved_in, int *saved_out, int *saved_err)
 {
-    int err = -1;
-    int fileDescriptor; // between 0 and 19, describing the output or input file
-    int pid;
+    int fd;
+    *saved_in = *saved_out = *saved_err = -1;
 
-    if ((pid = vfork()) == -1) {
-        printf("Child process could not be created\r\n");
-        return;
-    }
-    if (pid == 0) {
-        // Option 0: output redirection
-        if (option == 0) {
-            uint32_t flags;
-            // We open (create) the file truncating it at 0, for write only
-            flags = O_CREAT;
-            flags |= O_TRUNC | O_WRONLY;
-            fileDescriptor = open(outputFile, flags, 0600);
-            // We replace de standard output with the appropriate file
-            dup2(fileDescriptor, STDOUT_FILENO);
-            close(fileDescriptor);
-            // Option 1: input and output redirection
-        } else if (option == 1) {
-            // We open file for read only (it's STDIN)
-            fileDescriptor = open(inputFile, O_RDONLY, 0600);
-            // We replace de standard input with the appropriate file
-            dup2(fileDescriptor, STDIN_FILENO);
-            close(fileDescriptor);
-            // Same as before for the output file
-            fileDescriptor =
-                open(outputFile, O_CREAT | O_TRUNC | O_WRONLY, 0600);
-            dup2(fileDescriptor, STDOUT_FILENO);
-            close(fileDescriptor);
+    if (option == 0) {
+        /* > stdout */
+        fd = open(outputFile, O_CREAT | O_TRUNC | O_WRONLY, 0600);
+        if (fd < 0) { perror(outputFile); return -1; }
+        *saved_out = dup(STDOUT_FILENO);
+        dup2(fd, STDOUT_FILENO);
+        close(fd);
+    } else if (option == 1) {
+        /* < stdin + > stdout */
+        fd = open(inputFile, O_RDONLY, 0600);
+        if (fd < 0) { perror(inputFile); return -1; }
+        *saved_in = dup(STDIN_FILENO);
+        dup2(fd, STDIN_FILENO);
+        close(fd);
+        fd = open(outputFile, O_CREAT | O_TRUNC | O_WRONLY, 0600);
+        if (fd < 0) {
+            perror(outputFile);
+            dup2(*saved_in, STDIN_FILENO);
+            close(*saved_in);
+            *saved_in = -1;
+            return -1;
         }
-
-        // setenv("parent",getcwd(currentDirectory, 128),1);
-
-        execvp(args[0], args);
-        exit(1);
+        *saved_out = dup(STDOUT_FILENO);
+        dup2(fd, STDOUT_FILENO);
+        close(fd);
+    } else if (option == 2) {
+        /* >> append */
+        fd = open(outputFile, O_CREAT | O_APPEND | O_WRONLY, 0600);
+        if (fd < 0) { perror(outputFile); return -1; }
+        *saved_out = dup(STDOUT_FILENO);
+        dup2(fd, STDOUT_FILENO);
+        close(fd);
+    } else if (option == 3) {
+        /* 2> stderr */
+        fd = open(outputFile, O_CREAT | O_TRUNC | O_WRONLY, 0600);
+        if (fd < 0) { perror(outputFile); return -1; }
+        *saved_err = dup(STDERR_FILENO);
+        dup2(fd, STDERR_FILENO);
+        close(fd);
     }
+    return 0;
+}
 
-    while (child_pid != pid) {
-        sleep(60); /* Will be interrupted by sigchld */
+static void redir_restore(int saved_in, int saved_out, int saved_err)
+{
+    if (saved_in >= 0) {
+        dup2(saved_in, STDIN_FILENO);
+        close(saved_in);
+    }
+    if (saved_out >= 0) {
+        dup2(saved_out, STDOUT_FILENO);
+        close(saved_out);
+    }
+    if (saved_err >= 0) {
+        dup2(saved_err, STDERR_FILENO);
+        close(saved_err);
     }
 }
 
@@ -743,69 +780,81 @@ static int pipeHandler(char *args[])
         return -1;
     }
 
+    /* Save original stdin/stdout */
+    {
+    int saved_stdin = dup(STDIN_FILENO);
+    int saved_stdout = dup(STDOUT_FILENO);
+
     for (i = 0; i < cmd_count; i++) {
         int pipefd[2];
         pid_t pid;
+        char resolved[60];
+
         pipefd[0] = -1;
         pipefd[1] = -1;
         if (i < cmd_count - 1) {
             if (pipe(pipefd) < 0) {
                 perror("pipe");
-                if (prev_read != -1)
-                    close(prev_read);
-                return -1;
+                break;
             }
         }
 
-        pid = fork();
+        /* Resolve command path */
+        if (resolve_cmd(commands[i][0], resolved, sizeof(resolved)) < 0) {
+            printf("fresh: %s: command not found\r\n", commands[i][0]);
+            if (pipefd[0] != -1) close(pipefd[0]);
+            if (pipefd[1] != -1) close(pipefd[1]);
+            break;
+        }
+
+        /* Set up fds in parent before vfork:
+         * - stdin: from prev_read (previous pipe read end), or original stdin
+         * - stdout: to pipefd[1] (current pipe write end), or original stdout
+         */
+        if (prev_read != -1) {
+            dup2(prev_read, STDIN_FILENO);
+            close(prev_read);
+            prev_read = -1;
+        }
+        if (pipefd[1] != -1) {
+            dup2(pipefd[1], STDOUT_FILENO);
+            close(pipefd[1]);
+        }
+
+        child_pid = 0;
+        pid = vfork();
         if (pid < 0) {
-            perror("fork");
-            if (pipefd[0] != -1)
-                close(pipefd[0]);
-            if (pipefd[1] != -1)
-                close(pipefd[1]);
-            if (prev_read != -1)
-                close(prev_read);
-            return -1;
+            perror("vfork");
+            if (pipefd[0] != -1) close(pipefd[0]);
+            break;
         }
         if (pid == 0) {
-            if (prev_read != -1) {
-                dup2(prev_read, STDIN_FILENO);
-            }
-            if (pipefd[1] != -1) {
-                dup2(pipefd[1], STDOUT_FILENO);
-            }
-            if (pipefd[0] != -1)
-                close(pipefd[0]);
-            if (pipefd[1] != -1)
-                close(pipefd[1]);
-            if (prev_read != -1)
-                close(prev_read);
-
-            execvp(commands[i][0], commands[i]);
-            perror(commands[i][0]);
+            /* Child: only exec or _exit */
+            execvp(resolved, commands[i]);
             _exit(127);
         }
 
         pids[i] = pid;
-        if (pipefd[1] != -1)
-            close(pipefd[1]);
-        if (prev_read != -1)
-            close(prev_read);
+
+        /* Wait for this child before proceeding to next stage */
+        while (child_pid != pid) {
+            sleep(60);
+        }
+
+        /* Restore parent stdout for next iteration or final restore */
+        dup2(saved_stdout, STDOUT_FILENO);
+        /* Restore parent stdin */
+        dup2(saved_stdin, STDIN_FILENO);
+
+        /* The read end of this pipe becomes stdin for next command */
         prev_read = pipefd[0];
     }
 
     if (prev_read != -1)
         close(prev_read);
-
-    for (i = 0; i < cmd_count; i++) {
-        int status = 0;
-        pid_t w;
-        do {
-            w = waitpid(pids[i], &status, 0);
-        } while (w < 0 && errno == EINTR);
-        if (w == pids[cmd_count - 1])
-            last_status = status;
+    close(saved_stdin);
+    close(saved_stdout);
+    last_status = child_status;
     }
 
     if (WIFEXITED(last_status))
@@ -839,7 +888,8 @@ int commandHandler(char *args[], int argc)
     // We look for the special characters and separate the command itself
     // in a new array for the arguments
     while (j < argc) {
-        if ((strcmp(args[j], ">") == 0) || (strcmp(args[j], "<") == 0) ||
+        if ((strcmp(args[j], ">") == 0) || (strcmp(args[j], ">>") == 0) ||
+            (strcmp(args[j], "2>") == 0) || (strcmp(args[j], "<") == 0) ||
             (strcmp(args[j], "&") == 0)) {
             break;
         }
@@ -913,10 +963,15 @@ int commandHandler(char *args[], int argc)
         if (token) {
             size_t keylen = token - command;
             char *key = malloc((keylen + 1) * sizeof (char));
+            int rc;
+            if (!key)
+                return -ENOMEM;
             strncpy(key, command, keylen);
             *(key + keylen) = 0x0;
             token++;
-            if (setenv(key, token, 1)) {
+            rc = setenv(key, token, 1);
+            free(key);
+            if (rc) {
                 return -errno;
             }
             return 0;
@@ -955,7 +1010,12 @@ int commandHandler(char *args[], int argc)
 
     // 'setenv' command to set environment variables
     else if (strcmp(args[0], "setenv") == 0) {
-        setenv(args[1], args[2], 1);
+        if (argc < 3) {
+            printf("usage: setenv NAME VALUE\r\n");
+            setenv("?", "1", 1);
+        } else {
+            setenv(args[1], args[2], 1);
+        }
     } else if (strcmp(args[0], "export") == 0) {
         int rv = 0;
         if (argc < 2) {
@@ -989,14 +1049,18 @@ int commandHandler(char *args[], int argc)
         if (argc > 1) {
             char *value;
             value = getenv(args[1]);
-            if (value)
+            if (value) {
                 printf("%s\r\n", value);
-            else
+                setenv("?", "0", 1);
+            } else {
                 printf("getenv: variable '%s' is not set\r\n", args[1]);
+                setenv("?", "1", 1);
+            }
         } else {
             extern char **environ;
             for (char **env = environ; env && *env; env++)
                 printf("%s\r\n", *env);
+            setenv("?", "0", 1);
         }
     }
     // 'unsetenv' command to undefine environment variables
@@ -1055,6 +1119,7 @@ int commandHandler(char *args[], int argc)
             // we exit the loop
             if (strcmp(args[i], "&") == 0) {
                 background = 1;
+                args_aux[i] = NULL;
                 // If '|' is detected, piping was solicited, and we call
                 // the appropriate method that will handle the different
                 // executions
@@ -1068,31 +1133,62 @@ int commandHandler(char *args[], int argc)
                 // First we check if the structure given is the correct one,
                 // and if that is the case we call the appropriate method
             } else if (strcmp(args[i], "<") == 0) {
+                int sv_in, sv_out, sv_err, rv;
                 aux = i + 1;
                 if (args[aux] == NULL || args[aux + 1] == NULL ||
                     args[aux + 2] == NULL) {
                     printf("Not enough input arguments\r\n");
                     return -1;
-                } else {
-                    if (strcmp(args[aux + 1], ">") != 0) {
-                        printf("Usage: Expected '>' and found %s\r\n",
-                               args[aux + 1]);
-                        return -2;
-                    }
                 }
-                fileIO(args_aux, args[i + 1], args[i + 3], 1);
-                return 1;
+                if (strcmp(args[aux + 1], ">") != 0) {
+                    printf("Usage: Expected '>' and found %s\r\n",
+                           args[aux + 1]);
+                    return -2;
+                }
+                if (redir_setup(args[i + 1], args[i + 3], 1, &sv_in, &sv_out, &sv_err) < 0)
+                    return -1;
+                rv = launchProg(args_aux, 0);
+                redir_restore(sv_in, sv_out, sv_err);
+                return rv;
             }
-            // If '>' is detected, we have output redirection.
-            // First we check if the structure given is the correct one,
-            // and if that is the case we call the appropriate method
-            else if (strcmp(args[i], ">") == 0) {
+            // '>>' append redirection
+            else if (strcmp(args[i], ">>") == 0) {
+                int sv_in, sv_out, sv_err, rv;
                 if (args[i + 1] == NULL) {
                     printf("Not enough input arguments\r\n");
                     return -1;
                 }
-                fileIO(args_aux, NULL, args[i + 1], 0);
-                return 1;
+                if (redir_setup(NULL, args[i + 1], 2, &sv_in, &sv_out, &sv_err) < 0)
+                    return -1;
+                rv = launchProg(args_aux, 0);
+                redir_restore(sv_in, sv_out, sv_err);
+                return rv;
+            }
+            // '2>' stderr redirection
+            else if (strcmp(args[i], "2>") == 0) {
+                int sv_in, sv_out, sv_err, rv;
+                if (args[i + 1] == NULL) {
+                    printf("Not enough input arguments\r\n");
+                    return -1;
+                }
+                if (redir_setup(NULL, args[i + 1], 3, &sv_in, &sv_out, &sv_err) < 0)
+                    return -1;
+                rv = launchProg(args_aux, 0);
+                redir_restore(sv_in, sv_out, sv_err);
+                return rv;
+            }
+            // '>' output redirection
+            else if (strcmp(args[i], ">") == 0) {
+                int sv_in, sv_out, sv_err, rv;
+                if (args[i + 1] == NULL) {
+                    printf("Not enough input arguments\r\n");
+                    return -1;
+                }
+                if (redir_setup(NULL, args[i + 1], 0, &sv_in, &sv_out, &sv_err) < 0)
+                    return -1;
+                rv = launchProg(args_aux, 0);
+                redir_restore(sv_in, sv_out, sv_err);
+                return rv;
             }
             i++;
         }
@@ -1157,38 +1253,30 @@ char *readline_tty(char *input, int size)
                         fflush(stdout);
                     }
                 } else if (dir == 'D') {
-                    write(STDOUT_FILENO, &del, 1);
-                    pos--;
+                    if (pos > 0) {
+                        write(STDOUT_FILENO, &del, 1);
+                        pos--;
+                    }
                     continue;
                 }
             }
 
             if (ret > 3) {
                 if ((got[0] == 0x1B) && (got[2] == 0x33) && (got[3] == 0x7E)) {
+                    /* Delete key: remove char at cursor position */
                     if (pos < len) {
-                        // write(STDOUT_FILENO, &del, 1);
-                        // printf( " ");
-                        // write(STDOUT_FILENO, &del, 1);
-                        pos--;
                         len--;
-                        if (pos < len) {
-                            for (i = pos + 1; i < len; i++) {
-                                input[i] = input[i + 1];
-                                write(STDOUT_FILENO, &input[i], 1);
-                            }
-                            write(STDOUT_FILENO, &space, 1);
-                            i = len - pos;
-                            while (i > 0) {
-                                write(STDOUT_FILENO, &del, 1);
-                                i--;
-                            }
-
-                        } else {
-                            input[pos] = 0x00;
-                            pos--;
-                            len--;
+                        for (i = pos; i < len; i++) {
+                            input[i] = input[i + 1];
+                            write(STDOUT_FILENO, &input[i], 1);
                         }
-
+                        write(STDOUT_FILENO, &space, 1);
+                        i = len - pos + 1;
+                        while (i > 0) {
+                            write(STDOUT_FILENO, &del, 1);
+                            i--;
+                        }
+                        input[len] = '\0';
                         continue;
                     }
                 }
@@ -1196,6 +1284,8 @@ char *readline_tty(char *input, int size)
             }
             if ((ret > 0) && (got[0] >= 0x20) && (got[0] <= 0x7e)) {
                 for (i = 0; i < ret; i++) {
+                    if (len >= size - 2)
+                        break;
                     /* Echo to terminal */
                     if (got[i] >= 0x20 && got[i] <= 0x7e)
                         write(STDOUT_FILENO, &got[i], 1);
@@ -1406,7 +1496,7 @@ static int fresh_exec(char *arg0, char **argv)
         free(script_mem);
         return 254;
     }
-    script_mem[count - 1] = '\0';
+    script_mem[count] = '\0';
 
     line = script_mem;
     r = 0;

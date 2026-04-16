@@ -23,6 +23,7 @@
 
 extern void frosted_main(void);
 extern unsigned long _ns_sidata[], _ns_sdata[], _ns_edata[], _sbss[], _ebss[], _estack[];
+extern unsigned long _sstack[];
 
 void empty_handler(void)
 {
@@ -40,6 +41,12 @@ void reset_handler(void) {
 
     for (dst = (void *)_sbss; dst < (void *)_ebss; dst++)
         *dst = 0;
+
+    /* Set MSPLIM_NS to the base of STACK_MEM — prevents the kernel MSP
+     * from overflowing downward into kernel data/bss.  PSPLIM for user
+     * tasks is set per-task in mpu_task_on().
+     */
+    __asm volatile("msr msplim, %0" : : "r"((uint32_t)_sstack));
 
     frosted_main();
     while (1);

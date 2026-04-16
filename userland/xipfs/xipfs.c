@@ -34,6 +34,12 @@ static int add_link(int img, char *name)
     return 0;
 }
 
+static int is_shlib(const char *name)
+{
+    const char *dot = strrchr(name, '.');
+    return dot && strcmp(dot, ".so") == 0;
+}
+
 static int add_bin(int img, int fd, char *name)
 {
     struct xipfs_fhdr hdr;
@@ -43,7 +49,7 @@ static int add_bin(int img, int fd, char *name)
     int count = 0;
     uint32_t pad_len = 0;
     memset(&hdr, 0, sizeof(struct xipfs_fhdr));
-    hdr.magic = XIPFS_MAGIC;
+    hdr.magic = is_shlib(name) ? XIPFS_MAGIC_SHLIB : XIPFS_MAGIC;
     strncpy(hdr.name, basename(name), 55);
     fstat(fd, &st);
     hdr.len = st.st_size;

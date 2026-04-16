@@ -251,10 +251,10 @@ static void ifconf_show_fd(int sck, const char *name)
         return;
     }
     printf("%s: flags:%s mtu 1500\r\n", name, (ret > 0)?"<UP,BROADCAST,MULTICAST,RUNNING>":"<DOWN>");
-    printf("        inet %s ", inet_ntoa(a.sin_addr));
-    printf("netmask %s ", inet_ntoa(n.sin_addr));
-    printf("broadcast %s\r\n", inet_ntoa(b.sin_addr));
-    printf("\r\n");
+    printf("        inet %s", inet_ntoa(a.sin_addr));
+    printf(" netmask %s", inet_ntoa(n.sin_addr));
+    printf(" broadcast %s", inet_ntoa(b.sin_addr));
+    printf("\r\n\r\n");
 }
 
 void ifconf_show(char *name)

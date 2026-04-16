@@ -56,6 +56,7 @@ int icebox_mount(int argc, char *argv[])
                 write(1, buf, r);
             }
         } while (r > 0);
+        close(fd);
     } else if (argc == 4) {
         if(mount(argv[1], argv[2], argv[3], 0, NULL) == 0) {
             fprintf(stderr, "Successfully mounted %s on %s, type=%s\r\n", argv[1], argv[2], argv[3]);

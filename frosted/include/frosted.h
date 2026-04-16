@@ -114,6 +114,7 @@ char * scheduler_task_name(int pid);
 int scheduler_task_state(int pid);
 unsigned scheduler_stack_used(int pid);
 int scheduler_get_nice(int pid);
+int scheduler_get_pids(uint16_t *pids, int max);
 
 /* Get the task object for the current task */
 struct task *this_task(void);
@@ -272,6 +273,8 @@ struct fnode {
     uint32_t dir_ptr;
     uint32_t size;
     int32_t usage_count;
+    uint16_t ws_col;
+    uint16_t ws_row;
     struct fnode *next;
 };
 
@@ -404,6 +407,13 @@ int sysfs_register(char *name, char *dir,
         int (*do_write)(struct sysfs_fnode *sfs, const void *buf, int len) );
 void sysfs_lock(void);
 void sysfs_unlock(void);
+#if CONFIG_PROCFS
+void procfs_pid_create(uint16_t pid);
+void procfs_pid_destroy(uint16_t pid);
+#else
+#define procfs_pid_create(pid) do {} while(0)
+#define procfs_pid_destroy(pid) do {} while(0)
+#endif
 void frosted_tcpip_wakeup(void);
 void pico_lock_init(void);
 int pico_trylock_kernel(void);

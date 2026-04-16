@@ -82,7 +82,7 @@ xipfstool: xipfs
 
 userspace.bin: $(APPS-y) $(DIR-y) sh xipfstool lnk
 	mv out/*.gdb gdb/ 2>/dev/null || true
-	./xipfstool $@ $(APPS-y) out/*
+	./xipfstool $@ $(APPS-y) $(filter-out %.map %.gdb,$(wildcard out/*))
 
 binutils: FORCE
 	mkdir -p out

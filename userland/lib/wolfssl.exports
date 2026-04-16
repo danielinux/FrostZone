@@ -1,0 +1,3 @@
+wc_InitSha256
+wc_Sha256Update
+wc_Sha256Final

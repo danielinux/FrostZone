@@ -175,6 +175,12 @@ int icebox_ntpc(int argc, char **argv)
     struct addrinfo *res;
     struct sockaddr_in *sai;
     int nfd;
+    char ipbuf[16];
+
+    if (argc < 2) {
+        fprintf(stderr, "usage: %s <ntp-server>\r\n", argv[0]);
+        exit(1);
+    }
 
     create_socket(&nfd);
 
@@ -189,7 +195,9 @@ int icebox_ntpc(int argc, char **argv)
 
         if (res) {
             sai = (struct sockaddr_in *)(res->ai_addr);
-            if (query_ntp(nfd, inet_ntoa(sai->sin_addr)) < 0) {
+            strncpy(ipbuf, inet_ntoa(sai->sin_addr), sizeof(ipbuf) - 1);
+            ipbuf[sizeof(ipbuf) - 1] = '\0';
+            if (query_ntp(nfd, ipbuf) < 0) {
                 sleep(5);
             } else {
                 sleep(64);

@@ -46,15 +46,15 @@ int ping(struct sockaddr_in *dst, int count, int len)
     int sock = socket(AF_INET,SOCK_DGRAM,IPPROTO_ICMP);
     struct sockaddr_in reply_from;
     socklen_t sockaddr_in_len = sizeof(struct sockaddr_in);
-    uint8_t *a;
 
     if (sock < 0) {
         perror("socket");
         return -1;
     }
+    if (len > DEFAULT_LEN)
+        len = DEFAULT_LEN;
 
-    a = (uint8_t *)&dst->sin_addr.s_addr;
-    printf("PING %d.%d.%d.%d: %d data bytes\r\n", a[0], a[1], a[2], a[3], len);
+    printf("PING %s: %d data bytes\r\n", inet_ntoa(dst->sin_addr), len);
 
     i = 0;
     while((count == 0) || (i < count)) {
@@ -62,7 +62,7 @@ int ping(struct sockaddr_in *dst, int count, int len)
         icmp_hdr->type = ICMP_ECHO;
         icmp_hdr->un.echo.id = 1234;
 
-        for(i = sizeof(struct icmphdr); i < sizeof(struct icmphdr) + len; i++) {
+        for(i = sizeof(struct icmphdr); i < DEFAULT_LEN && i < (int)(sizeof(struct icmphdr) + len); i++) {
             payload[i] = i & 0xFF;
         }
         icmp_hdr->un.echo.sequence = sequence++;
@@ -83,9 +83,8 @@ int ping(struct sockaddr_in *dst, int count, int len)
                 uint32_t triptime;
                 t_recv = gettime_ms();
                 triptime = (t_recv >= t_send) ? (t_recv - t_send) : 0;
-                a = (uint8_t *)&reply_from.sin_addr.s_addr;
-                printf("%d bytes from %d.%d.%d.%d: icmp_seq=%d time=%lu ms\r\n",
-                       r, a[0], a[1], a[2], a[3],
+                printf("%d bytes from %s: icmp_seq=%d time=%lu ms\r\n",
+                       r, inet_ntoa(reply_from.sin_addr),
                        icmp_hdr->un.echo.sequence,
                        (unsigned long)triptime);
                 sleep(1);

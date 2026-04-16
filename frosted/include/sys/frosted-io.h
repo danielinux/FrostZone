@@ -161,6 +161,7 @@ struct winsize
   unsigned short ws_ypixel;	/* vertical size, pixels */
 };
 #define TIOCGWINSZ	0x5413
+#define TIOCSWINSZ	0x5414
 
 /* KEYBOARD */
 #define     KDGKBMODE   0x4B44  /* gets current keyboard mode */

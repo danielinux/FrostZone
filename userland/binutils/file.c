@@ -314,7 +314,7 @@ int icebox_file(int argc, char *argv[])
         } else if (S_ISLNK(s.st_mode)) {
             printf("symbolic link");
             memset(link_buf, 0, PATH_MAX);
-            readlink(argv[1], link_buf, PATH_MAX);
+            readlink(argv[i], link_buf, PATH_MAX);
             printf(" to %s", link_buf);
         } else if (S_ISSOCK(s.st_mode)) {
             printf("socket");
