@@ -167,8 +167,16 @@ static int xipfs_exe(struct fnode *fno, void *arg, struct task_exec_info *info)
         phase0_bflt_trace_tag = 0;
 
     /* payload is the bFLT load address */
+#ifdef CONFIG_SHLIB
+    info->extra_mmap_count = 0;
     if (bflt_load((uint8_t *)payload, &reloc_text, &reloc_data, &reloc_bss,
-                  &init, &stack_size, (uint32_t *)&got_loc, &text_size, &data_size))
+                  &init, &stack_size, (uint32_t *)&got_loc, &text_size, &data_size,
+                  info->extra_mmap, &info->extra_mmap_count))
+#else
+    if (bflt_load((uint8_t *)payload, &reloc_text, &reloc_data, &reloc_bss,
+                  &init, &stack_size, (uint32_t *)&got_loc, &text_size, &data_size,
+                  NULL, NULL))
+#endif
     {
         phase0_bflt_trace_tag = 0;
         kprintf("xipfs: bFLT loading failed.\n");
@@ -325,8 +333,9 @@ static struct loaded_shlib *shlib_register(uint8_t lib_id)
         f = (const struct xipfs_fhdr *)(blob + offset);
 
         if (f->magic == XIPFS_MAGIC_SHLIB) {
+            const uint8_t *payload = ((const uint8_t *)f) + sizeof(struct xipfs_fhdr);
             /* Check if this library's bFLT has the right lib_id */
-            memcpy(&hdr, f->payload, sizeof(struct flat_hdr));
+            memcpy(&hdr, payload, sizeof(struct flat_hdr));
             flags = long_be(hdr.flags);
             if ((flags & FLAT_FLAG_SHLIB) &&
                 (long_be(hdr.filler[FLAT_SHLIB_LIB_ID]) == lib_id)) {
@@ -342,8 +351,8 @@ static struct loaded_shlib *shlib_register(uint8_t lib_id)
                 }
                 sl = &shlibs[slot];
                 sl->lib_id = lib_id;
-                sl->flash_base = f->payload;
-                sl->text_base = f->payload + sizeof(struct flat_hdr);
+                sl->flash_base = payload;
+                sl->text_base = payload + sizeof(struct flat_hdr);
                 sl->text_len = long_be(hdr.data_start) - sizeof(struct flat_hdr);
                 sl->data_len = long_be(hdr.data_end) - long_be(hdr.data_start);
                 sl->bss_len = long_be(hdr.bss_end) - long_be(hdr.data_end);
@@ -354,7 +363,7 @@ static struct loaded_shlib *shlib_register(uint8_t lib_id)
 
                 /* Export table: version(4) + count(4) + offsets[] */
                 if (export_off && export_cnt) {
-                    const uint32_t *etab = (const uint32_t *)(f->payload + export_off);
+                    const uint32_t *etab = (const uint32_t *)(payload + export_off);
                     sl->version = long_be(etab[0]);
                     /* etab[1] is count (redundant), offsets start at etab[2] */
                     sl->export_table = &etab[2];

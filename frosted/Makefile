@@ -53,6 +53,7 @@ endif
 
 CONFIG_FLASHFS := $(call kconfig_bool,$(FLASHFS))
 CONFIG_FLASHFS_VERIFY := $(call kconfig_bool,$(FLASHFS_VERIFY))
+CONFIG_SHLIB := $(call kconfig_bool,$(SHLIB))
 CONFIG_DEVUSB := $(call kconfig_bool,$(DEVUSB))
 CFG_TUD_ENABLED := $(call kconfig_bool,$(CFG_TUD_ENABLED))
 CONFIG_USB_NET := $(call kconfig_bool,$(USB_NET))
@@ -104,6 +105,9 @@ CFLAGS += -DCONFIG_SPI3=$(CONFIG_SPI3)
 CFLAGS += -DCONFIG_DEVFRAMEBUFFER=$(CONFIG_DEVFRAMEBUFFER)
 CFLAGS += -DCONFIG_DEVFBCON=$(CONFIG_DEVFBCON)
 CFLAGS += -DCONFIG_DEVTTY_CONSOLE=$(CONFIG_DEVTTY_CONSOLE)
+ifeq ($(CONFIG_SHLIB),1)
+CFLAGS += -DCONFIG_SHLIB=1
+endif
 
 # TCP/IP settings (with fallback defaults)
 ifdef MAX_TCPSOCKETS

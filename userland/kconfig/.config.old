@@ -6,8 +6,7 @@
 #
 # Libraries
 #
-LIB_WOLFSSL=y
-LIB_WOLFSSH=y
+# LIB_WOLFSSL is not set
 # LIB_MONGOOSE is not set
 
 #
@@ -70,10 +69,8 @@ APP_PING=y
 APP_HOST=y
 APP_TELNETD=y
 APP_NETCAT=y
-# APP_SSHD is not set
 # APP_NTPC is not set
 # APP_STARWARS is not set
-APP_SHA256=y
 
 #
 # Interpreters

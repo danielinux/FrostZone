@@ -14,7 +14,8 @@ static inline uint32_t long_be(uint32_t le)
 }
 
 int bflt_load(uint8_t* from, void **reloc_text, void **reloc_data, void **reloc_bss,
-              void **entry_point, size_t *stack_size, uint32_t *got_loc, uint32_t *text_len, uint32_t *data_len);
+              void **entry_point, size_t *stack_size, uint32_t *got_loc, uint32_t *text_len, uint32_t *data_len,
+              void **extra_mmap, uint32_t *extra_mmap_count);
 
 #ifdef CONFIG_SHLIB
 /* Shared library support */
@@ -22,7 +23,8 @@ struct loaded_shlib;
 const struct loaded_shlib *xipfs_shlib_find(uint8_t lib_id);
 
 int shlib_resolve_got(uint32_t *got_start, uint32_t got_words,
-                      const uint8_t *app_text_base, uint8_t *app_data_base);
+                      const uint8_t *app_text_base, uint8_t *app_data_base,
+                      void **extra_mmap_out, uint32_t *extra_mmap_count_out);
 #endif
 
 #endif

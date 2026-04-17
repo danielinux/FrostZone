@@ -64,20 +64,24 @@ static int check_header(struct flat_hdr * header) {
 
 static unsigned long * calc_reloc(uint8_t * base, uint32_t offset)
 {
-#ifdef CONFIG_SHLIB
     /* the library id is in top byte of offset */
     int id = (offset >> 24) & 0x000000FFu;
     if (id)
     {
+#ifdef CONFIG_SHLIB
         /* Shared library import: return sentinel so process_got_relocs()
          * leaves this GOT entry unchanged for shlib_resolve_got(). */
         return NULL;
-    }
+#else
+        kprintf("bFLT: No shared library support\r\n");
+        return (unsigned long *)RELOC_FAILED;
 #endif
+    }
     return (unsigned long *)(base + (offset & 0x00FFFFFFu));
 }
 
-static int process_got_relocs(struct flat_hdr *hdr, uint8_t *base, uint8_t *got_start)
+static int process_got_relocs(struct flat_hdr *hdr, uint8_t *base, uint8_t *got_start,
+                              int *has_shlib_imports)
 {
     /*
      * Addresses in header are relative to start of FILE (so including flat_hdr)
@@ -92,6 +96,9 @@ static int process_got_relocs(struct flat_hdr *hdr, uint8_t *base, uint8_t *got_
                               / sizeof(unsigned long);
     unsigned long idx;
 
+    if (has_shlib_imports)
+        *has_shlib_imports = 0;
+
     for (idx = 0; idx < got_words; idx++, rp++) {
         if (*rp == 0xffffffff)
             return 0;
@@ -101,6 +108,8 @@ static int process_got_relocs(struct flat_hdr *hdr, uint8_t *base, uint8_t *got_
             /* Check for shared library import (top byte is lib_id) */
             if ((*rp >> 24) & 0xFFu) {
                 /* Leave this GOT entry as-is for shlib_resolve_got() */
+                if (has_shlib_imports)
+                    *has_shlib_imports = 1;
                 continue;
             }
 #endif
@@ -276,7 +285,7 @@ static void generate_trampoline(uint8_t *dst, uint32_t lib_func_addr, uint32_t l
     /* ldr r4, [pc, #12] */
     p[8] = 0xDF; p[9] = 0xF8; p[10] = 0x0C; p[11] = 0x40;
     /* blx r4 */
-    p[12] = 0x20; p[13] = 0x47;
+    p[12] = 0xa0; p[13] = 0x47;
     /* pop {r4, r9, pc} */
     p[14] = 0xBD; p[15] = 0xE8; p[16] = 0x10; p[17] = 0x82;
     /* padding */
@@ -290,7 +299,8 @@ static void generate_trampoline(uint8_t *dst, uint32_t lib_func_addr, uint32_t l
 #define TRAMPOLINE_SIZE 28
 
 int shlib_resolve_got(uint32_t *got_start, uint32_t got_words,
-                      const uint8_t *app_text_base, uint8_t *app_data_base)
+                      const uint8_t *app_text_base, uint8_t *app_data_base,
+                      void **extra_mmap_out, uint32_t *extra_mmap_count_out)
 {
     struct shlib_proc libs[MAX_PROC_SHLIBS];
     int n_libs = 0;
@@ -331,6 +341,9 @@ int shlib_resolve_got(uint32_t *got_start, uint32_t got_words,
     if (n_libs == 0)
         return 0;
 
+    if (extra_mmap_count_out)
+        *extra_mmap_count_out = 0;
+
     /* Allocate per-process blocks for each library */
     {
     int li;
@@ -338,9 +351,18 @@ int shlib_resolve_got(uint32_t *got_start, uint32_t got_words,
         const struct loaded_shlib *sl = xipfs_shlib_find(libs[li].lib_id);
         uint32_t tramp_size, total;
         uint8_t *mem;
+        struct flat_hdr lib_hdr;
 
         if (!sl || !sl->export_table) {
             kprintf("bFLT: shared library id=%d not found\r\n", libs[li].lib_id);
+            return -1;
+        }
+
+        memcpy(&lib_hdr, sl->flash_base, sizeof(struct flat_hdr));
+
+        if ((check_header(&lib_hdr) != 0) ||
+            ((long_be(lib_hdr.flags) & FLAT_FLAG_SHLIB) == 0)) {
+            kprintf("bFLT: shlib header check failed\r\n");
             return -1;
         }
 
@@ -354,6 +376,10 @@ int shlib_resolve_got(uint32_t *got_start, uint32_t got_words,
             kprintf("bFLT: shlib alloc failed (%lu bytes)\r\n", (unsigned long)total);
             return -1;
         }
+
+        /* Record allocation so caller can chown it to the task */
+        if (extra_mmap_out && extra_mmap_count_out && *extra_mmap_count_out < 4)
+            extra_mmap_out[(*extra_mmap_count_out)++] = mem;
 
         libs[li].trampoline_base = mem;
         libs[li].data_base = mem + tramp_size;
@@ -369,10 +395,25 @@ int shlib_resolve_got(uint32_t *got_start, uint32_t got_words,
 
         /* Relocate library's GOT in the per-process .data copy */
         {
-            struct flat_hdr lib_hdr;
-            memcpy(&lib_hdr, sl->flash_base, sizeof(struct flat_hdr));
-            if (process_got_relocs(&lib_hdr, (uint8_t *)sl->flash_base, libs[li].data_base)) {
-                kprintf("bFLT: shlib GOT relocation failed\r\n");
+            uint8_t *lib_relocs_src;
+            int32_t lib_relocs;
+            int rc;
+
+            rc = process_got_relocs(&lib_hdr, (uint8_t *)sl->flash_base,
+                                    libs[li].data_base, NULL);
+            if (rc != 0) {
+                kprintf("bFLT: shlib GOT relocation failed (rc=%d)\r\n", rc);
+                return -1;
+            }
+
+            lib_relocs = long_be(lib_hdr.reloc_count);
+            lib_relocs_src = (uint8_t *)sl->flash_base + long_be(lib_hdr.reloc_start);
+            rc = process_relocs(&lib_hdr, (unsigned long *)sl->flash_base,
+                                (uint32_t)libs[li].data_base,
+                                (unsigned long *)lib_relocs_src,
+                                lib_relocs);
+            if (rc != 0) {
+                kprintf("bFLT: shlib relocation failed (rc=%d)\r\n", rc);
                 return -1;
             }
         }
@@ -413,6 +454,15 @@ int shlib_resolve_got(uint32_t *got_start, uint32_t got_words,
         /* Look up the exported function's .text-relative offset */
         func_offset = long_be(sl->export_table[ordinal]);
         func_addr = (uint32_t)sl->text_base + func_offset;
+        if ((func_offset >= sl->text_len) ||
+            (func_addr < (uint32_t)sl->text_base) ||
+            (func_addr >= ((uint32_t)sl->text_base + sl->text_len))) {
+            kprintf("bFLT: shlib target out of range lib=%d ord=%lu off=%lu base=0x%08lx len=%lu addr=0x%08lx\r\n",
+                    lib_id, (unsigned long)ordinal, (unsigned long)func_offset,
+                    (unsigned long)sl->text_base, (unsigned long)sl->text_len,
+                    (unsigned long)func_addr);
+            return -1;
+        }
 
         /* Generate trampoline */
         tramp = libs[li].trampoline_base +
@@ -448,7 +498,8 @@ int shlib_resolve_got(uint32_t *got_start, uint32_t got_words,
  */
 
 int bflt_load(uint8_t* from, void **reloc_text, void **reloc_data, void **reloc_bss,
-              void ** entry_point, size_t *stack_size, uint32_t *got_loc, uint32_t *text_len, uint32_t *data_len)
+              void ** entry_point, size_t *stack_size, uint32_t *got_loc, uint32_t *text_len, uint32_t *data_len,
+              void **extra_mmap, uint32_t *extra_mmap_count)
 {
     struct flat_hdr hdr;
     void * mem = NULL;
@@ -561,10 +612,29 @@ int bflt_load(uint8_t* from, void **reloc_text, void **reloc_data, void **reloc_
      * image.
      */
 
+#ifdef CONFIG_SHLIB
+    /*
+     * Resolve shared library imports BEFORE relocation.
+     * At this point the GOT still has raw values: small .text/.data offsets
+     * for normal entries, and (lib_id << 24 | ordinal) for imports.
+     * shlib_resolve_got() patches import entries to trampoline addresses.
+     * The subsequent process_got_relocs() will skip these patched entries
+     * (they have non-zero top byte) and only relocate normal entries.
+     */
+    if (flags & FLAT_FLAG_GOTPIC) {
+        unsigned long got_words = (long_be(hdr.data_end) - long_be(hdr.data_start))
+                                  / sizeof(unsigned long);
+        if (shlib_resolve_got((uint32_t *)data_dest, got_words,
+                              text_src, data_dest,
+                              extra_mmap, extra_mmap_count) != 0)
+            goto error;
+    }
+#endif
+
         /* init relocations */
     if (flags & FLAT_FLAG_GOTPIC) {
         //printf("GOT-PIC!\n");
-        if (process_got_relocs(&hdr, address_zero, data_dest)) // .data section is beginning of GOT
+        if (process_got_relocs(&hdr, address_zero, data_dest, NULL)) // .data section is beginning of GOT
             goto error;
         *got_loc = (uint32_t)data_dest;
     }
@@ -575,23 +645,6 @@ int bflt_load(uint8_t* from, void **reloc_text, void **reloc_data, void **reloc_
     if (process_relocs(&hdr, (unsigned long *)address_zero, (uint32_t)data_dest,
                        (unsigned long *)relocs_src, relocs) != 0)
         goto error;
-
-    /*
-     * Resolve shared library imports.
-     * GOT entries with non-zero library IDs were left as-is by
-     * process_got_relocs().  shlib_resolve_got() resolves them by
-     * looking up the library, allocating per-process trampolines +
-     * library .data/.bss, and patching the GOT entries.
-     */
-#ifdef CONFIG_SHLIB
-    if (flags & FLAT_FLAG_GOTPIC) {
-        unsigned long got_words = (long_be(hdr.data_end) - long_be(hdr.data_start))
-                                  / sizeof(unsigned long);
-        if (shlib_resolve_got((uint32_t *)data_dest, got_words,
-                              text_src, data_dest) != 0)
-            goto error;
-    }
-#endif
 
     return 0;
 

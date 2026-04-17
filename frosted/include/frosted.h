@@ -49,6 +49,10 @@ struct task_exec_info {
     uint32_t data_size;
     void *mmap_base;
     void *got_loc;
+#ifdef CONFIG_SHLIB
+    uint32_t extra_mmap_count;
+    void *extra_mmap[4];
+#endif
 };
 
 typedef uint32_t sigset_t;

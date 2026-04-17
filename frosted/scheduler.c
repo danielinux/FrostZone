@@ -1525,6 +1525,10 @@ int task_create(struct task_exec_info *exec_info, void *arg, unsigned int nice)
     number_of_tasks++;
     memcpy(&new->tb.exec_info, exec_info, sizeof(struct task_exec_info));
     secure_mempool_chown(new->tb.exec_info.mmap_base, new->tb.pid, 0);
+#ifdef CONFIG_SHLIB
+    for (i = 0; i < (int)new->tb.exec_info.extra_mmap_count; i++)
+        secure_mempool_chown(new->tb.exec_info.extra_mmap[i], new->tb.pid, 0);
+#endif
     task_create_real(new, arg, nice);
     new->tb.state = TASK_RUNNABLE;
     procfs_pid_create(new->tb.pid);
@@ -1535,8 +1539,13 @@ int task_create(struct task_exec_info *exec_info, void *arg, unsigned int nice)
 int scheduler_exec(struct task_exec_info *info, void *args)
 {
     struct task *t = _cur_task;
+    uint32_t i;
     memcpy(&t->tb.exec_info, info, sizeof(struct task_exec_info));
     secure_mempool_chown(t->tb.exec_info.mmap_base, t->tb.pid, 0);
+#ifdef CONFIG_SHLIB
+    for (i = 0; i < t->tb.exec_info.extra_mmap_count; i++)
+        secure_mempool_chown(t->tb.exec_info.extra_mmap[i], t->tb.pid, 0);
+#endif
     /* Save task name before args move to task stack */
     t->tb.name[0] = '\0';
     if (args) {

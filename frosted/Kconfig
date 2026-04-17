@@ -15,6 +15,13 @@ config TARGET_RP2350
 
 endchoice
 
+config SHLIB
+    bool "Enable bFLT shared libraries"
+    default n
+    help
+      Enable kernel support for shared-library bFLT objects stored in xipfs.
+      Keep this disabled to preserve the classic standalone bFLT loader path.
+
 menu "System layout"
 
 config SYS_CLOCK
@@ -66,6 +73,14 @@ config FLASHFS_VERIFY
     help
       Perform a read-back verification after FlashFS writes.
 
+config SHLIB
+    bool "Shared library support (bFLT dynamic linking)"
+    default n
+    help
+      Enable shared library loading for bFLT binaries.
+      Libraries are packed in xipfs with XIPFS_MAGIC_SHLIB and
+      resolved at load time via per-process trampolines.
+
 config EXTENDED_MEMFAULT
     bool "Extended Memfault collection"
     default y
@@ -87,13 +102,6 @@ config PIPE
     default y
     help
       Build pipe syscall support (pipe2 handler, buffering, polling).
-
-config SHLIB
-    bool "Enable bFLT shared libraries"
-    default n
-    help
-      Enable kernel support for shared-library bFLT objects stored in xipfs.
-      Keep this disabled to preserve the classic standalone bFLT loader path.
 
 config PROCFS
     bool "Enable /sys/proc/<pid>/mem process info"

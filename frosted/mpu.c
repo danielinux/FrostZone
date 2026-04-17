@@ -89,6 +89,11 @@ volatile MPU_Type *volatile MPU = (MPU_Type *)MPU_BASE;
 #define RBAR(base, sh, ap, xn) ( ((uint32_t)(base) & 0xFFFFFFE0UL) | (((uint32_t)(sh) & 0x3u) << 3) | (((uint32_t)(ap) & 0x3u) << 1) | ((uint32_t)(xn) & 0x1u) )
 #define RLAR(limit, idx) ( ((uint32_t)(limit) & 0xFFFFFFE0UL) | (((uint32_t)(idx) & 0xFu) << 1) | 0x1u )
 
+static inline uintptr_t mpu_region_limit(uintptr_t last_byte)
+{
+    return last_byte | 0x1fu;
+}
+
 
 // Shareability (SH) encodings for RBAR
 #define SH_NON_SHAREABLE 0u
@@ -208,7 +213,7 @@ void mpu_task_on(uint16_t pid, uint16_t ppid)
         debug_mpu_stack_limit = sl;
         MPU->RNR = 2u;
         MPU->RBAR = RBAR(sb, SH_INNER_SHAREABLE, AP_RW_FULL, XN_NEVER);
-        MPU->RLAR = RLAR(sl, IDX_NORMAL_WBWA); // Normal memory; XN via RBAR
+        MPU->RLAR = RLAR(mpu_region_limit(sl), IDX_NORMAL_WBWA); // Normal memory; XN via RBAR
         mpu_set_psplim(sb);
     } else {
         mpu_set_psplim(0);
@@ -228,7 +233,7 @@ void mpu_task_on(uint16_t pid, uint16_t ppid)
                 sl = sb + parent.stack_size - 1u;
                 MPU->RNR = 3u;
                 MPU->RBAR = RBAR(sb, SH_INNER_SHAREABLE, AP_RW_FULL, XN_NEVER);
-                MPU->RLAR = RLAR(sl, IDX_NORMAL_WBWA);
+                MPU->RLAR = RLAR(mpu_region_limit(sl), IDX_NORMAL_WBWA);
             }
             // R5: Parent main segment (data + bss in RAM)
             if (parent.ram_size > 0) {
@@ -238,7 +243,7 @@ void mpu_task_on(uint16_t pid, uint16_t ppid)
                 // If parent.main in flash: RO+Exec; if in RAM: choose RW and set XN as needed.
                 // Here we assume flash XIP: RO, unprivileged, executable
                 MPU->RBAR = RBAR(mb, SH_NON_SHAREABLE, AP_RW_FULL, XN_NEVER);
-                MPU->RLAR = RLAR(ml, IDX_NORMAL_WT); // use WT for XIP regions
+                MPU->RLAR = RLAR(mpu_region_limit(ml), IDX_NORMAL_WT); // use WT for XIP regions
             }
         }
     } else {
@@ -249,15 +254,15 @@ void mpu_task_on(uint16_t pid, uint16_t ppid)
             MPU->RNR = 3u;
             // If main lives in flash XIP: map RO+Exec; if it’s RAM, map RW+XN. We assume flash XIP here.
             MPU->RBAR = RBAR(mb, SH_NON_SHAREABLE, AP_RW_FULL, XN_NEVER);
-            MPU->RLAR = RLAR(ml, IDX_NORMAL_WT); // Normal WT attr for XIP
+            MPU->RLAR = RLAR(mpu_region_limit(ml), IDX_NORMAL_WT); // Normal WT attr for XIP
         }
-        // --- R4..R7: Heaps / extra RAM, RW, XN ---
+        // --- R4..R7: Heaps / extra RAM, RW, executable ---
         for (uint32_t k = 0u; (k < cur.n_heap_regions) && (k < 4u); k++) {
             uintptr_t hb = cur.heap[k].base;
             uintptr_t hl = hb + cur.heap[k].size - 1u;
             MPU->RNR = (4u + k);
-            MPU->RBAR = RBAR(hb, SH_INNER_SHAREABLE, AP_RW_FULL, XN_NEVER);
-            MPU->RLAR = RLAR(hl, IDX_NORMAL_WBWA);
+            MPU->RBAR = RBAR(hb, SH_INNER_SHAREABLE, AP_RW_FULL, XN_EXECUTE);
+            MPU->RLAR = RLAR(mpu_region_limit(hl), IDX_NORMAL_WBWA);
         }
     }
     // Enable MPU with background map
