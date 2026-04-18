@@ -28,7 +28,6 @@ CFLAGS-ICEBOX-$(APP_NTPC)+=-DAPP_NTPC_MODULE
 APPS-$(APP_SSHD)+=sshd
 CFLAGS-$(APP_SSHD)+=-DAPP_SSHD_STANDALONE
 CFLAGS-ICEBOX-$(APP_SSHD)+=-DAPP_SSHD_MODULE
-APPS-$(APP_SHA256)+=sha256
 APPS-$(APP_PING)+=ping
 CFLAGS-$(APP_PING)+=-DAPP_PING_STANDALONE
 CFLAGS-ICEBOX-$(APP_PING)+=-DAPP_PING_MODULE
@@ -76,14 +75,6 @@ ice/%.o: %.c
 
 %.o: %.c
 	$(CC) -c -o $@ $^ $(CFLAGS) $(CFLAGS-y)
-
-# sha256 links dynamically against libwolfssl.so via import map
-../out/sha256: sha256.o ../lib/libwolfssl_stubs.a
-	@FLTFLAGS="-I$(CURDIR)/../out/libwolfssl.map" \
-		arm-frosted-eabi-gcc -o $@ $^ $(CFLAGS) $(CFLAGS-y) $(LDFLAGS) -lm
-
-sha256.o: sha256.c
-	$(CC) -c -o $@ $^ $(CFLAGS) $(CFLAGS-y) -I../lib -I../lib/wolfssl -DWOLFSSL_USER_SETTINGS
 
 ../out/%: %.o
 	@arm-frosted-eabi-gcc -o $@ $^ $(CFLAGS) $(CFLAGS-y) $(LDFLAGS) $(LIBS-y) -lm

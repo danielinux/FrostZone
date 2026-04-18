@@ -234,6 +234,7 @@ endif
 SRCS += $(TINYUSB_SRCS)
 endif
 
+SRCS += stm32crypto.c
 SRCS += frosted_$(TARGET).c
 OBJS = $(SRCS:.c=.o) ../nsc-gateway/nsc_kernel.o
 

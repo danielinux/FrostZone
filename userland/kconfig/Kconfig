@@ -122,6 +122,19 @@ config APP_HEXDUMP
 
 config APP_XXD
     tristate "xxd"
+
+endmenu
+
+menu "Crypto tools"
+config APP_SHA256SUM
+    bool "sha256sum"
+    depends on LIB_WOLFSSL
+config APP_AES128
+    bool "aes128 - AES-128-CBC encrypt/decrypt"
+    depends on LIB_WOLFSSL
+config APP_ECDSA
+    bool "ecdsa - ECDSA sign/verify"
+    depends on LIB_WOLFSSL
 endmenu
 
 menu "Networking utils"
@@ -147,9 +160,6 @@ config APP_NTPC
     tristate "ntpc"
 config APP_STARWARS
     tristate "starwars"
-config APP_SHA256
-    bool "sha256 (wolfSSL shared library demo)"
-    depends on LIB_WOLFSSL
 endmenu
 
 menu "Interpreters"

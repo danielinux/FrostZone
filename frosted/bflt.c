@@ -86,6 +86,11 @@ static int process_got_relocs(struct flat_hdr *hdr, uint8_t *base, uint8_t *got_
     /*
      * Addresses in header are relative to start of FILE (so including flat_hdr)
      * Addresses in the relocs are relative to start of .text (so excluding flat_hdr)
+     *
+     * For a shared library linked at a fixed flash address, GOT entries hold
+     * absolute link-time VMAs (base = sl->text_base). Normalise them to
+     * "offsets from .text start" (which is what the logic below expects) by
+     * subtracting the library's link-time text VMA before processing.
      */
     unsigned long *rp = (unsigned long *)got_start;
     unsigned long data_start = long_be(hdr->data_start) - sizeof(struct flat_hdr);
@@ -95,6 +100,12 @@ static int process_got_relocs(struct flat_hdr *hdr, uint8_t *base, uint8_t *got_
     unsigned long got_words = (long_be(hdr->data_end) - long_be(hdr->data_start))
                               / sizeof(unsigned long);
     unsigned long idx;
+    unsigned long lib_text_vma = 0;
+
+#ifdef CONFIG_SHLIB
+    if ((long_be(hdr->flags) & FLAT_FLAG_SHLIB) != 0)
+        lib_text_vma = (unsigned long)text_start_dest;
+#endif
 
     if (has_shlib_imports)
         *has_shlib_imports = 0;
@@ -104,22 +115,27 @@ static int process_got_relocs(struct flat_hdr *hdr, uint8_t *base, uint8_t *got_
             return 0;
         if (*rp) {
             unsigned long addr;
+            unsigned long val = *rp;
 #ifdef CONFIG_SHLIB
             /* Check for shared library import (top byte is lib_id) */
-            if ((*rp >> 24) & 0xFFu) {
+            if ((val >> 24) & 0xFFu) {
                 /* Leave this GOT entry as-is for shlib_resolve_got() */
                 if (has_shlib_imports)
                     *has_shlib_imports = 1;
                 continue;
             }
+            /* For shared libs linked at flash address: values are VMAs;
+             * normalise to file-relative offsets. */
+            if (lib_text_vma && val >= lib_text_vma)
+                val -= lib_text_vma;
 #endif
             addr = RELOC_FAILED;
-            if (*rp < data_start) {
+            if (val < data_start) {
                 /* reloc is in .text section: BASE == text_start  -- addr == relative to .text */
-                addr = (unsigned long)calc_reloc(text_start_dest, *rp);
-            } else if (*rp < bss_end) {
+                addr = (unsigned long)calc_reloc(text_start_dest, val);
+            } else if (val < bss_end) {
                 /* reloc is in .data section: BASE == data_start  -- addr == relative to .text - (start of data) */
-                addr = (unsigned long)calc_reloc(data_start_dest, *rp - data_start);
+                addr = (unsigned long)calc_reloc(data_start_dest, val - data_start);
             }
 
             /* this will remap pointers starting from address 0x0, to wherever they are actually loaded in the memory map (.text reloc) */
@@ -151,6 +167,14 @@ int process_relocs(struct flat_hdr * hdr, unsigned long * base, unsigned long da
     unsigned long data_end = long_be(hdr->data_end) - sizeof(struct flat_hdr); /* relocs must be located in .data segment for GOTPIC */
     unsigned long bss_end = long_be(hdr->bss_end) - sizeof(struct flat_hdr);
     unsigned long text_start_dest = ((unsigned long)base) + sizeof(struct flat_hdr); /* original RELOC is relative to text_start (.bss in ROM/Flash/source) */
+    unsigned long lib_text_vma = 0;
+
+#ifdef CONFIG_SHLIB
+    /* Shared libraries are linked at a fixed flash address; normalise VMAs
+     * in relocated words back to file-relative offsets. */
+    if ((long_be(hdr->flags) & FLAT_FLAG_SHLIB) != 0)
+        lib_text_vma = text_start_dest;
+#endif
     /*
      * Now run through the relocation entries.
      * We've got to be careful here as C++ produces relocatable zero
@@ -187,16 +211,22 @@ int process_relocs(struct flat_hdr * hdr, unsigned long * base, unsigned long da
             if (fixup_addr == (unsigned long *)RELOC_FAILED)
                 return -1;
 
-            /* Again 2 cases: reloc points to .text -- or to .data/.bss */
-            if (*fixup_addr < data_start) {
-                /* reloc is in .text section: BASE == text_start  -- addr == relative to .text */
-                relocd_addr = (unsigned long *)calc_reloc((uint8_t *)text_start_dest, *fixup_addr);
-            } else if (*fixup_addr < bss_end) {
-                /* reloc is in .data section: BASE == data_start  -- addr == relative to .text - (start of data) */
-                relocd_addr = (unsigned long *)calc_reloc((uint8_t *)data_start_dest, *fixup_addr - data_start);
-            } else {
-                relocd_addr = (unsigned long *)RELOC_FAILED;
-                return -1;
+            {
+                unsigned long val = *fixup_addr;
+                /* Normalise VMAs to file-relative offsets for shared libs. */
+                if (lib_text_vma && val >= lib_text_vma)
+                    val -= lib_text_vma;
+                /* Again 2 cases: reloc points to .text -- or to .data/.bss */
+                if (val < data_start) {
+                    /* reloc is in .text section: BASE == text_start  -- addr == relative to .text */
+                    relocd_addr = (unsigned long *)calc_reloc((uint8_t *)text_start_dest, val);
+                } else if (val < bss_end) {
+                    /* reloc is in .data section: BASE == data_start  -- addr == relative to .text - (start of data) */
+                    relocd_addr = (unsigned long *)calc_reloc((uint8_t *)data_start_dest, val - data_start);
+                } else {
+                    relocd_addr = (unsigned long *)RELOC_FAILED;
+                    return -1;
+                }
             }
             /* write the relocated/offsetted value back were it was read */
             *fixup_addr = (unsigned long)relocd_addr;
@@ -338,8 +368,18 @@ int shlib_resolve_got(uint32_t *got_start, uint32_t got_words,
         libs[li].n_trampolines++;
     }
 
-    if (n_libs == 0)
+    if (n_libs == 0) {
+        kprintf("bFLT: shlib: no imports found\r\n");
         return 0;
+    }
+
+    kprintf("bFLT: shlib: %d libs, imports:", n_libs);
+    {
+        int k;
+        for (k = 0; k < n_libs; k++)
+            kprintf(" lib%d:%lu", libs[k].lib_id, (unsigned long)libs[k].n_trampolines);
+    }
+    kprintf("\r\n");
 
     if (extra_mmap_count_out)
         *extra_mmap_count_out = 0;
@@ -417,6 +457,11 @@ int shlib_resolve_got(uint32_t *got_start, uint32_t got_words,
                 return -1;
             }
         }
+        kprintf("bFLT: shlib: lib%d loaded: tramp=0x%08lx data=0x%08lx got=0x%08lx\r\n",
+                libs[li].lib_id,
+                (unsigned long)libs[li].trampoline_base,
+                (unsigned long)libs[li].data_base,
+                (unsigned long)libs[li].got_loc);
     }
     }
 
@@ -472,6 +517,10 @@ int shlib_resolve_got(uint32_t *got_start, uint32_t got_words,
 
         /* Patch app's GOT entry: point to trampoline with Thumb bit */
         got_start[idx] = (uint32_t)tramp | 1;
+        kprintf("bFLT: shlib: GOT[%lu] lib%d:ord%lu → tramp=0x%08lx func=0x%08lx\r\n",
+                (unsigned long)idx, lib_id, (unsigned long)ordinal,
+                (unsigned long)((uint32_t)tramp | 1),
+                (unsigned long)(func_addr | 1));
     }
 
     return 0;
@@ -624,10 +673,13 @@ int bflt_load(uint8_t* from, void **reloc_text, void **reloc_data, void **reloc_
     if (flags & FLAT_FLAG_GOTPIC) {
         unsigned long got_words = (long_be(hdr.data_end) - long_be(hdr.data_start))
                                   / sizeof(unsigned long);
+        kprintf("bFLT: shlib_resolve_got: data_dest=0x%p got_words=%lu text_src=0x%p\r\n",
+                data_dest, got_words, text_src);
         if (shlib_resolve_got((uint32_t *)data_dest, got_words,
                               text_src, data_dest,
                               extra_mmap, extra_mmap_count) != 0)
             goto error;
+        kprintf("bFLT: shlib_resolve_got: done\r\n");
     }
 #endif
 

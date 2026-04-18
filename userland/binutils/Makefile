@@ -11,7 +11,7 @@ CC?=arm-frosted-eabi-cc
 CFLAGS?=
 CFLAGS+=-nostartfiles -nostdlib -fPIC -mlong-calls -fno-common -msingle-pic-base -mno-pic-data-is-text-relative -Wstack-usage=4096
 LDFLAGS?=
-LDFLAGS+=-fPIC -mlong-calls -fno-common -Wl,-elf2flt -lgloss -lc -lm -lgcc
+LDFLAGS+=-fPIC -mlong-calls -fno-common -Wl,-elf2flt -Wl,--start-group -lgloss -lc -lm -lgcc -Wl,--end-group
 APPS-$(APP_CAT)+=cat
 CFLAGS-$(APP_CAT)+=-DAPP_CAT_STANDALONE
 CFLAGS-ICEBOX-$(APP_CAT)+=-DAPP_CAT_MODULE
@@ -184,6 +184,10 @@ APPS-$(APP_XXD)+=xxd
 CFLAGS-$(APP_XXD)+=-DAPP_XXD_STANDALONE
 CFLAGS-ICEBOX-$(APP_XXD)+=-DAPP_XXD_MODULE
 
+APPS-$(APP_SHA256SUM)+=sha256sum
+APPS-$(APP_AES128)+=aes128
+APPS-$(APP_ECDSA)+=ecdsa
+
 BIN:=$(patsubst %,../out/%,$(APPS-y))
 OBJ:=$(patsubst %,%.o,$(APPS-y))
 MOD:=$(patsubst %,ice/%.o,$(APPS-m))
@@ -206,6 +210,30 @@ icebox-refresh: ../out/icebox
 	@arm-frosted-eabi-gcc -o $@ $^ $(CFLAGS) $(CFLAGS-y) $(LDFLAGS)
 
 
+
+# sha256sum links dynamically against libwolfssl.so via import map
+../out/sha256sum: sha256sum.o ../lib/libwolfssl_stubs.a
+	@FLTFLAGS="-I$(CURDIR)/../out/libwolfssl.map" \
+		arm-frosted-eabi-gcc -o $@ $^ $(CFLAGS) $(CFLAGS-y) $(LDFLAGS) -lm
+
+sha256sum.o: sha256sum.c
+	$(CC) -c -o $@ $^ $(CFLAGS) $(CFLAGS-y) -I../lib -I../lib/wolfssl -DWOLFSSL_USER_SETTINGS
+
+# aes128 links dynamically against libwolfssl.so via import map
+../out/aes128: aes128.o ../lib/libwolfssl_stubs.a
+	@FLTFLAGS="-I$(CURDIR)/../out/libwolfssl.map" \
+		arm-frosted-eabi-gcc -o $@ $^ $(CFLAGS) $(CFLAGS-y) $(LDFLAGS) -lm
+
+aes128.o: aes128.c
+	$(CC) -c -o $@ $^ $(CFLAGS) $(CFLAGS-y) -I../lib -I../lib/wolfssl -DWOLFSSL_USER_SETTINGS
+
+# ecdsa links dynamically against libwolfssl.so via import map
+../out/ecdsa: ecdsa.o ../lib/libwolfssl_stubs.a
+	@FLTFLAGS="-I$(CURDIR)/../out/libwolfssl.map" \
+		arm-frosted-eabi-gcc -o $@ $^ $(CFLAGS) $(CFLAGS-y) $(LDFLAGS) -lm
+
+ecdsa.o: ecdsa.c
+	$(CC) -c -o $@ $^ $(CFLAGS) $(CFLAGS-y) -I../lib -I../lib/wolfssl -DWOLFSSL_USER_SETTINGS
 
 ../lnk/%: ../out/icebox
 	ln -s $^ $@

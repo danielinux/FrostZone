@@ -162,6 +162,104 @@ struct winsize
 };
 #define TIOCGWINSZ	0x5413
 
+/****************************************/
+/****************************************/
+/* Crypto devices: /dev/hash, /dev/aes, /dev/pka */
+
+/* /dev/hash ioctls */
+#define IOCTL_HASH_SET_ALGO     0x00    /* arg = HASH_ALGO_* */
+
+/* Hash algorithm IDs */
+#define HASH_ALGO_SHA256        0
+#define HASH_ALGO_SHA224        1
+
+/* /dev/aes ioctls */
+#define IOCTL_AES_SET_MODE      0x00    /* arg = struct aes_mode_req * */
+#define IOCTL_AES_SET_KEY       0x01    /* arg = struct aes_key_req * */
+#define IOCTL_AES_SET_IV        0x02    /* arg = uint8_t iv[16] */
+
+/* AES direction */
+#define AES_DIR_ENCRYPT         0
+#define AES_DIR_DECRYPT         1
+
+/* AES chaining modes */
+#define AES_MODE_ECB            0
+#define AES_MODE_CBC            1
+#define AES_MODE_CTR            2
+#define AES_MODE_GCM            3
+
+struct aes_mode_req {
+    uint32_t direction;     /* AES_DIR_* */
+    uint32_t mode;          /* AES_MODE_* */
+};
+
+struct aes_key_req {
+    uint32_t size;          /* key size in bytes: 16 or 32 */
+    uint8_t  key[32];
+};
+
+/* /dev/pka ioctls */
+#define IOCTL_PKA_ECC_MUL      0x00    /* arg = struct pka_ecc_mul_req * */
+#define IOCTL_PKA_ECDSA_SIGN   0x01    /* arg = struct pka_ecdsa_sign_req * */
+#define IOCTL_PKA_ECDSA_VERIFY 0x02    /* arg = struct pka_ecdsa_verify_req * */
+
+/* ECC curve parameter sizes (P-256) */
+#define PKA_MAX_KEY_SIZE        66      /* up to P-521 */
+
+struct pka_ecc_mul_req {
+    uint32_t modulus_size;          /* bytes (e.g. 32 for P-256) */
+    uint32_t scalar_size;           /* bytes */
+    uint32_t coef_sign;             /* 0 or 1 */
+    uint8_t  coef_a[PKA_MAX_KEY_SIZE];
+    uint8_t  coef_b[PKA_MAX_KEY_SIZE];
+    uint8_t  modulus[PKA_MAX_KEY_SIZE];
+    uint8_t  point_x[PKA_MAX_KEY_SIZE];
+    uint8_t  point_y[PKA_MAX_KEY_SIZE];
+    uint8_t  scalar[PKA_MAX_KEY_SIZE];
+    uint8_t  prime_order[PKA_MAX_KEY_SIZE];
+    /* output (filled by kernel) */
+    uint8_t  result_x[PKA_MAX_KEY_SIZE];
+    uint8_t  result_y[PKA_MAX_KEY_SIZE];
+};
+
+struct pka_ecdsa_sign_req {
+    uint32_t order_size;            /* bytes */
+    uint32_t modulus_size;          /* bytes */
+    uint32_t coef_sign;
+    uint8_t  coef_a[PKA_MAX_KEY_SIZE];
+    uint8_t  coef_b[PKA_MAX_KEY_SIZE];
+    uint8_t  modulus[PKA_MAX_KEY_SIZE];
+    uint8_t  base_x[PKA_MAX_KEY_SIZE];
+    uint8_t  base_y[PKA_MAX_KEY_SIZE];
+    uint8_t  prime_order[PKA_MAX_KEY_SIZE];
+    uint8_t  hash[PKA_MAX_KEY_SIZE];
+    uint8_t  random_k[PKA_MAX_KEY_SIZE];
+    uint8_t  private_key[PKA_MAX_KEY_SIZE];
+    /* output (filled by kernel) */
+    uint8_t  sig_r[PKA_MAX_KEY_SIZE];
+    uint8_t  sig_s[PKA_MAX_KEY_SIZE];
+    uint8_t  error;
+};
+
+struct pka_ecdsa_verify_req {
+    uint32_t order_size;
+    uint32_t modulus_size;
+    uint32_t coef_sign;
+    uint8_t  coef_a[PKA_MAX_KEY_SIZE];
+    uint8_t  modulus[PKA_MAX_KEY_SIZE];
+    uint8_t  base_x[PKA_MAX_KEY_SIZE];
+    uint8_t  base_y[PKA_MAX_KEY_SIZE];
+    uint8_t  prime_order[PKA_MAX_KEY_SIZE];
+    uint8_t  pub_x[PKA_MAX_KEY_SIZE];
+    uint8_t  pub_y[PKA_MAX_KEY_SIZE];
+    uint8_t  sig_r[PKA_MAX_KEY_SIZE];
+    uint8_t  sig_s[PKA_MAX_KEY_SIZE];
+    uint8_t  hash[PKA_MAX_KEY_SIZE];
+    /* output (filled by kernel) */
+    uint32_t valid;                 /* 1 = valid, 0 = invalid */
+};
+
+
 /* KEYBOARD */
 #define     KDGKBMODE   0x4B44  /* gets current keyboard mode */
 #define     KDSKBMODE   0x4B45  /* sets current keyboard mode */

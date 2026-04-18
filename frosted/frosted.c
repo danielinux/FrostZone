@@ -22,6 +22,7 @@
 #include "kprintf.h"
 #include "bflt.h"
 #include "null.h"
+#include "stm32crypto.h"
 #include "xipfs.h"
 #include "gpio.h"
 #include "uart.h"
@@ -177,6 +178,8 @@ void hardfault_handler_dbg(unsigned long *sp)
 
 static void process_memory_fault(uint32_t fault_type)
 {
+    /* Clear CFSR bits (W1C) to prevent stale fault bits accumulating */
+    ARM_CFSR = ARM_CFSR;
     if (task_segfault(fault_type) < 0) {
         while(1)
             ;
@@ -272,7 +275,8 @@ int frosted_init(void)
 
     vfs_init();
     devnull_init(fno_search("/dev"));
-    
+    stm32crypto_init(fno_search("/dev"));
+
     hw_init();
 
     /* Set up system */

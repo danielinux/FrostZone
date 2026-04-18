@@ -21,16 +21,52 @@ all: fetch shlibs
 ifeq ($(LIB_WOLFSSL),y)
 LIBS-y += wolfssl
 
-# wolfSSL source files for SHA-256 (minimal set for the demo)
+# Flash-resident base address for the library's .text.
+# Libraries are packed FIRST in xipfs. The first file starts at
+#   APPS_ORIGIN + sizeof(xipfs_fat)(16) + sizeof(xipfs_fhdr)(64) = APPS_ORIGIN + 80
+# The bFLT header adds another 64, so .text begins at APPS_ORIGIN + 144.
+APPS_ORIGIN ?= 0x08040000
+SHLIB_TEXT_BASE ?= $(shell printf '0x%x' $$(( $(APPS_ORIGIN) + 144 )) )
+
+# Custom elf2flt linker script with .text at the fixed flash address and
+# rodata merged into .text (equivalent of ld-elf2flt's -move-rodata).
+# Generated from the toolchain's default by:
+#   1. Patching .text base address
+#   2. Deleting R_RODAT: lines (keep only W_RODAT: — rodata in .text)
+#   3. Stripping W_RODAT: / TOR: / SINGLE_LINK: / RISCV_GP: prefixes
+ELF2FLT_LD := $(shell $(CC) -print-file-name=elf2flt.ld)
+shlib-elf2flt.ld: $(ELF2FLT_LD)
+	@echo "  GEN     $@ (.text @ $(SHLIB_TEXT_BASE))"
+	$(Q)sed -e 's|\.text 0x0 :|.text $(SHLIB_TEXT_BASE) :|' \
+	    -e '/^R_RODAT:/d' \
+	    -e '/^TOR:/d' \
+	    -e 's|^W_RODAT:||' \
+	    -e 's|^SINGLE_LINK:||' \
+	    -e 's|^RISCV_GP:||' \
+	    $< > $@
+
+# wolfSSL CFLAGS — include our HAL shim headers
 WOLFSSL_CFLAGS := $(CFLAGS) \
 	-DWOLFSSL_USER_SETTINGS \
 	-I. -Iwolfssl -Iwolfssl/wolfssl
 
 WOLFSSL_SRCS := \
 	wolfssl/wolfcrypt/src/sha256.c \
+	wolfssl/wolfcrypt/src/aes.c \
+	wolfssl/wolfcrypt/src/ecc.c \
+	wolfssl/wolfcrypt/src/sp_c32.c \
+	wolfssl/wolfcrypt/src/sp_int.c \
+	wolfssl/wolfcrypt/src/asn.c \
+	wolfssl/wolfcrypt/src/hash.c \
+	wolfssl/wolfcrypt/src/coding.c \
+	wolfssl/wolfcrypt/src/wolfmath.c \
+	wolfssl/wolfcrypt/src/random.c \
 	wolfssl/wolfcrypt/src/logging.c \
 	wolfssl/wolfcrypt/src/wc_port.c \
-	wolfssl/wolfcrypt/src/memory.c
+	wolfssl/wolfcrypt/src/memory.c \
+	wolfssl/wolfcrypt/src/port/st/stm32.c \
+	stm32h5_hal.c \
+	frosted_rng.c
 
 WOLFSSL_OBJS := $(WOLFSSL_SRCS:.c=.o)
 
@@ -39,10 +75,25 @@ wolfssl/wolfcrypt/src/%.o: wolfssl/wolfcrypt/src/%.c
 	@echo "  CC      $<"
 	$(Q)$(CC) -c -o $@ $< $(WOLFSSL_CFLAGS)
 
-../out/libwolfssl.so: $(WOLFSSL_OBJS)
-	@echo "  SHLIB   libwolfssl.so (lib_id=1)"
+wolfssl/wolfcrypt/src/port/st/%.o: wolfssl/wolfcrypt/src/port/st/%.c
+	@echo "  CC      $<"
+	$(Q)$(CC) -c -o $@ $< $(WOLFSSL_CFLAGS)
+
+stm32h5_hal.o: stm32h5_hal.c
+	@echo "  CC      $<"
+	$(Q)$(CC) -c -o $@ $< $(WOLFSSL_CFLAGS)
+
+frosted_rng.o: frosted_rng.c
+	@echo "  CC      $<"
+	$(Q)$(CC) -c -o $@ $< $(WOLFSSL_CFLAGS)
+
+../out/libwolfssl.so: $(WOLFSSL_OBJS) shlib-elf2flt.ld
+	@echo "  SHLIB   libwolfssl.so (lib_id=1, .text=$(SHLIB_TEXT_BASE))"
 	$(Q)FLTFLAGS="-S -L1 -E$(CURDIR)/wolfssl.exports" \
-		$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS) -Wl,-e,0
+		$(CC) -nostdlib -o $@ $(WOLFSSL_OBJS) $(CFLAGS) \
+		-fPIC -mlong-calls -fno-common \
+		-Wl,-elf2flt -Wl,-T,$(CURDIR)/shlib-elf2flt.ld \
+		-Wl,--start-group -lc -lgloss -lgcc -Wl,--end-group -Wl,-e,0
 	@echo "  MAP     libwolfssl.map"
 
 # The .map file is generated as a side-effect of the .so build
@@ -100,8 +151,9 @@ refetch:
 	$(MAKE) fetch
 
 clean:
-	rm -f *.a *.o *.map
+	rm -f *.a *.o *.map *.ld
 	rm -f wolfssl/wolfcrypt/src/*.o
+	rm -f wolfssl/wolfcrypt/src/port/st/*.o
 	rm -f ../out/libwolfssl.so
 
 distclean: clean

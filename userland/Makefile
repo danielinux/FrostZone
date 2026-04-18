@@ -82,7 +82,10 @@ xipfstool: xipfs
 
 userspace.bin: $(APPS-y) $(DIR-y) sh xipfstool lnk
 	mv out/*.gdb gdb/ 2>/dev/null || true
-	./xipfstool $@ $(APPS-y) $(filter-out %.map %.gdb,$(wildcard out/*))
+	./xipfstool $@ \
+		$(wildcard out/*.so) \
+		$(APPS-y) \
+		$(filter-out %.map %.gdb %.so,$(wildcard out/*))
 
 binutils: FORCE
 	mkdir -p out
@@ -95,7 +98,7 @@ binutils: FORCE
 lib: FORCE
 	mkdir -p out
 	mkdir -p gdb
-	make -C $@ LDFLAGS="$(LDFLAGS)" CFLAGS="$(CFLAGS)" CC=$(CC)
+	make -C $@ LDFLAGS="$(LDFLAGS)" CFLAGS="$(CFLAGS)" CC=$(CC) APPS_ORIGIN=$(APPS_ORIGIN)
 
 hw-utils: FORCE
 	mkdir -p out
