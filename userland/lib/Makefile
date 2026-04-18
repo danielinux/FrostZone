@@ -45,10 +45,13 @@ shlib-elf2flt.ld: $(ELF2FLT_LD)
 	    -e 's|^RISCV_GP:||' \
 	    $< > $@
 
-# wolfSSL CFLAGS — include our HAL shim headers
-# Software ECC has large (unbounded-by-analysis) stack frames, suppress
-# the stack-usage=4096 error for wolfSSL sources only.
+# wolfSSL CFLAGS — include our HAL shim headers.
+# Compile wolfCrypt sources with -Os (override the parent's -O0) so the
+# shared library is much smaller. Also suppress the stack-usage=4096
+# error — SW ECC paths have big frames that WOLFSSL_SMALL_STACK thins
+# out, but the compiler still flags them before constant folding.
 WOLFSSL_CFLAGS := $(CFLAGS) \
+	-Os \
 	-Wno-error=stack-usage= \
 	-DWOLFSSL_USER_SETTINGS \
 	-I. -Iwolfssl -Iwolfssl/wolfssl
@@ -57,6 +60,9 @@ WOLFSSL_SRCS := \
 	wolfssl/wolfcrypt/src/sha256.c \
 	wolfssl/wolfcrypt/src/aes.c \
 	wolfssl/wolfcrypt/src/ecc.c \
+	wolfssl/wolfcrypt/src/hmac.c \
+	wolfssl/wolfcrypt/src/kdf.c \
+	wolfssl/wolfcrypt/src/signature.c \
 	wolfssl/wolfcrypt/src/sp_c32.c \
 	wolfssl/wolfcrypt/src/sp_int.c \
 	wolfssl/wolfcrypt/src/asn.c \

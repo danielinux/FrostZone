@@ -18,7 +18,8 @@ CFLAGS-ICEBOX-$(APP_NETCAT)+=-DAPP_NETCAT_MODULE
 APPS-$(APP_HOST)+=host
 CFLAGS-$(APP_HOST)+=-DAPP_HOST_STANDALONE
 CFLAGS-ICEBOX-$(APP_HOST)+=-DAPP_HOST_MODULE
-#APPS-$(APP_HTTPD)+=https
+APPS-$(APP_HTTPD)+=httpd
+CFLAGS-$(APP_HTTPD)+=-DAPP_HTTPD_STANDALONE
 APPS-$(APP_STARWARS)+=starwars
 CFLAGS-$(APP_STARWARS)+=-DAPP_STARWARS_STANDALONE
 CFLAGS-ICEBOX-$(APP_STARWARS)+=-DAPP_STARWARS_MODULE
@@ -32,9 +33,8 @@ APPS-$(APP_PING)+=ping
 CFLAGS-$(APP_PING)+=-DAPP_PING_STANDALONE
 CFLAGS-ICEBOX-$(APP_PING)+=-DAPP_PING_MODULE
 
-LIBS-$(LIB_MONGOOSE)+=../lib/libmongoose.a
-# wolfSSL is now a shared library — sha256 links via stub archive + import map
-CFLAGS-$(LIB_WOLFSSL)+=-I../lib/include/ -DDEBUG_WOLFSSH
+# wolfSSL is a shared library — everything links via stub archive + import map.
+CFLAGS-$(LIB_WOLFSSL)+=-I../lib/include/
 
 BIN:=$(patsubst %,../out/%,$(APPS-y))
 OBJ:=$(patsubst %,%.o,$(APPS-y))
@@ -56,18 +56,46 @@ icebox-refresh: $(MOD)
 endif
 endif
 
-../out/sshd:
-	make -C wolfssh -f ../Makefile.wolfssh
-	cp sshd ../out
-	cp sshd.gdb ../gdb
+# ---------------------------------------------------------------
+# sshd - statically bundles wolfSSH, uses wolfCrypt via libwolfssl.so
+# ---------------------------------------------------------------
+WOLFSSH_ROOT    := ../lib/wolfssh
+# misc.c is included inline by internal.c when NO_INLINE is unset, so
+# don't compile it separately.
+WOLFSSH_SRCS    := \
+	$(WOLFSSH_ROOT)/src/ssh.c \
+	$(WOLFSSH_ROOT)/src/internal.c \
+	$(WOLFSSH_ROOT)/src/io.c \
+	$(WOLFSSH_ROOT)/src/log.c \
+	$(WOLFSSH_ROOT)/src/port.c \
+	$(WOLFSSH_ROOT)/src/keygen.c
+WOLFSSH_OBJS    := $(WOLFSSH_SRCS:.c=.o)
 
-../out/https: https.o
-	mkdir -p ../out
-	mkdir -p ../gdb
-	echo $(LDFLAGS)
-	@arm-frosted-eabi-gcc -o $@ $(LDFLAGS) $(CFLAGS) $(CFLAGS-y) ../lib/wolfssl/src/*.o ../lib/wolfssl/wolfcrypt/src/*.o $^
-	cp https ../out
-	cp https.gdb ../gdb
+# wolfSSH uses wolfCrypt via libwolfssl.so (stub archive + import map).
+# Share the wolfSSL user_settings so wolfSSH sees the same wolfCrypt
+# configuration it's expecting at compile time. -Os overrides the
+# parent's -O0 and keeps code size down; WOLFSSL_SMALL_STACK propagates
+# via user_settings.h.
+SSHD_CFLAGS  := $(CFLAGS) $(CFLAGS-y) \
+	-Os \
+	-DWOLFSSL_USER_SETTINGS \
+	-DDEBUG_WOLFSSH \
+	-I../lib -I../lib/wolfssl -I../lib/wolfssl/wolfssl \
+	-I$(WOLFSSH_ROOT) \
+	-include $(CURDIR)/sshd_wolfssh_settings.h \
+	-Wno-error=stack-usage= -Wno-error=unused-function \
+	-Wno-error=unused-variable -Wno-error=unused-but-set-variable
+
+$(WOLFSSH_ROOT)/src/%.o: $(WOLFSSH_ROOT)/src/%.c
+	$(CC) -c -o $@ $< $(SSHD_CFLAGS)
+
+sshd.o: sshd.c sshd_hostkey.h sshd_wolfssh_settings.h
+	$(CC) -c -o $@ sshd.c $(SSHD_CFLAGS)
+
+../out/sshd: sshd.o $(WOLFSSH_OBJS) ../lib/libwolfssl_stubs.a
+	@FLTFLAGS="-I$(CURDIR)/../out/libwolfssl.map" \
+		arm-frosted-eabi-gcc -o $@ $^ \
+		$(CFLAGS) $(CFLAGS-y) $(LDFLAGS) -lm
 
 ice/%.o: %.c
 	@mkdir -p ice

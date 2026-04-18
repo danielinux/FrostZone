@@ -4,13 +4,37 @@ menu "Libraries"
     bool "WolfSSL TLS + Encryption"
     default n
 
+    if LIB_WOLFSSL
+    menu "wolfSSL"
+
+    menuconfig LIB_WOLFSSL_STM32_HW_DRIVERS
+    bool "Use STM32 HW drivers"
+    default n
+    help
+      Enable wolfSSL's STM32 hardware acceleration hooks. These use the
+      Frosted kernel crypto devices exposed as /dev/hash, /dev/aes, and
+      /dev/pka.
+
+    if LIB_WOLFSSL_STM32_HW_DRIVERS
+        config LIB_WOLFSSL_STM32_HW_HASH
+        bool "Use STM32 HASH driver"
+        default y
+
+        config LIB_WOLFSSL_STM32_HW_AES
+        bool "Use STM32 AES driver"
+        default y
+
+        config LIB_WOLFSSL_STM32_HW_PKA
+        bool "Use STM32 PKA driver"
+        default y
+    endif
+
+    endmenu
+    endif
+
     config LIB_WOLFSSH
     bool "WolfSSH (SSH server/client)"
     depends on LIB_WOLFSSL
-    default n
-
-    config LIB_MONGOOSE
-    bool "Cesanta's Mongoose REST API library"
     default n
 
 endmenu
@@ -150,9 +174,8 @@ config APP_TELNETD
     tristate "telnetd"
 config APP_NETCAT
     tristate "netcat"
-#config APP_HTTPD
-#    bool "httpd"
-#    depends on LIB_WOLFSSL
+config APP_HTTPD
+    bool "httpd - wolfIP-style HTTP server"
 config APP_SSHD
     bool "sshd"
     depends on LIB_WOLFSSH

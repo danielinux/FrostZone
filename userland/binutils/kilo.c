@@ -347,6 +347,41 @@ int editorReadKey(int fd) {
     }
 }
 
+static int parseCursorReport(const char *buf, int *rows, int *cols)
+{
+    int row = 0;
+    int col = 0;
+    int saw_row = 0;
+    int saw_col = 0;
+
+    if (!buf || !rows || !cols)
+        return -1;
+    if (buf[0] != ESC || buf[1] != '[')
+        return -1;
+
+    buf += 2;
+    while (*buf >= '0' && *buf <= '9') {
+        saw_row = 1;
+        row = (row * 10) + (*buf - '0');
+        buf++;
+    }
+    if (!saw_row || *buf != ';')
+        return -1;
+
+    buf++;
+    while (*buf >= '0' && *buf <= '9') {
+        saw_col = 1;
+        col = (col * 10) + (*buf - '0');
+        buf++;
+    }
+    if (!saw_col || (*buf != 'R' && *buf != '\0'))
+        return -1;
+
+    *rows = row;
+    *cols = col;
+    return 0;
+}
+
 /* Use the ESC [6n escape sequence to query the horizontal cursor position
  * and return it. On error -1 is returned, on success the position of the
  * cursor is stored at *rows and *cols and 0 is returned. */
@@ -366,9 +401,7 @@ int getCursorPosition(int ifd, int ofd, int *rows, int *cols) {
     buf[i] = '\0';
 
     /* Parse it. */
-    if (buf[0] != ESC || buf[1] != '[') return -1;
-    if (sscanf(buf+2,"%d;%d",rows,cols) != 2) return -1;
-    return 0;
+    return parseCursorReport(buf, rows, cols);
 }
 
 /* Try to get the number of columns in the current terminal. If the ioctl()

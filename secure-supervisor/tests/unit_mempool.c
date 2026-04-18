@@ -140,6 +140,65 @@ START_TEST(test_mempool_alloc_stack_reuses_single_slot)
 }
 END_TEST
 
+START_TEST(test_mempool_mmap_best_fit_new_segment)
+{
+    const uint16_t task_id = 6;
+    secure_task_t *task;
+
+    ck_assert_int_eq(register_secure_task(task_id, CAP_TASK, CONFIG_TASK_MAX_MEM), 0);
+    task = get_secure_task(task_id);
+    ck_assert_ptr_nonnull(task);
+
+    memset(mempool_blocks, 0, sizeof(mempool_blocks));
+    mempool_blocks[0].base = mempool_test_ptr + 0x1000;
+    mempool_blocks[0].size = 1024;
+    mempool_blocks[1].base = mempool_test_ptr + 0x3000;
+    mempool_blocks[1].size = 256;
+
+    void *segment = mempool_mmap(128, task_id, 0);
+    ck_assert_ptr_eq(segment, mempool_test_ptr + 0x3000);
+    ck_assert_uint_eq(task->mempool_count, 1);
+    ck_assert_ptr_eq(task->mempool[0].base, mempool_test_ptr + 0x3000);
+    ck_assert_uint_eq(task->mempool[0].size, 128);
+    ck_assert_ptr_eq(mempool_blocks[1].base, mempool_test_ptr + 0x3080);
+    ck_assert_uint_eq(mempool_blocks[1].size, 128);
+}
+END_TEST
+
+START_TEST(test_mempool_mmap_best_fit_contiguous_extension)
+{
+    const uint16_t task_id = 7;
+    secure_task_t *task;
+    uint8_t *expected;
+
+    ck_assert_int_eq(register_secure_task(task_id, CAP_TASK, CONFIG_TASK_MAX_MEM), 0);
+    task = get_secure_task(task_id);
+    ck_assert_ptr_nonnull(task);
+
+    memset(mempool_blocks, 0, sizeof(mempool_blocks));
+    task->mempool[0].base = mempool_test_ptr + 0x1000;
+    task->mempool[0].size = 256;
+    task->mempool[1].base = mempool_test_ptr + 0x3000;
+    task->mempool[1].size = 256;
+    task->mempool_count = 2;
+    task->limits.mem_used = 512;
+
+    mempool_blocks[0].base = mempool_test_ptr + 0x1100;
+    mempool_blocks[0].size = 512;
+    mempool_blocks[1].base = mempool_test_ptr + 0x3100;
+    mempool_blocks[1].size = 192;
+
+    expected = mempool_test_ptr + 0x3100;
+    ck_assert_ptr_eq(mempool_mmap(128, task_id, 0), expected);
+    ck_assert_uint_eq(task->mempool_count, 2);
+    ck_assert_ptr_eq(task->mempool[1].base, mempool_test_ptr + 0x3000);
+    ck_assert_uint_eq(task->mempool[1].size, 384);
+    ck_assert_ptr_eq(mempool_blocks[1].base, mempool_test_ptr + 0x3180);
+    ck_assert_uint_eq(mempool_blocks[1].size, 64);
+    ck_assert_uint_eq(task->limits.mem_used, 640);
+}
+END_TEST
+
 static Suite *
 mempool_suite(void)
 {
@@ -153,6 +212,8 @@ mempool_suite(void)
     tcase_add_test(tc, test_mempool_alloc_stack_assigns_segment);
     tcase_add_test(tc, test_mempool_mmap_respects_limit);
     tcase_add_test(tc, test_mempool_alloc_stack_reuses_single_slot);
+    tcase_add_test(tc, test_mempool_mmap_best_fit_new_segment);
+    tcase_add_test(tc, test_mempool_mmap_best_fit_contiguous_extension);
 
     suite_add_tcase(s, tc);
     return s;

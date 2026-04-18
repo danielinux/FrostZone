@@ -29,7 +29,7 @@ typedef char wint_t;
 #include <stdint.h>
 
 #ifndef CONFIG_TASK_STACK_SIZE
-#define CONFIG_TASK_STACK_SIZE 8192
+#define CONFIG_TASK_STACK_SIZE 16384
 #endif
 #define SCHEDULER_STACK_SIZE   (CONFIG_TASK_STACK_SIZE)
 

@@ -23,6 +23,8 @@ ifndef SYS_CLOCK
 $(error SYS_CLOCK not defined in $(KERNEL_CONFIG))
 endif
 endif
+
+kconfig_bool = $(strip $(if $(filter y Y 1,$(1)),1,0))
 # TOOLCHAIN CONFIG
 CROSS_COMPILE?=arm-frosted-eabi-
 CC:=$(CROSS_COMPILE)gcc
@@ -68,6 +70,10 @@ CFLAGS+=-fPIC -mlong-calls -fno-common -msingle-pic-base -mno-pic-data-is-text-r
 CFLAGS+=-ggdb
 CFLAGS+=-I../lib/include -I../lib
 CFLAGS+=-Wdeclaration-after-statement -Werror
+CFLAGS+=-DCONFIG_LIB_WOLFSSL_STM32_HW_DRIVERS=$(call kconfig_bool,$(LIB_WOLFSSL_STM32_HW_DRIVERS))
+CFLAGS+=-DCONFIG_LIB_WOLFSSL_STM32_HW_HASH=$(call kconfig_bool,$(LIB_WOLFSSL_STM32_HW_HASH))
+CFLAGS+=-DCONFIG_LIB_WOLFSSL_STM32_HW_AES=$(call kconfig_bool,$(LIB_WOLFSSL_STM32_HW_AES))
+CFLAGS+=-DCONFIG_LIB_WOLFSSL_STM32_HW_PKA=$(call kconfig_bool,$(LIB_WOLFSSL_STM32_HW_PKA))
 CFLAGS+=$(CFLAGS-y)
 
 # LINKER FLAGS

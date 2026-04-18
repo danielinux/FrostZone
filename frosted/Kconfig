@@ -55,6 +55,23 @@ config LINK_MTU
     help
       Default MTU advertised by network interfaces.
 
+config HEAP_SEGMENT_GRANULARITY
+    int "Heap segment growth granularity (bytes)"
+    default 4096
+    range 8 1048576
+    help
+      Allocation backing obtained from secure_mmap() is rounded up to a
+      multiple of this value when the kernel grows a task heap.
+
+config HEAP_SEGMENT_MIN_SIZE
+    int "Minimum heap segment size (bytes)"
+    default 8192
+    range 8 1048576
+    help
+      Minimum size of a newly mapped heap segment. This can be larger than
+      the growth granularity to reduce the number of heap regions consumed
+      by allocation-heavy tasks.
+
 endmenu
 
 menu "Kernel features"
@@ -133,6 +150,29 @@ config DEVFBCON
     bool "Framebuffer console"
     depends on DEVFRAMEBUFFER
     default y
+
+menu "STM32 hardware crypto"
+    depends on TARGET_STM32H563
+
+config STM32_HW_HASH
+    bool "HASH accelerator (/dev/hash)"
+    default y
+    help
+      Expose the STM32 HASH accelerator through the /dev/hash device.
+
+config STM32_HW_AES
+    bool "AES accelerator (/dev/aes)"
+    default y
+    help
+      Expose the STM32 AES accelerator through the /dev/aes device.
+
+config STM32_HW_PKA
+    bool "PKA accelerator (/dev/pka)"
+    default y
+    help
+      Expose the STM32 PKA accelerator through the /dev/pka device.
+
+endmenu
 
 endmenu
 

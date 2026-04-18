@@ -11,7 +11,7 @@ endif
 CC ?= gcc
 
 CFLAGS ?=
-override CFLAGS += -Wall -Wextra -std=gnu11 -I.. -I../include $(CHECK_CFLAGS)
+override CFLAGS += -Wall -Wextra -std=gnu11 -I.. -I../include -I../../nsc-gateway $(CHECK_CFLAGS)
 
 LDFLAGS ?=
 LDLIBS ?=

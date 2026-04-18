@@ -790,6 +790,9 @@ static struct module mod_crypto = {
 
 void stm32crypto_init(struct fnode *dev)
 {
+    if (!CONFIG_STM32_HW_HASH && !CONFIG_STM32_HW_AES && !CONFIG_STM32_HW_PKA)
+        return;
+
     strncpy(mod_crypto.name, "stm32crypto", sizeof(mod_crypto.name) - 1);
     mod_crypto.family = FAMILY_DEV;
     mod_crypto.ops.open  = crypto_open;
@@ -798,9 +801,15 @@ void stm32crypto_init(struct fnode *dev)
     mod_crypto.ops.ioctl = crypto_ioctl;
     mod_crypto.ops.close = crypto_close;
 
+#if CONFIG_STM32_HW_HASH
     fno_hash = fno_create(&mod_crypto, "hash", dev);
+#endif
+#if CONFIG_STM32_HW_AES
     fno_aes  = fno_create(&mod_crypto, "aes",  dev);
+#endif
+#if CONFIG_STM32_HW_PKA
     fno_pka  = fno_create(&mod_crypto, "pka",  dev);
+#endif
 
     register_module(&mod_crypto);
 }

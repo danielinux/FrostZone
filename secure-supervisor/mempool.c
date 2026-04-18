@@ -27,7 +27,7 @@
 #include "taskmem.h"
 
 #ifndef CONFIG_MEMPOOL_SIZE
-#define CONFIG_MEMPOOL_SIZE (0x38000)
+#define CONFIG_MEMPOOL_SIZE (0x68000)   /* 416 KB — see stm32h563.ld */
 #endif
 #define MEMPOOL_SIZE        CONFIG_MEMPOOL_SIZE
 #define MAX_MEMPOOL_BLOCKS  512         /* Max blocks in tracking table */
@@ -83,6 +83,31 @@ static inline void mempool_limits_sub(secure_task_t *task, uint32_t size)
         task->limits.mem_used -= size;
     else
         task->limits.mem_used = 0;
+}
+
+static int mempool_consume_block(int index, uint32_t size, uint8_t **base_out)
+{
+    mempool_block_t *block;
+
+    if ((index < 0) || (index >= MAX_MEMPOOL_BLOCKS))
+        return -1;
+
+    block = &mempool_blocks[index];
+    if ((block->base == NULL) || (block->size < size))
+        return -1;
+
+    if (base_out)
+        *base_out = block->base;
+
+    if (block->size == size) {
+        block->base = NULL;
+        block->size = 0;
+    } else {
+        block->base += size;
+        block->size -= size;
+    }
+
+    return 0;
 }
 
 /* Release a previously allocated area.
@@ -221,6 +246,11 @@ static void *mempool_task_alloc(size_t task_size, uint16_t task_id)
 void *mempool_mmap(size_t size, uint16_t task_id, uint32_t flags)
 {
     int i, j;
+    int best_adjacent_block = -1;
+    int best_adjacent_segment = -1;
+    uint32_t best_adjacent_size = UINT32_MAX;
+    int best_block = -1;
+    uint32_t best_block_size = UINT32_MAX;
     uint32_t size_alignment = size % MMAP_ALIGN;
 
     if (size == 0)
@@ -245,22 +275,26 @@ void *mempool_mmap(size_t size, uint16_t task_id, uint32_t flags)
                 if ((task->mempool[j].base +
                      task->mempool[j].size == mempool_blocks[i].base) &&
                      (mempool_blocks[i].size >= size))
-                { 
-                    if ((flags & MMAP_NEWPAGE) == 0) {
-                        /* The new block is contiguous to the currently used one. 
-                         * merge them.
-                         */
-                        uint32_t oldsize = task->mempool[j].size;
-                        task->mempool[j].size += size;
-
-                        /* The old block is moved and resized. */
-                        mempool_blocks[i].base += size;
-                        mempool_blocks[i].size -= size;
-                        mempool_limits_add(task, size);
-                        return task->mempool[j].base + oldsize;
+                {
+                    if (((flags & MMAP_NEWPAGE) == 0) &&
+                        (mempool_blocks[i].size < best_adjacent_size)) {
+                        best_adjacent_block = i;
+                        best_adjacent_segment = j;
+                        best_adjacent_size = mempool_blocks[i].size;
                     }
                 }
             }
+        }
+
+        if (best_adjacent_block >= 0) {
+            uint32_t oldsize = task->mempool[best_adjacent_segment].size;
+
+            if (mempool_consume_block(best_adjacent_block, size, NULL) != 0)
+                return NULL;
+
+            task->mempool[best_adjacent_segment].size += size;
+            mempool_limits_add(task, size);
+            return task->mempool[best_adjacent_segment].base + oldsize;
         }
     }
 
@@ -270,19 +304,26 @@ void *mempool_mmap(size_t size, uint16_t task_id, uint32_t flags)
 
     /* Map a new non-contiguous segment to the task */
     for (i = 0; i < MAX_MEMPOOL_BLOCKS; i++) {
-        if (mempool_blocks[i].size >= size) {
-            mempool_block_t *mem = &task->mempool[task->mempool_count];
-            mem->base = mempool_blocks[i].base;
-            mem->size = size;
-            task->mempool_count++;
-            mempool_limits_add(task, size);
-
-            /* Split remaining space, if larger than needed */
-            mempool_blocks[i].base += size;
-            mempool_blocks[i].size -= size;
-            return task->mempool[task->mempool_count - 1].base;
+        if ((mempool_blocks[i].base != NULL) &&
+            (mempool_blocks[i].size >= size) &&
+            (mempool_blocks[i].size < best_block_size)) {
+            best_block = i;
+            best_block_size = mempool_blocks[i].size;
         }
     }
+
+    if (best_block >= 0) {
+        mempool_block_t *mem = &task->mempool[task->mempool_count];
+
+        if (mempool_consume_block(best_block, size, &mem->base) != 0)
+            return NULL;
+
+        mem->size = size;
+        task->mempool_count++;
+        mempool_limits_add(task, size);
+        return mem->base;
+    }
+
     /* No free blocks available */
     return NULL;
 }

@@ -9,23 +9,30 @@
 #define NO_WOLFSSL_MEMORY
 #define NO_ERROR_STRINGS
 
-/* ---- STM32H5 hardware crypto ----
- * Temporarily disabled: we are debugging userland/shlib path with pure
- * software crypto. Re-enable (NO_STM32_HASH off, drop NO_STM32_CRYPTO,
- * add WOLFSSL_STM32_PKA) once the userland apps are stable. */
+/* ---- STM32H5 hardware crypto ---- */
 #define WOLFSSL_STM32H5
 #define WOLFSSL_STM32_CUBEMX
 #define STM32_HAL_V2
-#define NO_STM32_HASH       /* software SHA-256 */
-#define NO_STM32_CRYPTO     /* software AES (disable HAL_CRYP shim) */
-/* #define WOLFSSL_STM32_PKA  -- disabled, software ECC */
+
+#if !CONFIG_LIB_WOLFSSL_STM32_HW_HASH
+#define NO_STM32_HASH
+#endif
+
+#if !CONFIG_LIB_WOLFSSL_STM32_HW_AES
+#define NO_STM32_CRYPTO
+#endif
+
+#if CONFIG_LIB_WOLFSSL_STM32_HW_PKA
+#define WOLFSSL_STM32_PKA
+#endif
 
 /* ---- Algorithm selection ---- */
 #define WOLFSSL_SHA256
 
-/* AES */
+/* AES — CBC for aes128 app, CTR + GCM for wolfSSH transport */
 #define HAVE_AESGCM
 #define HAVE_AES_CBC
+#define WOLFSSL_AES_COUNTER
 #define WOLFSSL_AES_DIRECT
 
 /* ECC */
@@ -41,6 +48,9 @@
 /* Needed for ECC key handling */
 #define WOLFSSL_ASN_TEMPLATE
 
+/* HMAC + HKDF — required by wolfSSH (HMAC-SHA-256 for MAC, HKDF for KEX). */
+#define HAVE_HKDF
+
 /* ---- Disabled algorithms ---- */
 #define NO_RSA
 #define NO_DH
@@ -49,7 +59,6 @@
 #define NO_RC4
 #define NO_MD5
 #define NO_SHA       /* no SHA-1 */
-#define NO_HMAC
 #define NO_PWDBASED
 #define NO_CERTS
 #define NO_OLD_TLS

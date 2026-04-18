@@ -275,7 +275,9 @@ int frosted_init(void)
 
     vfs_init();
     devnull_init(fno_search("/dev"));
+#if CONFIG_STM32_HW_HASH || CONFIG_STM32_HW_AES || CONFIG_STM32_HW_PKA
     stm32crypto_init(fno_search("/dev"));
+#endif
 
     hw_init();
 

@@ -21,9 +21,11 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include "config.h"
 #include "frosted.h"
 
-#define PAGE_SIZE 4096
+#define PAGE_SIZE HEAP_SEGMENT_GRANULARITY
+#define MIN_PAGE_ALLOC HEAP_SEGMENT_MIN_SIZE
 #define ALIGNMENT 8
 #define MAX_PAGES 32
 #define ALIGN_UP(x, a) (((x) + ((a) - 1)) & ~((a) - 1))
@@ -46,6 +48,20 @@ void kfree(void *ptr);
 
 static void *alloc_from_pages(uint32_t size);
 static void try_merge_blocks(uint8_t *base, uint32_t *offset, uint32_t capacity);
+
+static uint32_t heap_segment_size(uint32_t size)
+{
+    uint32_t rounded = ALIGN_UP(size, PAGE_SIZE);
+    uint32_t minimum = MIN_PAGE_ALLOC;
+
+    if (minimum < PAGE_SIZE)
+        minimum = PAGE_SIZE;
+
+    if (rounded < minimum)
+        return minimum;
+
+    return rounded;
+}
 
 static int add_new_page(uint32_t page_size)
 {
@@ -85,7 +101,7 @@ void *kalloc(uint32_t size)
             return (uint8_t *)ptr + sizeof(uint32_t);
         }
         irq_restore(irq_state);
-        uint32_t page_size = ALIGN_UP(total, PAGE_SIZE);
+        uint32_t page_size = heap_segment_size(total);
         if (add_new_page(page_size) != 0) {
             return 0;
         }
@@ -191,12 +207,11 @@ static void try_merge_blocks(uint8_t *base, uint32_t *offset, uint32_t capacity)
 
 void *sys_mmap_hdlr(uint32_t len, uint16_t pid, uint32_t flags)
 {
-    uint32_t size = PAGE_SIZE;
+    uint32_t size;
     pid = this_task_getpid();
     flags = 0;
 
-    while (size < len)
-        size += PAGE_SIZE;
+    size = heap_segment_size(len);
     return secure_mmap(size, pid, flags);
 }
 
