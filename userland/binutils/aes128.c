@@ -20,6 +20,10 @@
 #include <wolfssl/wolfcrypt/aes.h>
 #include <wolfssl/wolfcrypt/random.h>
 
+int fz_wc_AesInitDefault(Aes *aes);
+int fz_wc_AesSetKeyEnc(Aes *aes, const void *key, const void *iv);
+int fz_wc_AesSetKeyDec(Aes *aes, const void *key, const void *iv);
+
 static void usage(void)
 {
     printf("Usage: aes128 -e|-d -k keyfile\n");
@@ -83,7 +87,7 @@ int main(int argc, char *argv[])
     }
     close(fd);
 
-    ret = wc_AesInit(&aes, NULL, -1);
+    ret = fz_wc_AesInitDefault(&aes);
     if (ret != 0) {
         printf("aes128: AES init failed (%d)\n", ret);
         return 1;
@@ -104,7 +108,7 @@ int main(int argc, char *argv[])
         }
         write(1, iv, 16);
 
-        ret = wc_AesSetKey(&aes, key, 16, iv, AES_ENCRYPTION);
+        ret = fz_wc_AesSetKeyEnc(&aes, key, iv);
         if (ret != 0) {
             printf("aes128: set key failed (%d)\n", ret);
             return 1;
@@ -129,7 +133,7 @@ int main(int argc, char *argv[])
             return 1;
         }
 
-        ret = wc_AesSetKey(&aes, key, 16, iv, AES_DECRYPTION);
+        ret = fz_wc_AesSetKeyDec(&aes, key, iv);
         if (ret != 0) {
             printf("aes128: set key failed (%d)\n", ret);
             return 1;

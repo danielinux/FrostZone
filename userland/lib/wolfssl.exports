@@ -19,3 +19,8 @@ wc_InitRng
 wc_RNG_GenerateBlock
 wc_FreeRng
 wc_Sha256Hash
+fz_wc_AesInitDefault
+fz_wc_AesSetKeyEnc
+fz_wc_AesSetKeyDec
+fz_wc_ecc_sign_p256
+fz_wc_ecc_verify_p256

@@ -18,6 +18,9 @@ int wc_AesSetKey(void *aes, const void *key, uint32_t len, const void *iv, int d
 int wc_AesCbcEncrypt(void *aes, void *out, const void *in, uint32_t sz) { return -1; }
 int wc_AesCbcDecrypt(void *aes, void *out, const void *in, uint32_t sz) { return -1; }
 int wc_AesFree(void *aes) { return -1; }
+int fz_wc_AesInitDefault(void *aes) { return -1; }
+int fz_wc_AesSetKeyEnc(void *aes, const void *key, const void *iv) { return -1; }
+int fz_wc_AesSetKeyDec(void *aes, const void *key, const void *iv) { return -1; }
 
 /* ECC stubs */
 int wc_ecc_init(void *key) { return -1; }
@@ -29,6 +32,8 @@ int wc_ecc_import_x963(const void *in, uint32_t inlen, void *key) { return -1; }
 int wc_ecc_export_x963(void *key, void *out, uint32_t *outlen) { return -1; }
 int wc_ecc_import_private_key_ex(const void *priv, uint32_t privSz, const void *pub, uint32_t pubSz, void *key, int curve_id) { return -1; }
 int wc_ecc_export_private_only(void *key, void *out, uint32_t *outlen) { return -1; }
+int fz_wc_ecc_sign_p256(const void *args) { return -1; }
+int fz_wc_ecc_verify_p256(const void *args) { return -1; }
 
 /* RNG stubs */
 int wc_InitRng(void *rng) { return -1; }

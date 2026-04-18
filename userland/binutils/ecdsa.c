@@ -34,6 +34,25 @@
 #define MAX_SIG_SIZE   72  /* DER ECDSA P-256 max */
 #define ECC_KEY_CURVE  ECC_SECP256R1
 
+struct fz_ecc_sign_args {
+    const unsigned char *keybuf;
+    const unsigned char *hash;
+    unsigned char *sig;
+    word32 *sig_len;
+};
+
+struct fz_ecc_verify_args {
+    const unsigned char *keybuf;
+    uint32_t key_len;
+    const unsigned char *sig;
+    word32 sig_len;
+    const unsigned char *hash;
+    int *verified;
+};
+
+int fz_wc_ecc_sign_p256(const struct fz_ecc_sign_args *args);
+int fz_wc_ecc_verify_p256(const struct fz_ecc_verify_args *args);
+
 static void usage(void)
 {
     printf("Usage: ecdsa -g|-s|-v -k keyfile [sigfile]\n");
@@ -125,12 +144,11 @@ err:
 
 static int do_sign(const char *keyfile)
 {
-    ecc_key key;
-    WC_RNG rng;
     unsigned char keybuf[KEY_FILE_SIZE];
     unsigned char hash[32];
     unsigned char sig[MAX_SIG_SIZE];
     word32 sig_len = MAX_SIG_SIZE;
+    struct fz_ecc_sign_args args;
     int fd, n, ret;
 
     /* Read key file */
@@ -152,49 +170,27 @@ static int do_sign(const char *keyfile)
         return 1;
     }
 
-    ret = wc_ecc_init(&key);
-    if (ret != 0)
-        return 1;
-
-    /* Import private + public key */
-    ret = wc_ecc_import_private_key_ex(
-        keybuf, PRIV_KEY_SIZE,
-        keybuf + PRIV_KEY_SIZE, PUB_KEY_SIZE,
-        &key, ECC_KEY_CURVE);
-    if (ret != 0) {
-        printf("ecdsa: import key failed (%d)\n", ret);
-        wc_ecc_free(&key);
-        return 1;
-    }
-
-    ret = wc_InitRng(&rng);
-    if (ret != 0) {
-        wc_ecc_free(&key);
-        return 1;
-    }
-
-    ret = wc_ecc_sign_hash(hash, 32, sig, &sig_len, &rng, &key);
+    args.keybuf = keybuf;
+    args.hash = hash;
+    args.sig = sig;
+    args.sig_len = &sig_len;
+    ret = fz_wc_ecc_sign_p256(&args);
     if (ret != 0) {
         printf("ecdsa: sign failed (%d)\n", ret);
-        wc_ecc_free(&key);
-        wc_FreeRng(&rng);
         return 1;
     }
 
     /* Write DER signature to stdout */
     write(1, sig, sig_len);
-
-    wc_ecc_free(&key);
-    wc_FreeRng(&rng);
     return 0;
 }
 
 static int do_verify(const char *keyfile, const char *sigfile)
 {
-    ecc_key key;
     unsigned char keybuf[KEY_FILE_SIZE];
     unsigned char hash[32];
     unsigned char sig[MAX_SIG_SIZE];
+    struct fz_ecc_verify_args args;
     int fd, n, key_len, verified = 0, ret;
 
     /* Read key file (can be 97 bytes full or 65 bytes pub-only) */
@@ -230,27 +226,15 @@ static int do_verify(const char *keyfile, const char *sigfile)
         return 1;
     }
 
-    ret = wc_ecc_init(&key);
-    if (ret != 0)
-        return 1;
-
-    /* Import public key */
-    if (key_len == KEY_FILE_SIZE) {
-        /* Full key file: skip private, import public */
-        ret = wc_ecc_import_x963(keybuf + PRIV_KEY_SIZE, PUB_KEY_SIZE, &key);
-    } else {
-        ret = wc_ecc_import_x963(keybuf, PUB_KEY_SIZE, &key);
-    }
-    if (ret != 0) {
-        printf("ecdsa: import public key failed (%d)\n", ret);
-        wc_ecc_free(&key);
-        return 1;
-    }
-
-    ret = wc_ecc_verify_hash(sig, n, hash, 32, &verified, &key);
+    args.keybuf = keybuf;
+    args.key_len = key_len;
+    args.sig = sig;
+    args.sig_len = n;
+    args.hash = hash;
+    args.verified = &verified;
+    ret = fz_wc_ecc_verify_p256(&args);
     if (ret != 0) {
         printf("ecdsa: verify failed (%d)\n", ret);
-        wc_ecc_free(&key);
         return 1;
     }
 
@@ -258,8 +242,6 @@ static int do_verify(const char *keyfile, const char *sigfile)
         printf("ecdsa: signature OK\n");
     else
         printf("ecdsa: signature INVALID\n");
-
-    wc_ecc_free(&key);
     return verified ? 0 : 1;
 }
 

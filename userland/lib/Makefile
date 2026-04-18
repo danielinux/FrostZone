@@ -68,6 +68,7 @@ WOLFSSL_SRCS := \
 	wolfssl/wolfcrypt/src/wc_port.c \
 	wolfssl/wolfcrypt/src/memory.c \
 	wolfssl/wolfcrypt/src/port/st/stm32.c \
+	frosted_crypto_wrappers.c \
 	stm32h5_hal.c \
 	frosted_rng.c
 
@@ -79,6 +80,10 @@ wolfssl/wolfcrypt/src/%.o: wolfssl/wolfcrypt/src/%.c
 	$(Q)$(CC) -c -o $@ $< $(WOLFSSL_CFLAGS)
 
 wolfssl/wolfcrypt/src/port/st/%.o: wolfssl/wolfcrypt/src/port/st/%.c
+	@echo "  CC      $<"
+	$(Q)$(CC) -c -o $@ $< $(WOLFSSL_CFLAGS)
+
+frosted_crypto_wrappers.o: frosted_crypto_wrappers.c
 	@echo "  CC      $<"
 	$(Q)$(CC) -c -o $@ $< $(WOLFSSL_CFLAGS)
 

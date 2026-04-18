@@ -302,43 +302,61 @@ struct shlib_proc {
 #define MAX_PROC_SHLIBS 4
 
 /*
- * Generate a 28-byte Thumb-2 trampoline that swaps r9 (GOT base)
+ * Generate a 24-byte Thumb trampoline that swaps r9 (GOT base)
  * from the application's to the library's before calling lib_func_addr.
  *
+ * Cortex-M does not support BLX (register). Use an explicit odd return
+ * label so the library returns to "mov r9, r5" before the final pop.
+ *
  * Layout:
- *   0x00  push {r4, r9, lr}      E92D 4210
- *   0x04  ldr  r9, [pc, #12]     F8DF 900C   ; -> 0x14: lib_got
- *   0x08  ldr  r4, [pc, #12]     F8DF 400C   ; -> 0x18: lib_func_addr
- *   0x0C  blx  r4                4720
- *   0x0E  pop  {r4, r9, pc}      E8BD 8210
- *   0x12  .hword 0               (padding)
- *   0x14  .word  lib_got
- *   0x18  .word  lib_func_addr
+ *   0x00  push {r4, r5, r6, lr}  B570
+ *   0x02  mov  r5, r9            464D
+ *   0x04  ldr  r6, [pc, #16]     4E04       ; -> 0x18: lib_got
+ *   0x06  mov  r9, r6            46B1
+ *   0x08  ldr  r4, [pc, #16]     4C04       ; -> 0x1C: lib_func_addr
+ *   0x0A  addw r6, pc, #8        F20F0608   ; -> 0x14
+ *   0x0E  adds r6, #1            3601
+ *   0x10  mov  lr, r6            46B6
+ *   0x12  bx   r4                4720
+ *   0x14  mov  r9, r5            46A9
+ *   0x16  pop  {r4, r5, r6, pc}  BD70
+ *   0x18  .word  lib_got
+ *   0x1C  .word  lib_func_addr
  */
 static void generate_trampoline(uint8_t *dst, uint32_t lib_func_addr, uint32_t lib_got)
 {
     uint8_t *p = dst;
     uint32_t *w;
 
-    /* push {r4, r9, lr} */
-    p[0] = 0x2D; p[1] = 0xE9; p[2] = 0x10; p[3] = 0x42;
-    /* ldr r9, [pc, #12] */
-    p[4] = 0xDF; p[5] = 0xF8; p[6] = 0x0C; p[7] = 0x90;
-    /* ldr r4, [pc, #12] */
-    p[8] = 0xDF; p[9] = 0xF8; p[10] = 0x0C; p[11] = 0x40;
-    /* blx r4 */
-    p[12] = 0xa0; p[13] = 0x47;
-    /* pop {r4, r9, pc} */
-    p[14] = 0xBD; p[15] = 0xE8; p[16] = 0x10; p[17] = 0x82;
-    /* padding */
-    p[18] = 0x00; p[19] = 0x00;
-    /* literal pool */
-    w = (uint32_t *)(p + 20);
+    /* push {r4, r5, r6, lr} */
+    p[0] = 0x70; p[1] = 0xB5;
+    /* mov r5, r9 */
+    p[2] = 0x4D; p[3] = 0x46;
+    /* ldr r6, [pc, #16] */
+    p[4] = 0x04; p[5] = 0x4E;
+    /* mov r9, r6 */
+    p[6] = 0xB1; p[7] = 0x46;
+    /* ldr r4, [pc, #16] */
+    p[8] = 0x04; p[9] = 0x4C;
+    /* addw r6, pc, #8 */
+    p[10] = 0x0F; p[11] = 0xF2; p[12] = 0x08; p[13] = 0x06;
+    /* adds r6, #1 */
+    p[14] = 0x01; p[15] = 0x36;
+    /* mov lr, r6 */
+    p[16] = 0xB6; p[17] = 0x46;
+    /* bx r4 */
+    p[18] = 0x20; p[19] = 0x47;
+    /* mov r9, r5 */
+    p[20] = 0xA9; p[21] = 0x46;
+    /* pop {r4, r5, r6, pc} */
+    p[22] = 0x70; p[23] = 0xBD;
+    /* Literal pool */
+    w = (uint32_t *)(p + 24);
     w[0] = lib_got;
     w[1] = lib_func_addr;
 }
 
-#define TRAMPOLINE_SIZE 28
+#define TRAMPOLINE_SIZE 32
 
 int shlib_resolve_got(uint32_t *got_start, uint32_t got_words,
                       const uint8_t *app_text_base, uint8_t *app_data_base,

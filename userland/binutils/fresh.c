@@ -738,16 +738,24 @@ static void redir_restore(int saved_in, int saved_out, int saved_err)
 
 /**
  * Run a pipeline `cmd1 | cmd2 | ...`
+ *
+ * Standard pattern: create every pipe up front, fork each stage with its
+ * stdin/stdout bound to the adjacent pipes, close *all* pipe fds in the
+ * parent, then wait for each child. Doing it this way avoids the
+ * fork-serially-then-wait deadlock the previous version hit whenever a
+ * stage's output did not fit into the 64-byte pipe buffer (PIPE_BUFSIZE
+ * in frosted/pipe.c).
  */
 static int pipeHandler(char *args[])
 {
     char **commands[LIMIT];
     pid_t pids[LIMIT];
+    int pipes[LIMIT][2];
     int cmd_count = 0;
     char **start = args;
     int last_status = 0;
-    int i;
-    int prev_read = -1;
+    int i, j;
+    int saved_stdin, saved_stdout;
 
     if (!args || !args[0])
         return -1;
@@ -780,81 +788,83 @@ static int pipeHandler(char *args[])
         return -1;
     }
 
-    /* Save original stdin/stdout */
-    {
-    int saved_stdin = dup(STDIN_FILENO);
-    int saved_stdout = dup(STDOUT_FILENO);
+    /* Create every pipe before forking any stage. */
+    for (i = 0; i < cmd_count - 1; i++) {
+        if (pipe(pipes[i]) < 0) {
+            perror("pipe");
+            for (j = 0; j < i; j++) {
+                close(pipes[j][0]);
+                close(pipes[j][1]);
+            }
+            return -1;
+        }
+    }
+
+    saved_stdin  = dup(STDIN_FILENO);
+    saved_stdout = dup(STDOUT_FILENO);
 
     for (i = 0; i < cmd_count; i++) {
-        int pipefd[2];
-        pid_t pid;
         char resolved[60];
+        pid_t pid;
+        int in_fd, out_fd;
 
-        pipefd[0] = -1;
-        pipefd[1] = -1;
-        if (i < cmd_count - 1) {
-            if (pipe(pipefd) < 0) {
-                perror("pipe");
-                break;
-            }
-        }
-
-        /* Resolve command path */
         if (resolve_cmd(commands[i][0], resolved, sizeof(resolved)) < 0) {
             printf("fresh: %s: command not found\r\n", commands[i][0]);
-            if (pipefd[0] != -1) close(pipefd[0]);
-            if (pipefd[1] != -1) close(pipefd[1]);
-            break;
+            pids[i] = -1;
+            continue;
         }
 
-        /* Set up fds in parent before vfork:
-         * - stdin: from prev_read (previous pipe read end), or original stdin
-         * - stdout: to pipefd[1] (current pipe write end), or original stdout
-         */
-        if (prev_read != -1) {
-            dup2(prev_read, STDIN_FILENO);
-            close(prev_read);
-            prev_read = -1;
-        }
-        if (pipefd[1] != -1) {
-            dup2(pipefd[1], STDOUT_FILENO);
-            close(pipefd[1]);
-        }
+        in_fd  = (i == 0)               ? saved_stdin  : pipes[i - 1][0];
+        out_fd = (i == cmd_count - 1)   ? saved_stdout : pipes[i][1];
+
+        /* Bind this stage's stdin/stdout in the parent before vfork; the
+         * child inherits them. Restore the parent's terminal fds after
+         * vfork returns so subsequent stages (and the prompt) are sane. */
+        dup2(in_fd,  STDIN_FILENO);
+        dup2(out_fd, STDOUT_FILENO);
 
         child_pid = 0;
         pid = vfork();
         if (pid < 0) {
             perror("vfork");
-            if (pipefd[0] != -1) close(pipefd[0]);
-            break;
+            pids[i] = -1;
+            dup2(saved_stdin,  STDIN_FILENO);
+            dup2(saved_stdout, STDOUT_FILENO);
+            continue;
         }
         if (pid == 0) {
-            /* Child: only exec or _exit */
+            /* Child: exec the target. No fd cleanup needed in the child
+             * because Frosted close-on-exec closes everything except the
+             * 3 inherited standard fds. */
             execvp(resolved, commands[i]);
             _exit(127);
         }
-
         pids[i] = pid;
 
-        /* Wait for this child before proceeding to next stage */
-        while (child_pid != pid) {
-            sleep(60);
-        }
-
-        /* Restore parent stdout for next iteration or final restore */
+        dup2(saved_stdin,  STDIN_FILENO);
         dup2(saved_stdout, STDOUT_FILENO);
-        /* Restore parent stdin */
-        dup2(saved_stdin, STDIN_FILENO);
-
-        /* The read end of this pipe becomes stdin for next command */
-        prev_read = pipefd[0];
     }
 
-    if (prev_read != -1)
-        close(prev_read);
+    /* Parent must close every pipe fd so readers see EOF once upstream
+     * producers exit. Without this the last stage blocks forever waiting
+     * for data that will never arrive. */
+    for (i = 0; i < cmd_count - 1; i++) {
+        close(pipes[i][0]);
+        close(pipes[i][1]);
+    }
     close(saved_stdin);
     close(saved_stdout);
-    last_status = child_status;
+
+    /* Reap every stage. The handler's SIGCHLD-based child_pid is noisy
+     * across multiple concurrent children, so use waitpid directly. */
+    for (i = 0; i < cmd_count; i++) {
+        int status;
+        if (pids[i] < 0)
+            continue;
+        while (waitpid(pids[i], &status, 0) < 0) {
+            /* retry on interruption */
+        }
+        last_status = status;
     }
 
     if (WIFEXITED(last_status))
