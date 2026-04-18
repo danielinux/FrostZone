@@ -101,10 +101,15 @@ static int process_got_relocs(struct flat_hdr *hdr, uint8_t *base, uint8_t *got_
                               / sizeof(unsigned long);
     unsigned long idx;
     unsigned long lib_text_vma = 0;
+    unsigned long lib_vma_end = 0;
 
 #ifdef CONFIG_SHLIB
-    if ((long_be(hdr->flags) & FLAT_FLAG_SHLIB) != 0)
+    if ((long_be(hdr->flags) & FLAT_FLAG_SHLIB) != 0) {
         lib_text_vma = (unsigned long)text_start_dest;
+        /* Upper bound of the library's link-time VMA range, so we only
+         * normalise values that look like pointers into the library. */
+        lib_vma_end = lib_text_vma + bss_end;
+    }
 #endif
 
     if (has_shlib_imports)
@@ -117,6 +122,13 @@ static int process_got_relocs(struct flat_hdr *hdr, uint8_t *base, uint8_t *got_
             unsigned long addr;
             unsigned long val = *rp;
 #ifdef CONFIG_SHLIB
+            /* For shared libs linked at flash address: values are VMAs
+             * (e.g. 0x080600xx). Normalise to file-relative offsets BEFORE
+             * the shlib-import (lib_id) check, otherwise the 0x08 top byte
+             * of the VMA collides with the lib_id tag and legitimate intra-
+             * library pointers get skipped. */
+            if (lib_text_vma && val >= lib_text_vma && val < lib_vma_end)
+                val -= lib_text_vma;
             /* Check for shared library import (top byte is lib_id) */
             if ((val >> 24) & 0xFFu) {
                 /* Leave this GOT entry as-is for shlib_resolve_got() */
@@ -124,10 +136,6 @@ static int process_got_relocs(struct flat_hdr *hdr, uint8_t *base, uint8_t *got_
                     *has_shlib_imports = 1;
                 continue;
             }
-            /* For shared libs linked at flash address: values are VMAs;
-             * normalise to file-relative offsets. */
-            if (lib_text_vma && val >= lib_text_vma)
-                val -= lib_text_vma;
 #endif
             addr = RELOC_FAILED;
             if (val < data_start) {
@@ -168,12 +176,15 @@ int process_relocs(struct flat_hdr * hdr, unsigned long * base, unsigned long da
     unsigned long bss_end = long_be(hdr->bss_end) - sizeof(struct flat_hdr);
     unsigned long text_start_dest = ((unsigned long)base) + sizeof(struct flat_hdr); /* original RELOC is relative to text_start (.bss in ROM/Flash/source) */
     unsigned long lib_text_vma = 0;
+    unsigned long lib_vma_end = 0;
 
 #ifdef CONFIG_SHLIB
     /* Shared libraries are linked at a fixed flash address; normalise VMAs
      * in relocated words back to file-relative offsets. */
-    if ((long_be(hdr->flags) & FLAT_FLAG_SHLIB) != 0)
+    if ((long_be(hdr->flags) & FLAT_FLAG_SHLIB) != 0) {
         lib_text_vma = text_start_dest;
+        lib_vma_end = lib_text_vma + bss_end;
+    }
 #endif
     /*
      * Now run through the relocation entries.
@@ -213,8 +224,9 @@ int process_relocs(struct flat_hdr * hdr, unsigned long * base, unsigned long da
 
             {
                 unsigned long val = *fixup_addr;
-                /* Normalise VMAs to file-relative offsets for shared libs. */
-                if (lib_text_vma && val >= lib_text_vma)
+                /* Normalise VMAs to file-relative offsets for shared libs,
+                 * but only when val looks like a pointer into the library. */
+                if (lib_text_vma && val >= lib_text_vma && val < lib_vma_end)
                     val -= lib_text_vma;
                 /* Again 2 cases: reloc points to .text -- or to .data/.bss */
                 if (val < data_start) {

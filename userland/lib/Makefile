@@ -46,7 +46,10 @@ shlib-elf2flt.ld: $(ELF2FLT_LD)
 	    $< > $@
 
 # wolfSSL CFLAGS — include our HAL shim headers
+# Software ECC has large (unbounded-by-analysis) stack frames, suppress
+# the stack-usage=4096 error for wolfSSL sources only.
 WOLFSSL_CFLAGS := $(CFLAGS) \
+	-Wno-error=stack-usage= \
 	-DWOLFSSL_USER_SETTINGS \
 	-I. -Iwolfssl -Iwolfssl/wolfssl
 

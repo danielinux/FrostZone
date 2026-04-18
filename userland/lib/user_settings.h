@@ -9,18 +9,16 @@
 #define NO_WOLFSSL_MEMORY
 #define NO_ERROR_STRINGS
 
-/* ---- STM32H5 hardware crypto ---- */
+/* ---- STM32H5 hardware crypto ----
+ * Temporarily disabled: we are debugging userland/shlib path with pure
+ * software crypto. Re-enable (NO_STM32_HASH off, drop NO_STM32_CRYPTO,
+ * add WOLFSSL_STM32_PKA) once the userland apps are stable. */
 #define WOLFSSL_STM32H5
 #define WOLFSSL_STM32_CUBEMX
 #define STM32_HAL_V2
-/* HASH: use software SHA-256 — the STM32_HASH path does direct register
- * access which faults from unprivileged userland.  /dev/hash is available
- * for future wc_Stm32_Hash_* shim but software is fast enough on M33. */
-#define NO_STM32_HASH
-/* AES: hardware via HAL_CRYP_* (our shim routes through /dev/aes) */
-/* (do NOT define NO_STM32_CRYPTO — let settings.h enable STM32_CRYPTO) */
-/* PKA: hardware ECC via HAL_PKA_* */
-#define WOLFSSL_STM32_PKA
+#define NO_STM32_HASH       /* software SHA-256 */
+#define NO_STM32_CRYPTO     /* software AES (disable HAL_CRYP shim) */
+/* #define WOLFSSL_STM32_PKA  -- disabled, software ECC */
 
 /* ---- Algorithm selection ---- */
 #define WOLFSSL_SHA256
@@ -69,6 +67,12 @@
 #define WOLFSSL_SP_MATH
 #define WOLFSSL_SP_SMALL
 #define SP_WORD_SIZE 32
+
+/* Reduce stack frames across wolfSSL (needed because the kernel only
+ * grants 8 KB per task, and SW ECC paths otherwise push past that). */
+#define WOLFSSL_SMALL_STACK
+#define WOLFSSL_SMALL_STACK_CACHE
+#define ECC_MIN_KEY_SZ 256
 
 /* RNG — use Frosted /dev/random via our wc_GenerateSeed() */
 #define NO_STM32_RNG        /* don't use ST HAL_RNG_* — we have /dev/random */
