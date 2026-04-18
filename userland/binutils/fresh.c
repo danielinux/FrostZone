@@ -990,7 +990,7 @@ int commandHandler(char *args[], int argc)
 
     // 'exit' command quits the shell
     if (strcmp(args[0], "exit") == 0)
-        exit(0);
+        _exit(0);
     // 'pwd' command prints the current directory
     else if (strcmp(args[0], "pwd") == 0) {
         if (args[j] != NULL) {
@@ -1145,15 +1145,25 @@ int commandHandler(char *args[], int argc)
             } else if (strcmp(args[i], "<") == 0) {
                 int sv_in, sv_out, sv_err, rv;
                 aux = i + 1;
-                if (args[aux] == NULL || args[aux + 1] == NULL ||
-                    args[aux + 2] == NULL) {
+                if (args[aux] == NULL) {
                     printf("Not enough input arguments\r\n");
                     return -1;
+                }
+                if (args[aux + 1] == NULL) {
+                    if (redir_setup(args[i + 1], NULL, 1, &sv_in, &sv_out, &sv_err) < 0)
+                        return -1;
+                    rv = launchProg(args_aux, 0);
+                    redir_restore(sv_in, sv_out, sv_err);
+                    return rv;
                 }
                 if (strcmp(args[aux + 1], ">") != 0) {
                     printf("Usage: Expected '>' and found %s\r\n",
                            args[aux + 1]);
                     return -2;
+                }
+                if (args[aux + 2] == NULL) {
+                    printf("Not enough input arguments\r\n");
+                    return -1;
                 }
                 if (redir_setup(args[i + 1], args[i + 3], 1, &sv_in, &sv_out, &sv_err) < 0)
                     return -1;
@@ -1559,7 +1569,9 @@ int icebox_fresh(int argc, char *argv[])
     if (argc > idx) {
         shell_params_assign(&argv[idx], argc - idx);
         ret = fresh_exec(argv[idx], &argv[idx]);
-        return ret;
+        fflush(stdout);
+        fflush(stderr);
+        _exit(ret);
     }
 
     welcomeScreen();
