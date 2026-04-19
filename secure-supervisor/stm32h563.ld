@@ -4,8 +4,9 @@
  *  0x0C000000 - 0x0C007FFF=  32KB - Secure supervisor
  *  0x0C008000 - 0x0C00FFFF=  32KB - Non-secure callables
  *  0x0C010000 - 0x0C03FFFF=  128KB - Frosted non-secure kernel
- *  0x0C040000 - 0x0C1EFFFF=  Userspace
- *  0x0C1F0000 - 0x0C1FFFFF=  FlashFS (/var) partition
+ *  0x0C040000 - <dynamic> =  Userspace (xipfs)
+ *  <dynamic>  - 0x0C1FBFFF=  FlashFS (/var) partition (dynamically sized)
+ *  0x0C1FC000 - 0x0C1FFFFF=  Secrets flashfs (16KB, secure-only)
  *
  *
  *  Linker script for STM32H563 target used by the secure supervisor.

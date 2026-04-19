@@ -42,6 +42,11 @@
 
 #include "random.h"
 
+/* Defined in flash-write.c */
+void stm32_flash_partition_init(void);
+/* Defined in secrets.c */
+void secrets_flashfs_init(void);
+
 static void sau_init(void)
 {
 
@@ -126,6 +131,8 @@ void main(void) {
 #if defined(TARGET_STM32H563)
     stm32h5_gtzc_setup();
     stm32h5_configure_gpio_security();
+    stm32_flash_partition_init();
+    secrets_flashfs_init();
 #endif
 
     /* SAU */

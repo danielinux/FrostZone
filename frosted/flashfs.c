@@ -33,16 +33,26 @@ static mutex_t *flashfs_lock;
 #endif
 
 #define F_PREV_PAGE 0xFFFE
-#define PART_SIZE 0x10000
-#define PART_MAX_PAGES (PART_SIZE / FLASH_PAGE_SIZE)
 
 #if defined(TARGET_rp2350)
-#define PART_MAP_BASE (0x101F0000U)
+#define PART_MAP_BASE_DEFAULT (0x101F0000U)
+#define PART_SIZE_DEFAULT     (0x10000U)
+#define SECRETS_BASE          0  /* no secrets partition on rp2350 */
 #elif defined(TARGET_stm32h563)
-#define PART_MAP_BASE (0x081F0000U)
+#define PART_MAP_BASE_DEFAULT (0x081F0000U)
+#define PART_SIZE_DEFAULT     (0x10000U)
+#define SECRETS_BASE          (0x081FC000U)
+#define FLASH_SECTOR_SIZE     (0x2000U)
 #else
 #error "FlashFS partition is not defined for this target"
 #endif
+
+#include "sys/fs/xipfs.h"
+
+static uint32_t part_map_base;
+static uint32_t part_size;
+#define PART_MAX_PAGES (part_size / FLASH_PAGE_SIZE)
+
 #define MAX_FNAME 128
 
 int secure_flash_write_page(uint32_t off, uint8_t *page);
@@ -55,7 +65,7 @@ static struct jedec_spi_flash *registered_jedec;
 /**
  * Return the effective page count for a flashfs instance.
  * JEDEC-backed mounts use the probed device geometry;
- * internal-flash mounts use the compile-time partition size.
+ * internal-flash mounts use the runtime-computed partition size.
  */
 #ifdef CONFIG_JEDEC_SPI_FLASH
 static inline uint32_t flashfs_effective_pages(const struct jedec_spi_flash *jedec)
@@ -90,7 +100,7 @@ struct flashfs_fnode {
 POOL_DEFINE(flashfs_fnode_pool, struct flashfs_fnode, CONFIG_MAX_FLASHFS_FNODES);
 
 /* Bitmap in last flash page. Inverted logic (starts at 0xFFFFFFFF when formatted */
-static uint8_t *fs_bmp = (uint8_t *)PART_MAP_BASE + PART_SIZE - FLASH_PAGE_SIZE;
+static uint8_t *fs_bmp;
 
 #ifdef CONFIG_JEDEC_SPI_FLASH
 static int flashfs_read_jedec_page(const struct jedec_spi_flash *jedec, uint16_t page,
@@ -146,7 +156,7 @@ static int flashfs_read_page(const struct jedec_spi_flash *jedec, uint16_t page,
     if (jedec)
         return flashfs_read_jedec_page(jedec, page, buf);
 #endif
-    memcpy(buf, (void *)PART_MAP_BASE + page * FLASH_PAGE_SIZE, FLASH_PAGE_SIZE);
+    memcpy(buf, (void *)(uintptr_t)(part_map_base + page * FLASH_PAGE_SIZE), FLASH_PAGE_SIZE);
     return 0;
 }
 
@@ -238,7 +248,7 @@ static int get_page_count_on_flash(const char *filename, uint16_t sz)
 
 struct flashfs_file_hdr *get_page_header(uint16_t page)
 {
-    struct flashfs_file_hdr *hdr = (struct flashfs_file_hdr *)(PART_MAP_BASE +
+    struct flashfs_file_hdr *hdr = (struct flashfs_file_hdr *)(part_map_base +
             page * FLASH_PAGE_SIZE);
     if ((hdr->fname_len == 0xFFFF) || (hdr->fname_len == 0x0000)
             || (hdr->fname_len == F_PREV_PAGE))
@@ -248,7 +258,7 @@ struct flashfs_file_hdr *get_page_header(uint16_t page)
 
 char *get_page_filename(uint16_t page)
 {
-    struct flashfs_file_hdr *hdr = (struct flashfs_file_hdr *)(PART_MAP_BASE +
+    struct flashfs_file_hdr *hdr = (struct flashfs_file_hdr *)(part_map_base +
             page * FLASH_PAGE_SIZE);
     if ((hdr->fname_len == 0xFFFF) || (hdr->fname_len == 0x0000)
             || (hdr->fname_len == F_PREV_PAGE))
@@ -260,7 +270,7 @@ char *get_page_filename(uint16_t page)
     /* Force null-termination for filename in RAM copy */
     char *fname = (char *)hdr + sizeof(struct flashfs_file_hdr);
     fname[MAX_FNAME] = '\0';
-    if (*((char *)PART_MAP_BASE + page * FLASH_PAGE_SIZE +
+    if (*((char *)part_map_base + page * FLASH_PAGE_SIZE +
             sizeof(struct flashfs_file_hdr) + hdr->fname_len) != 0) {
         fs_bmp_clear(NULL, page);
         return NULL;
@@ -270,7 +280,7 @@ char *get_page_filename(uint16_t page)
 
 int get_content_size(uint16_t page)
 {
-    struct flashfs_file_hdr *hdr = (struct flashfs_file_hdr *)(PART_MAP_BASE +
+    struct flashfs_file_hdr *hdr = (struct flashfs_file_hdr *)(part_map_base +
             page * FLASH_PAGE_SIZE);
     uint32_t size = 0;
     if ((hdr->fname_len == 0xFFFF) || (hdr->fname_len == 0x0000)
@@ -282,7 +292,7 @@ int get_content_size(uint16_t page)
 
 int get_size_in_page(uint16_t page)
 {
-    struct flashfs_file_hdr *hdr = (struct flashfs_file_hdr *)(PART_MAP_BASE +
+    struct flashfs_file_hdr *hdr = (struct flashfs_file_hdr *)(part_map_base +
             page * FLASH_PAGE_SIZE);
     uint32_t size = 0;
     int total_fsize = get_content_size(page);
@@ -300,14 +310,14 @@ int get_size_in_page(uint16_t page)
 
 uint8_t *get_page_content(uint16_t page)
 {
-    struct flashfs_file_hdr *hdr = (struct flashfs_file_hdr *)(PART_MAP_BASE +
+    struct flashfs_file_hdr *hdr = (struct flashfs_file_hdr *)(part_map_base +
             page * FLASH_PAGE_SIZE);
     if ((hdr->fname_len == 0xFFFF) || (hdr->fname_len == 0x0000)
             || (hdr->fname_len == F_PREV_PAGE))
-        return (uint8_t *)PART_MAP_BASE + page * FLASH_PAGE_SIZE +
+        return (uint8_t *)part_map_base + page * FLASH_PAGE_SIZE +
                 sizeof(struct flashfs_file_hdr);
     else
-        return (uint8_t *)PART_MAP_BASE + page * FLASH_PAGE_SIZE +
+        return (uint8_t *)part_map_base + page * FLASH_PAGE_SIZE +
                 sizeof(struct flashfs_file_hdr) + hdr->fname_len;
 } 
 
@@ -911,6 +921,24 @@ void flashfs_init(void)
     mod_flashfs.family = FAMILY_FILE;
     strcpy(mod_flashfs.name,"flashfs");
     flashfs_lock = mutex_init();
+
+#if defined(TARGET_stm32h563) && SECRETS_BASE
+    {
+        const struct xipfs_fat *fat = (const struct xipfs_fat *)(uintptr_t)CONFIG_APPS_ORIGIN;
+        if (fat->fs_magic == XIPFS_MAGIC && fat->fs_size > 0) {
+            uint32_t xipfs_end = CONFIG_APPS_ORIGIN + fat->fs_size;
+            part_map_base = (xipfs_end + FLASH_SECTOR_SIZE - 1) & ~(FLASH_SECTOR_SIZE - 1);
+            part_size = SECRETS_BASE - part_map_base;
+        } else {
+            part_map_base = PART_MAP_BASE_DEFAULT;
+            part_size = PART_SIZE_DEFAULT;
+        }
+    }
+#else
+    part_map_base = PART_MAP_BASE_DEFAULT;
+    part_size = PART_SIZE_DEFAULT;
+#endif
+    fs_bmp = (uint8_t *)(uintptr_t)(part_map_base + part_size - FLASH_PAGE_SIZE);
 
     mod_flashfs.mount = flashfs_mount;
     mod_flashfs.mount_info = flashfs_mount_info;

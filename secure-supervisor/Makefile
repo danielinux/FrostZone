@@ -60,7 +60,7 @@ endif
 LDFLAGS += -T$(LINKER_SCRIPT)
 CFLAGS += $(TARGET_INCLUDES)
 
-SRCS = ivt.c startup_secure.c secure_main.c sg.c mempool.c task.c random.c flash-write.c \
+SRCS = ivt.c startup_secure.c secure_main.c sg.c mempool.c task.c random.c flash-write.c secrets.c \
 	$(TARGET_SRCS)
 
 CFLAGS += -DCONFIG_ETH=$(CONFIG_ETH)

@@ -79,10 +79,17 @@ int secure_flash_write_page(uint32_t off, uint8_t *page)
 #elif defined(TARGET_STM32H563)
 
 #include "stm32h563.h"
+#include "../frosted-headers/include/sys/fs/xipfs.h"
 
-#define STM32_PARTITION_SIZE       (0x00010000U)
-#define STM32_PARTITION_NS_BASE    0x081F0000U
-#define STM32_PARTITION_SEC_BASE   (STM32_PARTITION_NS_BASE + FLASH_ALIAS_OFFSET)
+#define APPS_ORIGIN                0x08040000U
+#define SECRETS_BASE               0x081FC000U
+
+#define STM32_PARTITION_SIZE_DEFAULT  (0x00010000U)
+#define STM32_PARTITION_NS_BASE_DEFAULT 0x081F0000U
+
+static uint32_t stm32_partition_ns_base;
+static uint32_t stm32_partition_size;
+#define STM32_PARTITION_SEC_BASE   (stm32_partition_ns_base + FLASH_ALIAS_OFFSET)
 #define STM32_FLASH_SECTOR_SIZE    FLASH_PAGE_SIZE_BYTES
 #define STM32_FLASH_WRITE_GRANULE  8U
 #define NS_RAM_BASE                0x20000000U
@@ -124,7 +131,7 @@ static uint8_t sector_cache[STM32_FLASH_SECTOR_SIZE];
 #define SCB_CSSELR                 (*(volatile uint32_t *)0xE000ED84U)
 #define SCB_DCCIMVAC               (*(volatile uint32_t *)0xE000EF70U)
 
-static void stm32_flash_set_waitstates(unsigned int waitstates)
+void stm32_flash_set_waitstates(unsigned int waitstates)
 {
     uint32_t reg = FLASH_ACR;
     uint32_t wrhighfreq = 1U;
@@ -195,7 +202,22 @@ static void stm32_set_region_security(uintptr_t sec_addr, size_t len, int secure
 
 static inline uintptr_t stm32_partition_end(void)
 {
-    return STM32_PARTITION_SEC_BASE + STM32_PARTITION_SIZE;
+    return STM32_PARTITION_SEC_BASE + stm32_partition_size;
+}
+
+/** Compute /var partition base and size from the xipfs FAT header. */
+void stm32_flash_partition_init(void)
+{
+    const struct xipfs_fat *fat = (const struct xipfs_fat *)APPS_ORIGIN;
+    if (fat->fs_magic == XIPFS_MAGIC && fat->fs_size > 0) {
+        uint32_t xipfs_end = APPS_ORIGIN + fat->fs_size;
+        stm32_partition_ns_base = (xipfs_end + STM32_FLASH_SECTOR_SIZE - 1)
+                                  & ~(STM32_FLASH_SECTOR_SIZE - 1);
+        stm32_partition_size = SECRETS_BASE - stm32_partition_ns_base;
+    } else {
+        stm32_partition_ns_base = STM32_PARTITION_NS_BASE_DEFAULT;
+        stm32_partition_size = STM32_PARTITION_SIZE_DEFAULT;
+    }
 }
 
 static inline uint32_t stm32_sec_to_ns(uintptr_t addr)
@@ -203,7 +225,7 @@ static inline uint32_t stm32_sec_to_ns(uintptr_t addr)
     return (uint32_t)(addr - FLASH_ALIAS_OFFSET);
 }
 
-static int stm32_flash_unlock(void)
+int stm32_flash_unlock(void)
 {
     if ((FLASH_CR & FLASH_CR_LOCK) == 0U)
         return 0;
@@ -213,7 +235,7 @@ static int stm32_flash_unlock(void)
     return (FLASH_CR & FLASH_CR_LOCK) ? -1 : 0;
 }
 
-static void stm32_flash_lock(void)
+void stm32_flash_lock(void)
 {
     FLASH_CR |= FLASH_CR_LOCK;
 }
@@ -252,7 +274,7 @@ static int stm32_verify_range(const uint8_t *dst, const uint8_t *src, size_t len
     return 0;
 }
 
-static int stm32_flash_program_range(uintptr_t dst, const uint8_t *src, size_t len)
+int stm32_flash_program_range(uintptr_t dst, const uint8_t *src, size_t len)
 {
     size_t offset = 0;
     uint32_t ns_addr = stm32_sec_to_ns(dst);
@@ -289,7 +311,7 @@ static int stm32_flash_program_range(uintptr_t dst, const uint8_t *src, size_t l
     return 0;
 }
 
-static int stm32_flash_erase_sector(uintptr_t sector_addr)
+int stm32_flash_erase_sector(uintptr_t sector_addr)
 {
     uint32_t ns_addr = stm32_sec_to_ns(sector_addr);
     uint32_t bank_base = FLASH_NS_BASE;

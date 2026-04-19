@@ -229,7 +229,7 @@
 
 /* Non-secure aliases (0x08... / 0x200...) */
 #define SAU_FLASH_NS_START       0x08010000U
-#define SAU_FLASH_NS_END         0x081FFFFFU
+#define SAU_FLASH_NS_END         0x081FBFFFU  /* exclude 16KB secrets at 0x081FC000 */
 #define SAU_RAM_NS_START         0x20010000U
 #define SAU_RAM_NS_END           0x2009FFFFU
 #define SAU_PERIPH_START         0x40000000U
@@ -332,7 +332,9 @@ static inline void stm32h5_gtzc_setup(void)
         SET_GTZC1_MPCBBx_PRIVCFGR_VCTR(3, i, 0x00000000U);
     }
 
-    /* Program flash block security: lower 64 KiB secure, rest non-secure. */
+    /* Program flash block security: lower 64 KiB secure, rest non-secure.
+     * Last two 8KB sectors of bank 2 (0x081FC000-0x081FFFFF) are marked
+     * secure for the secrets flashfs partition. */
     FLASH_SECKEYR = FLASH_KEY1;
     FLASH_SECKEYR = FLASH_KEY2;
     //FLASH_SECBB1R1 = 0x000000FFU;
@@ -343,7 +345,7 @@ static inline void stm32h5_gtzc_setup(void)
     FLASH_SECBB2R1 = 0x00000000U;
     FLASH_SECBB2R2 = 0x00000000U;
     FLASH_SECBB2R3 = 0x00000000U;
-    FLASH_SECBB2R4 = 0x00000000U;
+    FLASH_SECBB2R4 = 0xC0000000U;  /* bits 30-31: secrets partition sectors */
 
     /* Privileged flash from offset 0x0000 0000 to 0x0002 FFFF */
     FLASH_PRIVBB1R1 = 0x00000000U;
