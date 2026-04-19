@@ -50,7 +50,8 @@ all: icebox-refresh
 
 .PHONY: icebox-refresh
 icebox-refresh: $(MOD)
-	$(MAKE) -C ../binutils ICEBOX_EXTRA_OBJS="$(ICEBOX_NET_OBJS)" icebox-refresh
+	rm -f ../binutils/icebox.o
+	$(MAKE) -C ../binutils ICEBOX_EXTRA_OBJS="$(ICEBOX_NET_OBJS)" ICEBOX_EXTRA_CFLAGS="$(CFLAGS-ICEBOX-m)" icebox-refresh
 	@mkdir -p ../lnk
 	@for app in $(ICEBOX_LINKS); do ln -sf ../out/icebox ../lnk/$$app; done
 endif

@@ -198,14 +198,15 @@ MOD:=$(patsubst %,ice/%.o,$(APPS-m))
 LNK:=$(patsubst %,../lnk/%,$(APPS-m))
 ICE-$(ICEBOX)=../out/icebox
 ICEBOX_EXTRA_OBJS?=
+ICEBOX_EXTRA_CFLAGS?=
 NETUTILS_ICE_MODS := $(wildcard ../netutils/ice/*.o)
 ALL_ICEBOX_MODS := $(MOD) $(ICEBOX_EXTRA_OBJS) $(NETUTILS_ICE_MODS)
 all: $(BIN) $(MOD) $(LNK) $(ICE-y) $(LNK)
 
 ../out/icebox: icebox.o $(ALL_ICEBOX_MODS)
-	arm-frosted-eabi-gcc -o $@ $^ $(CFLAGS) $(CFLAGS-ICEBOX-m) $(LDFLAGS)
+	arm-frosted-eabi-gcc -o $@ $^ $(CFLAGS) $(CFLAGS-ICEBOX-m) $(ICEBOX_EXTRA_CFLAGS) $(LDFLAGS)
 icebox.o: icebox.c
-	arm-frosted-eabi-gcc -c -o $@ $^ $(CFLAGS) $(CFLAGS-ICEBOX-m)
+	arm-frosted-eabi-gcc -c -o $@ $^ $(CFLAGS) $(CFLAGS-ICEBOX-m) $(ICEBOX_EXTRA_CFLAGS)
 
 .PHONY: icebox-refresh
 icebox-refresh: ../out/icebox
