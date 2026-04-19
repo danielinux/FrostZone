@@ -77,6 +77,7 @@ extern uint32_t SystemCoreClock;
 #define SPI_IFCR_SUSPC     (1U << 11)
 
 #define SPI3_NS_BASE       0x40003C00UL
+#define SPI_WAIT_RETRIES   1000000U
 
 #define MAX_SPIS 2
 
@@ -228,11 +229,18 @@ static void stm32_spi_program_hw(struct dev_spi *spi)
 
 static void stm32_spi_begin_transfer(uint32_t base, uint32_t count)
 {
+    uint32_t cr1 = SPI_CR1(base);
+
+    stm32_spi_clear_flags(base);
+    SPI_CR2(base) = (SPI_CR2(base) & ~SPI_CR2_TSIZE_MASK) |
+        ((count << SPI_CR2_TSIZE_SHIFT) & SPI_CR2_TSIZE_MASK);
+    SPI_CR1(base) = cr1 | SPI_CR1_CSTART;
+
     /* Always capture debug snapshots so GDB can see what was attempted. */
     spi3_dbg.begin_count++;
     spi3_dbg.last_base = base;
     spi3_dbg.last_count = count;
-    spi3_dbg.last_tsize = 0U;
+    spi3_dbg.last_tsize = SPI_CR2(base) & SPI_CR2_TSIZE_MASK;
     spi3_dbg.cr1 = SPI_CR1(base);
     spi3_dbg.cr2 = SPI_CR2(base);
     spi3_dbg.cfg1 = SPI_CFG1(base);
@@ -242,9 +250,13 @@ static void stm32_spi_begin_transfer(uint32_t base, uint32_t count)
 
 static void stm32_spi_wait_eot(uint32_t base)
 {
+    uint32_t retries = SPI_WAIT_RETRIES;
+
     /* In continuous-start mode, wait for the last word to leave the shifter. */
-    while (!(SPI_SR(base) & SPI_SR_TXC))
+    while (!(SPI_SR(base) & SPI_SR_TXC) && retries--)
         ;
+    if (retries == 0U)
+        return;
     stm32_spi_clear_flags(base);
     (void)SPI_SR(base);
 }
@@ -316,12 +328,23 @@ int devspi_xfer(struct spi_slave *sl, const char *obuf, char *ibuf, unsigned int
         stm32_spi_begin_transfer(spi->base, chunk);
         for (i = 0; i < chunk; i++) {
             uint8_t value = tx ? tx[i] : 0xFFU;
-            while (!(SPI_SR(spi->base) & SPI_SR_TXP))
+            uint32_t tx_retries = SPI_WAIT_RETRIES;
+            uint32_t rx_retries = SPI_WAIT_RETRIES;
+
+            while (!(SPI_SR(spi->base) & SPI_SR_TXP) && tx_retries--)
                 ;
+            if (tx_retries == 0U) {
+                mutex_unlock(spi->mutex);
+                return -ETIMEDOUT;
+            }
             SPI_TXDR(spi->base) = value;
             /* Always clock and consume RX; store if caller provided a buffer. */
-            while (!(SPI_SR(spi->base) & SPI_SR_RXP))
+            while (!(SPI_SR(spi->base) & SPI_SR_RXP) && rx_retries--)
                 ;
+            if (rx_retries == 0U) {
+                mutex_unlock(spi->mutex);
+                return -ETIMEDOUT;
+            }
             if (rx)
                 rx[i] = (uint8_t)SPI_RXDR(spi->base);
             else

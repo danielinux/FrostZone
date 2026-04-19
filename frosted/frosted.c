@@ -38,6 +38,9 @@
 #include "eth.h"
 #include "exti.h"
 #include "pty.h"
+#if defined(CONFIG_JEDEC_SPI_FLASH)
+#include "jedec_spi_flash.h"
+#endif
 #include "lowpower.h"
 #include "tty_console.h"
 #include "systick.h"
@@ -249,6 +252,9 @@ int vfs_mount(char *source, char *target, char *module, uint32_t flags, void *ar
 int frosted_init(void)
 {
     int xip_mounted;
+#if defined(CONFIG_JEDEC_SPI_FLASH)
+    static struct jedec_spi_flash ext_flash;
+#endif
 
     nvic_enable_memfault();
     nvic_enable_busfault();
@@ -307,12 +313,49 @@ int frosted_init(void)
     vfs_mount(NULL, "/var", "flashfs", 0, NULL);
 #endif
 
+#if defined(CONFIG_JEDEC_SPI_FLASH)
+    /*
+     * Probe for external JEDEC SPI flash.
+     * The SPI bus, CS pin, GPIO bank, and baud are selected by Kconfig.
+     * Only one SPI bus can be configured for JEDEC flash per build.
+     */
+    #if defined(CONFIG_SPI1_JEDEC_FLASH)
+    #define JEDEC_SPI_BUS     0
+    #define JEDEC_CS_PIN      CONFIG_SPI1_JEDEC_FLASH_CS
+    #define JEDEC_GPIO_BANK   CONFIG_SPI1_JEDEC_FLASH_GPIO_BANK
+    #define JEDEC_BAUD        CONFIG_SPI1_JEDEC_FLASH_BAUD
+    #elif defined(CONFIG_SPI2_JEDEC_FLASH)
+    #define JEDEC_SPI_BUS     1
+    #define JEDEC_CS_PIN      CONFIG_SPI2_JEDEC_FLASH_CS
+    #define JEDEC_GPIO_BANK   CONFIG_SPI2_JEDEC_FLASH_GPIO_BANK
+    #define JEDEC_BAUD        CONFIG_SPI2_JEDEC_FLASH_BAUD
+    #elif defined(CONFIG_SPI3_JEDEC_FLASH)
+    #define JEDEC_SPI_BUS     2
+    #define JEDEC_CS_PIN      CONFIG_SPI3_JEDEC_FLASH_CS
+    #define JEDEC_GPIO_BANK   CONFIG_SPI3_JEDEC_FLASH_GPIO_BANK
+    #define JEDEC_BAUD        CONFIG_SPI3_JEDEC_FLASH_BAUD
+    #endif
+
+    memset(&ext_flash, 0, sizeof(ext_flash));
+    {
+        int probe_ret = jedec_spi_flash_probe(&ext_flash, JEDEC_SPI_BUS, JEDEC_CS_PIN,
+                JEDEC_GPIO_BANK, JEDEC_BAUD);
+        if (probe_ret == 0 && ext_flash.probed) {
+            ext_flash.dev_path = "/dev/spiflash0";
+            flashfs_register_jedec(&ext_flash);
+            jedec_spi_flash_register_device(&ext_flash, ext_flash.dev_path);
+            kprintf("jedec: userspace mount available via mount /dev/spiflash0 /mnt/flash flashfs\n");
+        } else if (probe_ret != 0) {
+            kprintf("jedec: probe failed on SPI%d (%d)\n", JEDEC_SPI_BUS + 1, probe_ret);
+        }
+    }
+#endif
+
     klog_init();
 
 #if CONFIG_TCPIP
     socket_in_init();
 #endif
-
 
 #ifdef UNIX
     socket_un_init();

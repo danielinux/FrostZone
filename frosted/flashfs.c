@@ -47,6 +47,11 @@ static mutex_t *flashfs_lock;
 
 int secure_flash_write_page(uint32_t off, uint8_t *page);
 
+#ifdef CONFIG_JEDEC_SPI_FLASH
+#include "jedec_spi_flash.h"
+static struct jedec_spi_flash *registered_jedec;
+#endif
+
 struct __attribute__((packed)) flashfs_file_hdr {
     uint16_t fname_len;
     uint16_t fsize;
@@ -57,6 +62,9 @@ struct __attribute__((packed)) flashfs_file_hdr {
 struct flashfs_fnode {
     struct fnode *fno;
     uint32_t startpage;
+#ifdef CONFIG_JEDEC_SPI_FLASH
+    const struct jedec_spi_flash *jedec;
+#endif
 };
 
 POOL_DEFINE(flashfs_fnode_pool, struct flashfs_fnode, CONFIG_MAX_FLASHFS_FNODES);
@@ -64,35 +72,109 @@ POOL_DEFINE(flashfs_fnode_pool, struct flashfs_fnode, CONFIG_MAX_FLASHFS_FNODES)
 /* Bitmap in last flash page. Inverted logic (starts at 0xFFFFFFFF when formatted */
 static uint8_t *fs_bmp = (uint8_t *)PART_MAP_BASE + PART_SIZE - FLASH_PAGE_SIZE;
 
-static int fs_bmp_clear(uint32_t page)
+#ifdef CONFIG_JEDEC_SPI_FLASH
+static int flashfs_read_jedec_page(const struct jedec_spi_flash *jedec, uint16_t page,
+        uint8_t *buf)
+{
+    int ret;
+
+    if (!jedec || !buf)
+        return -EINVAL;
+    ret = jedec_spi_flash_read(jedec, (uint32_t)page * FLASH_PAGE_SIZE,
+            buf, FLASH_PAGE_SIZE);
+    if (ret < 0)
+        kprintf("flashfs: JEDEC read page %u failed (%d)\n", page, ret);
+    return ret;
+}
+
+static int flashfs_write_jedec_page(const struct jedec_spi_flash *jedec, uint16_t page,
+        const uint8_t *buf)
+{
+    if (!jedec || !buf)
+        return -EINVAL;
+    return jedec_spi_flash_write_page(jedec, (uint32_t)page * FLASH_PAGE_SIZE,
+            buf, FLASH_PAGE_SIZE);
+}
+
+static const struct jedec_spi_flash *flashfs_lookup_jedec_source(const char *source)
+{
+    struct fnode *src_fno;
+
+    if (!registered_jedec || !registered_jedec->probed || !source)
+        goto from_devnode;
+    if (registered_jedec->dev_path && strcmp(source, registered_jedec->dev_path) == 0)
+        return registered_jedec;
+    if (strcmp(source, "/dev/spiflash0") == 0)
+        return registered_jedec;
+
+from_devnode:
+    if (!source)
+        return NULL;
+    src_fno = fno_search(source);
+    if (!src_fno || !src_fno->owner || !src_fno->priv)
+        return NULL;
+    if (strcmp(src_fno->owner->name, "jedecflash") != 0)
+        return NULL;
+    return (const struct jedec_spi_flash *)src_fno->priv;
+}
+#endif
+
+static int flashfs_read_page(const struct jedec_spi_flash *jedec, uint16_t page,
+        uint8_t *buf)
+{
+#ifdef CONFIG_JEDEC_SPI_FLASH
+    if (jedec)
+        return flashfs_read_jedec_page(jedec, page, buf);
+#endif
+    memcpy(buf, (void *)PART_MAP_BASE + page * FLASH_PAGE_SIZE, FLASH_PAGE_SIZE);
+    return 0;
+}
+
+static int flashfs_write_page(const struct jedec_spi_flash *jedec, uint16_t page,
+        const uint8_t *buf)
+{
+#ifdef CONFIG_JEDEC_SPI_FLASH
+    if (jedec)
+        return flashfs_write_jedec_page(jedec, page, buf);
+#endif
+    if (secure_flash_write_page(page * FLASH_PAGE_SIZE, (uint8_t *)buf) != 0)
+        return -EIO;
+    return 0;
+}
+
+static int fs_bmp_clear(const struct jedec_spi_flash *jedec, uint32_t page)
 {
     static uint8_t cache_bmp[FLASH_PAGE_SIZE];
 
-    memcpy(cache_bmp, fs_bmp, FLASH_PAGE_SIZE); 
+    if (flashfs_read_page(jedec, PART_MAX_PAGES - 1, cache_bmp) < 0)
+        return -EIO;
     cache_bmp[page / 8] |= 1 << (page & 7);
-    if (secure_flash_write_page((PART_MAX_PAGES - 1) * FLASH_PAGE_SIZE,
-            cache_bmp) != 0)
+    if (flashfs_write_page(jedec, PART_MAX_PAGES - 1, cache_bmp) != 0)
         return -EIO;
     return 0;
 }
 
-static int fs_bmp_set(uint32_t page)
+static int fs_bmp_set(const struct jedec_spi_flash *jedec, uint32_t page)
 {
     static uint8_t cache_bmp[FLASH_PAGE_SIZE];
-    memcpy(cache_bmp, fs_bmp, FLASH_PAGE_SIZE); 
+    if (flashfs_read_page(jedec, PART_MAX_PAGES - 1, cache_bmp) < 0)
+        return -EIO;
     cache_bmp[page / 8] &= ~(1 << (page & 7));
-    if (secure_flash_write_page((PART_MAX_PAGES - 1) * FLASH_PAGE_SIZE,
-            cache_bmp) != 0)
+    if (flashfs_write_page(jedec, PART_MAX_PAGES - 1, cache_bmp) != 0)
         return -EIO;
     return 0;
 }
 
-static int fs_bmp_test(uint32_t page)
+static int fs_bmp_test(const struct jedec_spi_flash *jedec, uint32_t page)
 {
-    return !(fs_bmp[page / 8] & (1 << (page & 7)));
+    uint8_t cache_bmp[FLASH_PAGE_SIZE];
+
+    if (flashfs_read_page(jedec, PART_MAX_PAGES - 1, cache_bmp) < 0)
+        return 0;
+    return !(cache_bmp[page / 8] & (1 << (page & 7)));
 }
 
-static int fs_bmp_find_free(int pages)
+static int fs_bmp_find_free(const struct jedec_spi_flash *jedec, int pages)
 {
     int i;
     int sz = 0;
@@ -100,7 +182,7 @@ static int fs_bmp_find_free(int pages)
     if (pages <= 0)
         return -1;
     for (i = 0; i < PART_MAX_PAGES; i++) {
-        if (!fs_bmp_test(i)){
+        if (!fs_bmp_test(jedec, i)){
             if (sz++ == 0)
                 first = i;
             if (sz == pages)
@@ -149,7 +231,7 @@ char *get_page_filename(uint16_t page)
             || (hdr->fname_len == F_PREV_PAGE))
         return NULL;
     if (hdr->fname_len > MAX_FNAME) {
-        fs_bmp_clear(page);
+        fs_bmp_clear(NULL, page);
         return NULL;
     }
     /* Force null-termination for filename in RAM copy */
@@ -157,7 +239,7 @@ char *get_page_filename(uint16_t page)
     fname[MAX_FNAME] = '\0';
     if (*((char *)PART_MAP_BASE + page * FLASH_PAGE_SIZE +
             sizeof(struct flashfs_file_hdr) + hdr->fname_len) != 0) {
-        fs_bmp_clear(page);
+        fs_bmp_clear(NULL, page);
         return NULL;
     }
     return (char *)hdr + sizeof(struct flashfs_file_hdr);
@@ -216,14 +298,15 @@ static int flash_commit_file_info(struct fnode *fno)
     if (!mfno)
         return -ENOENT;
 
-    memcpy(page_cache, (void *)PART_MAP_BASE + mfno->startpage * FLASH_PAGE_SIZE,
-            FLASH_PAGE_SIZE);
+    if (flashfs_read_page(mfno->jedec, mfno->startpage, page_cache) < 0)
+        return -EIO;
 
     hdr = (struct flashfs_file_hdr *)page_cache;
     hdr->fsize = fno->size;
     hdr->fname_len = strlen(fno->fname);
-    strncpy(page_cache + sizeof(struct flashfs_file_hdr), fno->fname, 128);
-    if (secure_flash_write_page(mfno->startpage * FLASH_PAGE_SIZE, page_cache) != 0)
+    memcpy(page_cache + sizeof(struct flashfs_file_hdr), fno->fname,
+            hdr->fname_len + 1);
+    if (flashfs_write_page(mfno->jedec, mfno->startpage, page_cache) != 0)
         return -EIO;
     return 0;
 }
@@ -243,9 +326,11 @@ static int relocate_file(struct fnode *fno, uint16_t newpage,
     mutex_lock(flashfs_lock);
     for (i = 0; i < old_page_count; i++)
     {
-        memcpy(page_cache, (void *)PART_MAP_BASE +
-                mfno->startpage * FLASH_PAGE_SIZE, FLASH_PAGE_SIZE);
-        if (secure_flash_write_page((newpage + i) * FLASH_PAGE_SIZE, page_cache) != 0) {
+        if (flashfs_read_page(mfno->jedec, mfno->startpage + i, page_cache) < 0) {
+            mutex_unlock(flashfs_lock);
+            return -EIO;
+        }
+        if (flashfs_write_page(mfno->jedec, newpage + i, page_cache) != 0) {
             mutex_unlock(flashfs_lock);
             return -EIO;
         }
@@ -253,19 +338,19 @@ static int relocate_file(struct fnode *fno, uint16_t newpage,
     memset(page_cache, 0xFF, FLASH_PAGE_SIZE);
     for (i = old_page_count; i < new_page_count; i++)
     {
-        if (secure_flash_write_page((newpage + i) * FLASH_PAGE_SIZE, page_cache) != 0) {
+        if (flashfs_write_page(mfno->jedec, newpage + i, page_cache) != 0) {
             mutex_unlock(flashfs_lock);
             return -EIO;
         }
     }
     for (i = 0; i < new_page_count; i++)  {
-        if (fs_bmp_set(newpage + i) != 0) {
+        if (fs_bmp_set(mfno->jedec, newpage + i) != 0) {
             mutex_unlock(flashfs_lock);
             return -EIO;
         }
     }
     for (i = 0; i < old_page_count; i++) {
-        if (fs_bmp_clear(mfno->startpage + i) != 0) {
+        if (fs_bmp_clear(mfno->jedec, mfno->startpage + i) != 0) {
             mutex_unlock(flashfs_lock);
             return -EIO;
         }
@@ -306,8 +391,14 @@ static int flashfs_read(struct fnode *fno, void *buf, unsigned int len)
             size_in_page = FLASH_PAGE_SIZE - (sizeof(struct flashfs_file_hdr) + strlen(fno->fname) + 1 + off);
             if (size_in_page > len - take)
                 size_in_page = len - take;
-            memcpy(buf + take, get_page_content(mfno->startpage) + off,
-                    size_in_page);
+            if (mfno->jedec) {
+                uint32_t addr = mfno->startpage * FLASH_PAGE_SIZE + page_off;
+                if (jedec_spi_flash_read(mfno->jedec, addr, buf + take, size_in_page) < 0)
+                    return take > 0 ? take : -EIO;
+            } else {
+                memcpy(buf + take, get_page_content(mfno->startpage) + off,
+                        size_in_page);
+            }
             take += size_in_page;
             off += size_in_page;
         } else {
@@ -321,8 +412,14 @@ static int flashfs_read(struct fnode *fno, void *buf, unsigned int len)
                 page_off += sizeof(struct flashfs_file_hdr);
             }
             size_in_page = FLASH_PAGE_SIZE - page_off;
-            content = get_page_content(mfno->startpage + page_count);
-            memcpy(buf + take,  content + page_off, size_in_page);
+            if (mfno->jedec) {
+                uint32_t addr = (mfno->startpage + page_count) * FLASH_PAGE_SIZE + page_off;
+                if (jedec_spi_flash_read(mfno->jedec, addr, buf + take, size_in_page) < 0)
+                    return take > 0 ? take : -EIO;
+            } else {
+                content = get_page_content(mfno->startpage + page_count);
+                memcpy(buf + take,  content + page_off, size_in_page);
+            }
             take += size_in_page;
             off += size_in_page;
         }
@@ -360,8 +457,8 @@ static int flashfs_write(struct fnode *fno, const void *buf, unsigned int len)
             int i, n_new_pages;
             n_new_pages = new_page_count - old_page_count;
             for (i = 0; i < n_new_pages; i++) {
-                if (fs_bmp_test(mfno->startpage + old_page_count + i)) {
-                    int new_loc = fs_bmp_find_free(new_page_count);
+                if (fs_bmp_test(mfno->jedec, mfno->startpage + old_page_count + i)) {
+                    int new_loc = fs_bmp_find_free(mfno->jedec, new_page_count);
                     if (new_loc > 0) {
                         int r = relocate_file(fno, new_loc, old_page_count, new_page_count);
                         if (r != 0)
@@ -374,7 +471,7 @@ static int flashfs_write(struct fnode *fno, const void *buf, unsigned int len)
                         return -ENOSPC;
                 } else {
                     mutex_lock(flashfs_lock);
-                    if (fs_bmp_set(mfno->startpage + old_page_count + i) != 0) {
+                    if (fs_bmp_set(mfno->jedec, mfno->startpage + old_page_count + i) != 0) {
                         mutex_unlock(flashfs_lock);
                         return -EIO;
                     }
@@ -391,7 +488,10 @@ actual_write:
         struct flashfs_file_hdr *hdr = (struct flashfs_file_hdr *)page_cache;
         if (off < FLASH_PAGE_SIZE - (sizeof(struct flashfs_file_hdr) +
                     strlen(fno->fname)) + 1) {
-            memcpy(page_cache, get_page_content(mfno->startpage), FLASH_PAGE_SIZE);
+            if (flashfs_read_page(mfno->jedec, mfno->startpage, page_cache) < 0) {
+                mutex_unlock(flashfs_lock);
+                return -EIO;
+            }
             page_off = off + sizeof(struct flashfs_file_hdr) + strlen(fno->fname) + 1;
             size_in_page = FLASH_PAGE_SIZE - (sizeof(struct flashfs_file_hdr) +
                     strlen(fno->fname) + 1 + off);
@@ -400,7 +500,7 @@ actual_write:
             memcpy(page_cache + page_off, buf + written, size_in_page);
             written += size_in_page;
             off += size_in_page;
-            ret = secure_flash_write_page(mfno->startpage * FLASH_PAGE_SIZE, page_cache);
+            ret = flashfs_write_page(mfno->jedec, mfno->startpage, page_cache);
             if (ret != 0) {
                 mutex_unlock(flashfs_lock);
                 return ret;
@@ -408,7 +508,6 @@ actual_write:
         } else {
             int current_page_n = get_page_count_on_flash(fno->fname, off) - 1;
             int page_count_verify = 0;
-            uint8_t *content;
             if (current_page_n < 0)
                 return -EIO;
             /* First page */
@@ -425,13 +524,18 @@ actual_write:
             if ((page_count_verify - 1) != current_page_n) {
                 return -EIO;
             }
-            memcpy(page_cache, get_page_content(mfno->startpage + current_page_n),
-                    FLASH_PAGE_SIZE);
+            if (flashfs_read_page(mfno->jedec, mfno->startpage + current_page_n,
+                        page_cache) < 0) {
+                mutex_unlock(flashfs_lock);
+                return -EIO;
+            }
             size_in_page = FLASH_PAGE_SIZE - page_off;
-            content = get_page_content(mfno->startpage + current_page_n);
+            if (size_in_page > len - written)
+                size_in_page = len - written;
+            memcpy(page_cache + page_off, buf + written, size_in_page);
             written += size_in_page;
             off += size_in_page;
-            ret = secure_flash_write_page((mfno->startpage + current_page_n) * FLASH_PAGE_SIZE, page_cache);
+            ret = flashfs_write_page(mfno->jedec, mfno->startpage + current_page_n, page_cache);
             if (ret != 0) {
                 mutex_unlock(flashfs_lock);
                 return ret;
@@ -484,14 +588,14 @@ static int flashfs_seek(struct fnode *fno, int off, int whence)
             int i, n_new_pages;
             n_new_pages = new_page_count - old_page_count;
             for (i = 0; i < n_new_pages; i++) {
-                if (fs_bmp_test(mfno->startpage + old_page_count + i)) {
-                    int new_loc = fs_bmp_find_free(new_page_count);
+                if (fs_bmp_test(mfno->jedec, mfno->startpage + old_page_count + i)) {
+                    int new_loc = fs_bmp_find_free(mfno->jedec, new_page_count);
                     if (new_loc > 0)
                         return relocate_file(fno, new_loc, old_page_count, new_page_count);
                     else
                         return -ENOSPC;
                 } else {
-                    if (fs_bmp_set(mfno->startpage + old_page_count + i) != 0)
+                    if (fs_bmp_set(mfno->jedec, mfno->startpage + old_page_count + i) != 0)
                         return -EIO;
                 }
             }
@@ -520,16 +624,21 @@ static int flashfs_close(struct fnode *fno)
 static int flashfs_creat(struct fnode *fno)
 {
     struct flashfs_fnode *mfs;
+    const struct jedec_spi_flash *jedec = NULL;
     int page_count = get_page_count_on_flash(fno->fname, fno->size);
-    int first_page = fs_bmp_find_free(page_count);
+    int first_page;
     int page;
+    if (fno && fno->parent)
+        jedec = (const struct jedec_spi_flash *)fno->parent->priv;
+    first_page = fs_bmp_find_free(jedec, page_count);
+
     if (first_page < 0)
         return -ENOSPC;
 
     mutex_lock(flashfs_lock);
     page = first_page;
     while (page < first_page + page_count) {
-        if (fs_bmp_set(page++) != 0) {
+        if (fs_bmp_set(jedec, page++) != 0) {
             mutex_unlock(flashfs_lock);
             return -EIO;
         }
@@ -539,6 +648,9 @@ static int flashfs_creat(struct fnode *fno)
     if (mfs) {
         mfs->fno = fno;
         mfs->startpage = first_page;
+#ifdef CONFIG_JEDEC_SPI_FLASH
+        mfs->jedec = jedec;
+#endif
         fno->priv = mfs;
         if (flash_commit_file_info(fno) == 0) {
             mutex_unlock(flashfs_lock);
@@ -563,7 +675,7 @@ static int flashfs_unlink(struct fnode *fno)
     page_count = get_page_count_on_flash(fno->fname, fno->size);
     page = mfno->startpage;
     while(page_count--) {
-        if (fs_bmp_clear(page++) != 0)
+        if (fs_bmp_clear(mfno->jedec, page++) != 0)
             return -EIO;
     }
     kfree(mfno);
@@ -586,7 +698,7 @@ static int flashfs_truncate(struct fnode *fno, unsigned int newsize)
         old_page_count = get_page_count_on_flash(fno->fname, fno->size);
         new_page_count = get_page_count_on_flash(fno->fname, newsize);
         while (old_page_count > new_page_count) {
-            if (fs_bmp_clear(mfno->startpage + (--old_page_count)) != 0)
+            if (fs_bmp_clear(mfno->jedec, mfno->startpage + (--old_page_count)) != 0)
                 return -EIO;
         }
         fno->size = newsize;
@@ -601,29 +713,86 @@ static int flashfs_mount(char *source, char *tgt, uint32_t flags, void *arg)
     struct flashfs_fnode *fpriv;
     int page;
     struct flashfs_file_hdr *hdr;
+#ifdef CONFIG_JEDEC_SPI_FLASH
+    const struct jedec_spi_flash *jedec = NULL;
+    uint8_t page_cache[FLASH_PAGE_SIZE];
+    uint8_t bitmap_cache[FLASH_PAGE_SIZE];
+#endif
 
-    /* Source must be NULL */
+#ifdef CONFIG_JEDEC_SPI_FLASH
+    if (source) {
+        jedec = flashfs_lookup_jedec_source(source);
+        if (!jedec)
+            return -ENODEV;
+    }
+#else
     if (source)
-        return -1;
+        return -ENODEV;
+#endif
 
     /* Target must be a valid dir */
     if (!tgt)
-        return -1;
+        return -EINVAL;
 
     tgt_dir = fno_search(tgt);
 
     if (!tgt_dir || ((tgt_dir->flags & FL_DIR) == 0)) {
         /* Not a valid mountpoint. */
-        return -1;
+        return -ENOTDIR;
     }
     tgt_dir->owner = &mod_flashfs;
+#ifdef CONFIG_JEDEC_SPI_FLASH
+    tgt_dir->priv = (void *)jedec;
+    if (jedec) {
+        kprintf("flashfs: mounting JEDEC source %s on %s\n",
+                source ? source : "/dev/spiflash0", tgt);
+        if (flashfs_read_page(jedec, PART_MAX_PAGES - 1, bitmap_cache) < 0)
+            return -EIO;
+    }
+#else
+    tgt_dir->priv = NULL;
+#endif
     for (page = 0; page < PART_MAX_PAGES; page++) {
-        if (fs_bmp_test(page)) {
+        int page_used;
+
+#ifdef CONFIG_JEDEC_SPI_FLASH
+        if (jedec) {
+            if ((page & 0x1F) == 0)
+                kprintf("flashfs: scan page %d/%d\n", page, PART_MAX_PAGES);
+            page_used = !(bitmap_cache[page / 8] & (1 << (page & 7)));
+        } else
+#endif
+        {
+            page_used = fs_bmp_test(NULL, page);
+        }
+
+        if (page_used) {
             char *fname = NULL;
             uint32_t fsz = 0;
-            hdr = get_page_header(page);
+#ifdef CONFIG_JEDEC_SPI_FLASH
+            if (jedec) {
+                if (flashfs_read_jedec_page(jedec, page, page_cache) < 0)
+                    return -EIO;
+                hdr = (struct flashfs_file_hdr *)page_cache;
+                if ((hdr->fname_len == 0xFFFF) || (hdr->fname_len == 0x0000)
+                        || (hdr->fname_len == F_PREV_PAGE))
+                    hdr = NULL;
+                if (hdr && hdr->fname_len <= MAX_FNAME &&
+                        page_cache[sizeof(struct flashfs_file_hdr) + hdr->fname_len] == 0) {
+                    fname = (char *)page_cache + sizeof(struct flashfs_file_hdr);
+                    fsz = hdr->fsize;
+                }
+            } else
+#endif
+            {
+                hdr = get_page_header(page);
+                if (hdr) {
+                    fname = get_page_filename(page);
+                    if (fname)
+                        fsz = get_content_size(page);
+                }
+            }
             if (hdr) {
-                fname = get_page_filename(page);
                 if (fname) {
                     fpriv = pool_alloc(&flashfs_fnode_pool);
                     if (!fpriv)
@@ -636,8 +805,15 @@ static int flashfs_mount(char *source, char *tgt, uint32_t flags, void *arg)
                     fno->priv = fpriv;
                     fpriv->fno = fno;
                     fpriv->startpage = page;
-                    fno->size = get_content_size(page); /* Size of content */
+#ifdef CONFIG_JEDEC_SPI_FLASH
+                    fpriv->jedec = jedec;
+#endif
+                    fno->size = fsz; /* Size of content */
+#ifdef CONFIG_JEDEC_SPI_FLASH
+                    fno->flags = jedec ? (FL_RDONLY | FL_EXEC) : (FL_RDWR | FL_EXEC);
+#else
                     fno->flags = FL_RDWR | FL_EXEC;
+#endif
                 }
             }
         }
@@ -647,7 +823,11 @@ static int flashfs_mount(char *source, char *tgt, uint32_t flags, void *arg)
 
 static int flashfs_mount_info(struct fnode *fno, char *buf, int len)
 {
-    const char desc[] = "NVM (internal flash): small config and log files";
+    const char *desc = "NVM (internal flash): small config and log files";
+#ifdef CONFIG_JEDEC_SPI_FLASH
+    if (fno && fno->priv)
+        desc = "SPI NOR flash (external): mounted via /dev/spiflash0";
+#endif
     if (len < 0)
         return -1;
     strncpy(buf,desc,len);
@@ -679,5 +859,25 @@ void flashfs_init(void)
     mod_flashfs.ops.truncate = flashfs_truncate;
     register_module(&mod_flashfs);
 }
+
+/*
+ * flashfs_set_backend - switch active flashfs backend.
+ * When CONFIG_JEDEC_SPI_FLASH is enabled, this function can be called
+ * at runtime to switch from internal flash to an external SPI NOR chip.
+ */
+#ifdef CONFIG_JEDEC_SPI_FLASH
+int flashfs_register_jedec(struct jedec_spi_flash *jedec_flash)
+{
+    if (!jedec_flash)
+        return -EINVAL;
+    if (!jedec_flash->probed)
+        return -ENODEV;
+    registered_jedec = jedec_flash;
+    kprintf("flashfs: external SPI NOR available as %s (%lu pages)\n",
+            jedec_flash->dev_path ? jedec_flash->dev_path : "/dev/spiflash0",
+            (unsigned long)jedec_flash->page_count);
+    return 0;
+}
+#endif
 
 #endif /* CONFIG_FLASHFS */

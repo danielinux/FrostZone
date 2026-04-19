@@ -48,6 +48,20 @@ static char initsh[] = "/bin/init.sh";
 static char *sh_args[4] = {fresh_txt, "-t", serial_dev, NULL};
 static char *idling_args[2] = {idling_txt, NULL};
 
+static void bind_serial_stdio(void)
+{
+    int fd = open(serial_dev, O_RDWR);
+
+    if (fd < 0)
+        return;
+
+    dup2(fd, STDIN_FILENO);
+    dup2(fd, STDOUT_FILENO);
+    dup2(fd, STDERR_FILENO);
+    if (fd > STDERR_FILENO)
+        close(fd);
+}
+
 int main(void *arg)
 {
     volatile int i = (int)arg;
@@ -72,6 +86,7 @@ int main(void *arg)
             shebang = fresh_path;
         }
         if (vfork() == 0) {
+            bind_serial_stdio();
             execve(shebang, sh_args, NULL);
             exit(1);
         }
@@ -88,6 +103,7 @@ int main(void *arg)
             close(stde);
         }
         if (vfork() == 0) {
+            bind_serial_stdio();
             execve(fresh_path, sh_args, NULL);
             exit(1);
         }

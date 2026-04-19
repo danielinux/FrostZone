@@ -6,10 +6,10 @@
 *.out
 *.map
 *.hex
+jedec_flash.bin
 secure-supervisor/build
 secure-supervisor/tests/unit_mempool
 frosted/build
 userland/out/*
 userland/gdb/*
 tags
-

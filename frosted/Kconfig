@@ -151,6 +151,10 @@ config DEVFBCON
     depends on DEVFRAMEBUFFER
     default y
 
+endmenu
+
+menu "Device drivers"
+
 menu "STM32 hardware crypto"
     depends on TARGET_STM32H563
 
@@ -174,6 +178,148 @@ config STM32_HW_PKA
 
 endmenu
 
+menu "SPI buses"
+    depends on TARGET_STM32H563
+
+config SPI1
+    bool "Enable SPI1 peripheral support"
+    default n
+
+config SPI2
+    bool "Enable SPI2 peripheral support"
+    default n
+
+config SPI3
+    bool "Enable SPI3 peripheral support"
+    default n
+
+endmenu
+
+menu "JEDEC SPI Flash per bus"
+    depends on TARGET_STM32H563
+
+    if SPI1
+
+    config SPI1_JEDEC_FLASH
+        bool "JEDEC SPI Flash on SPI1"
+        depends on SPI1
+        default n
+
+        if SPI1_JEDEC_FLASH
+
+        config SPI1_JEDEC_FLASH_CS
+            int "CS pin number"
+            default 3
+            help
+                GPIO pin number used for the SPI flash chip-select line.
+
+        config SPI1_JEDEC_FLASH_GPIO_BANK
+            string "GPIO bank for CS pin"
+            default "GPIOA"
+            help
+                GPIO bank containing the CS pin (GPIOA-GPIOH).
+
+        config SPI1_JEDEC_FLASH_BAUD
+            int "SPI clock (Hz)"
+            default 50000000
+            range 100000 100000000
+            help
+                Clock rate for the SPI bus connected to the external flash.
+
+        endif
+    endif
+
+    if SPI2
+
+    config SPI2_JEDEC_FLASH
+        bool "JEDEC SPI Flash on SPI2"
+        depends on SPI2
+        default n
+
+        if SPI2_JEDEC_FLASH
+
+        config SPI2_JEDEC_FLASH_CS
+            int "CS pin number"
+            default 12
+            help
+                GPIO pin number used for the SPI flash chip-select line.
+
+        config SPI2_JEDEC_FLASH_GPIO_BANK
+            string "GPIO bank for CS pin"
+            default "GPIOB"
+            help
+                GPIO bank containing the CS pin (GPIOA-GPIOH).
+
+        config SPI2_JEDEC_FLASH_BAUD
+            int "SPI clock (Hz)"
+            default 50000000
+            range 100000 100000000
+            help
+                Clock rate for the SPI bus connected to the external flash.
+
+        endif
+    endif
+
+    if SPI3
+
+    config SPI3_JEDEC_FLASH
+        bool "JEDEC SPI Flash on SPI3"
+        depends on SPI3
+        default n
+
+        if SPI3_JEDEC_FLASH
+
+        config SPI3_JEDEC_FLASH_CS
+            int "CS pin number"
+            default 8
+            help
+                GPIO pin number used for the SPI flash chip-select line.
+
+        config SPI3_JEDEC_FLASH_GPIO_BANK
+            string "GPIO bank for CS pin"
+            default "GPIOC"
+            help
+                GPIO bank containing the CS pin (GPIOA-GPIOH).
+
+        config SPI3_JEDEC_FLASH_BAUD
+            int "SPI clock (Hz)"
+            default 50000000
+            range 100000 100000000
+            help
+                Clock rate for the SPI bus connected to the external flash.
+
+        endif
+    endif
+
+endmenu
+
+config JEDEC_MAX_PAGES
+    int "JEDEC flash usable page count"
+    default 128
+    depends on SPI1_JEDEC_FLASH || SPI2_JEDEC_FLASH || SPI3_JEDEC_FLASH
+    help
+        Maximum number of flash pages available on the external chip for
+        FlashFS. The usable capacity is JEDEC_MAX_PAGES * JEDEC_FLASH_PAGE_SIZE.
+        This also determines the size of the in-RAM bitmap at build time, so
+        choose conservatively when RAM is tight.
+
+config JEDEC_FLASH_PAGE_SIZE
+    int "JEDEC flash page size in bytes"
+    default 256
+    range 64 4096
+    depends on SPI1_JEDEC_FLASH || SPI2_JEDEC_FLASH || SPI3_JEDEC_FLASH
+    help
+        Size of one flash-page block on the external JEDEC device.
+        Use 256 for standard SPI NOR, or 4096 (4 KB) if the chip
+        uses "page" as the smallest erase unit (e.g. NAND-style).
+
+config JEDEC_SPI_FLASH
+    bool "Enable JEDEC SPI flash support"
+    depends on SPI1_JEDEC_FLASH || SPI2_JEDEC_FLASH || SPI3_JEDEC_FLASH
+    help
+        Probe for a JEDEC SPI flash device at boot and expose it as
+        /dev/spiflash0 for explicit userspace mounting with FlashFS.
+
 endmenu
 
 menu "Display peripherals"
@@ -181,10 +327,6 @@ menu "Display peripherals"
 config ILI9341
     bool "ILI9341 SPI display"
     depends on DEVFRAMEBUFFER
-    default n
-
-config SPI3
-    bool "Enable SPI3 peripheral support"
     default n
 
 endmenu

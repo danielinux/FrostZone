@@ -1080,12 +1080,15 @@ void __attribute__((weak)) devspi_init(struct fnode *dev)
 int vfs_mount(char *source, char *target, char *module, uint32_t flags, void *args)
 {
     struct module *m;
+    int ret;
+
     if (!module || !target)
         return -ENOMEDIUM;
     m = module_search(module);
     if (!m || !m->mount)
         return -EOPNOTSUPP;
-    if (m->mount(source, target, flags, args) == 0) {
+    ret = m->mount(source, target, flags, args);
+    if (ret == 0) {
         struct mountpoint *mp = pool_alloc(&mountpoint_pool);
         if (mp) {
             mp->target = fno_search(target);
@@ -1094,7 +1097,7 @@ int vfs_mount(char *source, char *target, char *module, uint32_t flags, void *ar
         }
         return 0;
     }
-    return -ENOENT;
+    return ret;
 }
 
 int vfs_umount(char *target, uint32_t flags)
