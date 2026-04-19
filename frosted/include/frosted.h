@@ -322,6 +322,17 @@ int register_addr_family(struct module *m, uint16_t family);
 #define EXEC_TYPE_ELF  (2) /* ELF binary */
 
 
+/** Per-filesystem capacity/usage statistics, filled by mount_stat. */
+struct fs_usage {
+    uint32_t block_size;
+    uint32_t total_blocks;
+    uint32_t free_blocks;
+    uint32_t avail_blocks;
+    uint32_t files;
+    uint32_t free_files;
+    const char *fstype;
+};
+
 struct module {
     uint16_t family;
     char name[MODNAME_SIZE];
@@ -330,6 +341,7 @@ struct module {
     int (*mount)(char *source, char *target, uint32_t flags, void *arg);
     int (*umount)(char *target, uint32_t flags);
     int (*mount_info)(struct fnode *fno, char *buf, int size);
+    int (*mount_stat)(struct fnode *mnt, struct fs_usage *out);
 
     struct module_operations {
         /* Common module operations */

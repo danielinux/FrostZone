@@ -714,6 +714,97 @@ int sysfs_mtab_read(struct sysfs_fnode *sfs, void *buf, int len)
     return len;
 }
 
+int sysfs_df_read(struct sysfs_fnode *sfs, void *buf, int len)
+{
+    char *res = (char *)buf;
+    struct fnode *fno = sfs->fnode;
+    static char *mem_txt;
+    static int off;
+    struct mountpoint *m = MTAB;
+    int l;
+    uint32_t cur_off = task_fd_get_off(fno);
+    if (cur_off == 0) {
+        const char df_banner[] = "Filesystem\tType\tSize\tUsed\tAvail\tMountpoint\r\n";
+        mutex_lock(sysfs_mutex);
+        mem_txt = kalloc(MAX_SYSFS_BUFFER);
+        if (!mem_txt)
+            return -1;
+        off = 0;
+        strcpy(mem_txt + off, df_banner);
+        off += strlen(df_banner);
+
+        while (m) {
+            struct fs_usage usage;
+            int has_stat = 0;
+            if (m->target->owner && m->target->owner->mount_stat) {
+                if (m->target->owner->mount_stat(m->target, &usage) == 0)
+                    has_stat = 1;
+            }
+
+            /* Driver name */
+            if (m->target->owner) {
+                strcpy(mem_txt + off, m->target->owner->name);
+                off += strlen(m->target->owner->name);
+            }
+            *(mem_txt + (off++)) = '\t';
+
+            if (has_stat) {
+                /* Type */
+                if (usage.fstype) {
+                    strcpy(mem_txt + off, usage.fstype);
+                    off += strlen(usage.fstype);
+                }
+                *(mem_txt + (off++)) = '\t';
+
+                /* Size (total_blocks * block_size) */
+                off += ul_to_str((unsigned long)usage.total_blocks *
+                                 usage.block_size, mem_txt + off);
+                *(mem_txt + (off++)) = '\t';
+
+                /* Used ((total - free) * block_size) */
+                off += ul_to_str((unsigned long)(usage.total_blocks -
+                                 usage.free_blocks) * usage.block_size,
+                                 mem_txt + off);
+                *(mem_txt + (off++)) = '\t';
+
+                /* Avail (avail_blocks * block_size) */
+                off += ul_to_str((unsigned long)usage.avail_blocks *
+                                 usage.block_size, mem_txt + off);
+            } else {
+                /* No stat available */
+                strcpy(mem_txt + off, "-\t-\t-\t-");
+                off += 7;
+            }
+            *(mem_txt + (off++)) = '\t';
+
+            /* Mountpoint */
+            l = fno_fullpath(m->target, mem_txt + off, MAX_SYSFS_BUFFER - off);
+            if (l > 0)
+                off += l;
+
+            *(mem_txt + (off++)) = '\r';
+            *(mem_txt + (off++)) = '\n';
+
+            m = m->next;
+        }
+        *(mem_txt + (off++)) = '\r';
+        *(mem_txt + (off++)) = '\n';
+    }
+    cur_off = task_fd_get_off(fno);
+    if (off == cur_off) {
+        kfree(mem_txt);
+        mutex_unlock(sysfs_mutex);
+        return -1;
+    }
+    if (len > (off - cur_off)) {
+       len = off - cur_off;
+    }
+    memcpy(res, mem_txt + cur_off, len);
+    cur_off += len;
+    task_fd_set_off(fno,cur_off);
+    return len;
+}
+
 int sysfs_no_write(struct sysfs_fnode *sfs, const void *buf, int len)
 {
     return -1;
@@ -899,6 +990,7 @@ static int sysfs_mount(char *source, char *tgt, uint32_t flags, void *args)
     sysfs_register("mem", "/sys", sysfs_mem_read, sysfs_no_write);
     sysfs_register("modules", "/sys", sysfs_modules_read, sysfs_no_write);
     sysfs_register("mtab", "/sys", sysfs_mtab_read, sysfs_no_write);
+    sysfs_register("df", "/sys", sysfs_df_read, sysfs_no_write);
 #if defined(STM32F4) || defined(STM32F7)
     sysfs_register("pins", "/sys", sysfs_pins_read, sysfs_no_write);
 #endif
@@ -926,6 +1018,20 @@ static int sysfs_mount_info(struct fnode *fno, char *buf, int len)
     return len;
 }
 
+static int sysfs_mount_stat(struct fnode *mnt, struct fs_usage *out)
+{
+    if (!out)
+        return -1;
+    out->block_size = 0;
+    out->total_blocks = 0;
+    out->free_blocks = 0;
+    out->avail_blocks = 0;
+    out->files = 0;
+    out->free_files = 0;
+    out->fstype = "sysfs";
+    return 0;
+}
+
 
 void sysfs_init(void)
 {
@@ -935,6 +1041,7 @@ void sysfs_init(void)
 
     mod_sysfs.mount = sysfs_mount;
     mod_sysfs.mount_info = sysfs_mount_info;
+    mod_sysfs.mount_stat = sysfs_mount_stat;
 
     mod_sysfs.ops.read = sysfs_read;
     mod_sysfs.ops.poll = sysfs_poll;

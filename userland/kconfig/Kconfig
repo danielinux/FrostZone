@@ -93,6 +93,8 @@ config APP_DIRNAME
     tristate "dirname"
 config APP_DU
     tristate "du"
+config APP_DF
+    tristate "df"
 config APP_MKDIR
     tristate "mkdir"
 config APP_MOUNT

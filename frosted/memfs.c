@@ -224,6 +224,20 @@ static int memfs_mount_info(struct fnode *fno, char *buf, int len)
     return len;
 }
 
+static int memfs_mount_stat(struct fnode *mnt, struct fs_usage *out)
+{
+    if (!out)
+        return -1;
+    out->block_size = 1;
+    out->total_blocks = 0;
+    out->free_blocks = 0;
+    out->avail_blocks = 0;
+    out->files = memfs_fnode_pool.used;
+    out->free_files = pool_available(&memfs_fnode_pool);
+    out->fstype = "memfs";
+    return 0;
+}
+
 void memfs_init(void)
 {
     pool_init(&memfs_fnode_pool);
@@ -232,6 +246,7 @@ void memfs_init(void)
 
     mod_memfs.mount = memfs_mount;
     mod_memfs.mount_info = memfs_mount_info;
+    mod_memfs.mount_stat = memfs_mount_stat;
 
     mod_memfs.ops.read = memfs_read;
     mod_memfs.ops.poll = memfs_poll;

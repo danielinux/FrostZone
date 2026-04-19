@@ -839,6 +839,40 @@ static int flashfs_mount_info(struct fnode *fno, char *buf, int len)
     return len;
 }
 
+static int flashfs_mount_stat(struct fnode *mnt, struct fs_usage *out)
+{
+    uint8_t bmp[FLASH_PAGE_SIZE];
+    int page;
+    uint32_t used = 0;
+    uint32_t usable_pages = PART_MAX_PAGES - 1; /* last page is bitmap */
+#ifdef CONFIG_JEDEC_SPI_FLASH
+    const struct jedec_spi_flash *jedec = mnt ? (const struct jedec_spi_flash *)mnt->priv : NULL;
+#else
+    const struct jedec_spi_flash *jedec = NULL;
+#endif
+
+    if (!out)
+        return -1;
+
+    if (flashfs_read_page(jedec, PART_MAX_PAGES - 1, bmp) < 0)
+        return -1;
+
+    for (page = 0; page < (int)usable_pages; page++) {
+        /* Inverted bitmap: bit=1 means free, bit=0 means used */
+        if (!(bmp[page / 8] & (1 << (page & 7))))
+            used++;
+    }
+
+    out->block_size = FLASH_PAGE_SIZE;
+    out->total_blocks = usable_pages;
+    out->free_blocks = usable_pages - used;
+    out->avail_blocks = out->free_blocks;
+    out->files = flashfs_fnode_pool.used;
+    out->free_files = pool_available(&flashfs_fnode_pool);
+    out->fstype = "flashfs";
+    return 0;
+}
+
 void flashfs_init(void)
 {
     pool_init(&flashfs_fnode_pool);
@@ -848,6 +882,7 @@ void flashfs_init(void)
 
     mod_flashfs.mount = flashfs_mount;
     mod_flashfs.mount_info = flashfs_mount_info;
+    mod_flashfs.mount_stat = flashfs_mount_stat;
 
     mod_flashfs.ops.read = flashfs_read;
     mod_flashfs.ops.poll = flashfs_poll;

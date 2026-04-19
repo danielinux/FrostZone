@@ -2,6 +2,7 @@ cat: cat.o  ICE
 cp: cp.o ICE
 cut: cut.o ICE
 date: date.o ICE
+df: df.o ICE
 dirname: dirname.o ICE
 du: du.o ICE
 echo: echo.o ICE

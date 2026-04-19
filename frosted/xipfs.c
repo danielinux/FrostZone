@@ -445,6 +445,22 @@ static int xipfs_mount_info(struct fnode *fno, char *buf, int len)
     return len;
 }
 
+static int xipfs_mount_stat(struct fnode *mnt, struct fs_usage *out)
+{
+    const struct xipfs_fat *fat;
+    if (!out || !mnt || !mnt->priv)
+        return -1;
+    fat = (const struct xipfs_fat *)mnt->priv;
+    out->block_size = SECTOR_SIZE;
+    out->total_blocks = fat->fs_size / SECTOR_SIZE;
+    out->free_blocks = 0; /* read-only filesystem */
+    out->avail_blocks = 0;
+    out->files = fat->fs_files;
+    out->free_files = 0;
+    out->fstype = "xipfs";
+    return 0;
+}
+
 
 void xipfs_init(void)
 {
@@ -452,6 +468,7 @@ void xipfs_init(void)
     mod_xipfs.mount = xipfs_mount;
     strcpy(mod_xipfs.name, "xipfs");
     mod_xipfs.mount_info = xipfs_mount_info;
+    mod_xipfs.mount_stat = xipfs_mount_stat;
     mod_xipfs.ops.read = xipfs_read;
     mod_xipfs.ops.poll = xipfs_poll;
     mod_xipfs.ops.write = xipfs_write;
