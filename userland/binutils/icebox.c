@@ -21,6 +21,9 @@ extern int icebox_cut(int argc, char *argv[]);
 #ifdef APP_DATE_MODULE
 extern int icebox_date(int argc, char *argv[]);
 #endif
+#ifdef APP_DF_MODULE
+extern int icebox_df(int argc, char *argv[]);
+#endif
 #ifdef APP_DIRNAME_MODULE
 extern int icebox_dirname(int argc, char *argv[]);
 #endif
@@ -155,6 +158,11 @@ int main(int argc, char *argv[])
 #ifdef APP_DATE_MODULE
     if(strcmp("date", argv[0]) == 0)
         return icebox_date(argc, argv);
+#endif
+
+#ifdef APP_DF_MODULE
+    if(strcmp("df", argv[0]) == 0)
+        return icebox_df(argc, argv);
 #endif
 
 #ifdef APP_DIRNAME_MODULE

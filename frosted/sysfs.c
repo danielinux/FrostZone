@@ -714,6 +714,49 @@ int sysfs_mtab_read(struct sysfs_fnode *sfs, void *buf, int len)
     return len;
 }
 
+/**
+ * Append a right-padded string field to buf, return bytes written.
+ * If the string is longer than width, no padding is added.
+ */
+static int pad_field(char *buf, const char *str, int width)
+{
+    int slen = strlen(str);
+    int i, n = 0;
+    for (i = 0; i < slen; i++)
+        buf[n++] = str[i];
+    while (n < width)
+        buf[n++] = ' ';
+    return n;
+}
+
+/**
+ * Format a byte count into a human-readable string with unit suffix.
+ * Returns the length of the resulting string.
+ */
+static int size_to_human(unsigned long bytes, char *buf)
+{
+    if (bytes == 0) {
+        buf[0] = '0';
+        buf[1] = '\0';
+        return 1;
+    }
+    if (bytes < 1024) {
+        return ul_to_str(bytes, buf);
+    }
+    if (bytes < 1024UL * 1024) {
+        int n = ul_to_str(bytes / 1024, buf);
+        buf[n++] = 'K';
+        buf[n] = '\0';
+        return n;
+    }
+    {
+        int n = ul_to_str(bytes / (1024UL * 1024), buf);
+        buf[n++] = 'M';
+        buf[n] = '\0';
+        return n;
+    }
+}
+
 int sysfs_df_read(struct sysfs_fnode *sfs, void *buf, int len)
 {
     char *res = (char *)buf;
@@ -724,58 +767,67 @@ int sysfs_df_read(struct sysfs_fnode *sfs, void *buf, int len)
     int l;
     uint32_t cur_off = task_fd_get_off(fno);
     if (cur_off == 0) {
-        const char df_banner[] = "Filesystem\tType\tSize\tUsed\tAvail\tMountpoint\r\n";
         mutex_lock(sysfs_mutex);
         mem_txt = kalloc(MAX_SYSFS_BUFFER);
         if (!mem_txt)
             return -1;
         off = 0;
-        strcpy(mem_txt + off, df_banner);
-        off += strlen(df_banner);
+
+        /* Column widths: Filesystem 12, Type 8, Size 8, Used 8, Avail 8, Mount */
+        off += pad_field(mem_txt + off, "Filesystem", 12);
+        off += pad_field(mem_txt + off, "Type", 8);
+        off += pad_field(mem_txt + off, "Size", 8);
+        off += pad_field(mem_txt + off, "Used", 8);
+        off += pad_field(mem_txt + off, "Avail", 8);
+        strcpy(mem_txt + off, "Mounted on");
+        off += 10;
+        *(mem_txt + (off++)) = '\r';
+        *(mem_txt + (off++)) = '\n';
 
         while (m) {
             struct fs_usage usage;
             int has_stat = 0;
+            char tmp[16];
             if (m->target->owner && m->target->owner->mount_stat) {
                 if (m->target->owner->mount_stat(m->target, &usage) == 0)
                     has_stat = 1;
             }
 
-            /* Driver name */
-            if (m->target->owner) {
-                strcpy(mem_txt + off, m->target->owner->name);
-                off += strlen(m->target->owner->name);
-            }
-            *(mem_txt + (off++)) = '\t';
+            /* Filesystem (driver name) */
+            if (m->target->owner)
+                off += pad_field(mem_txt + off, m->target->owner->name, 12);
+            else
+                off += pad_field(mem_txt + off, "-", 12);
 
             if (has_stat) {
+                unsigned long total_bytes = (unsigned long)usage.total_blocks *
+                                            usage.block_size;
+                unsigned long used_bytes = (unsigned long)(usage.total_blocks -
+                                            usage.free_blocks) * usage.block_size;
+                unsigned long avail_bytes = (unsigned long)usage.avail_blocks *
+                                            usage.block_size;
+
                 /* Type */
-                if (usage.fstype) {
-                    strcpy(mem_txt + off, usage.fstype);
-                    off += strlen(usage.fstype);
-                }
-                *(mem_txt + (off++)) = '\t';
+                off += pad_field(mem_txt + off,
+                                 usage.fstype ? usage.fstype : "-", 8);
 
-                /* Size (total_blocks * block_size) */
-                off += ul_to_str((unsigned long)usage.total_blocks *
-                                 usage.block_size, mem_txt + off);
-                *(mem_txt + (off++)) = '\t';
+                /* Size */
+                size_to_human(total_bytes, tmp);
+                off += pad_field(mem_txt + off, tmp, 8);
 
-                /* Used ((total - free) * block_size) */
-                off += ul_to_str((unsigned long)(usage.total_blocks -
-                                 usage.free_blocks) * usage.block_size,
-                                 mem_txt + off);
-                *(mem_txt + (off++)) = '\t';
+                /* Used */
+                size_to_human(used_bytes, tmp);
+                off += pad_field(mem_txt + off, tmp, 8);
 
-                /* Avail (avail_blocks * block_size) */
-                off += ul_to_str((unsigned long)usage.avail_blocks *
-                                 usage.block_size, mem_txt + off);
+                /* Avail */
+                size_to_human(avail_bytes, tmp);
+                off += pad_field(mem_txt + off, tmp, 8);
             } else {
-                /* No stat available */
-                strcpy(mem_txt + off, "-\t-\t-\t-");
-                off += 7;
+                off += pad_field(mem_txt + off, "-", 8);
+                off += pad_field(mem_txt + off, "-", 8);
+                off += pad_field(mem_txt + off, "-", 8);
+                off += pad_field(mem_txt + off, "-", 8);
             }
-            *(mem_txt + (off++)) = '\t';
 
             /* Mountpoint */
             l = fno_fullpath(m->target, mem_txt + off, MAX_SYSFS_BUFFER - off);
@@ -787,8 +839,6 @@ int sysfs_df_read(struct sysfs_fnode *sfs, void *buf, int len)
 
             m = m->next;
         }
-        *(mem_txt + (off++)) = '\r';
-        *(mem_txt + (off++)) = '\n';
     }
     cur_off = task_fd_get_off(fno);
     if (off == cur_off) {
