@@ -73,3 +73,11 @@
 
 #define MICROPY_PY_SYS_PLATFORM "frosted"
 #define MICROPY_BANNER_MACHINE "frosted [" MICROPY_PLATFORM_COMPILER "] version"
+
+/* Default module search path: external SPI flash mounted at /mnt */
+#define MICROPY_PY_SYS_PATH_DEFAULT "/mnt"
+
+/* Thread support (GIL) */
+#ifdef MICROPY_PY_THREAD
+#define MICROPY_PY_THREAD_GIL (1)
+#endif

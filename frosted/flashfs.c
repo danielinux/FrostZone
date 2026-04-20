@@ -88,17 +88,105 @@ struct __attribute__((packed)) flashfs_file_hdr {
     uint16_t fsize;
 };
 
-#define CONFIG_MAX_FLASHFS_FNODES 16
+#define CONFIG_MAX_FLASHFS_FNODES 64
 
 struct flashfs_fnode {
     struct fnode *fno;
     uint32_t startpage;
+    uint16_t on_flash_fname_len; /* length of full relative path stored on flash */
 #ifdef CONFIG_JEDEC_SPI_FLASH
     const struct jedec_spi_flash *jedec;
 #endif
 };
 
 POOL_DEFINE(flashfs_fnode_pool, struct flashfs_fnode, CONFIG_MAX_FLASHFS_FNODES);
+
+/* Build the full relative path from mount point for a file fnode.
+ * Walks fno->parent chain up to (but not including) the mount directory.
+ * Returns length written (excluding null terminator), or -1 if truncated.
+ */
+static int flashfs_build_relpath(struct fnode *fno, char *buf, int buflen)
+{
+    /* Collect path components by walking up the parent chain.
+     * Stop at the mount directory (FL_DIR node whose parent is not flashfs-owned
+     * or is the VFS root). Do NOT include the mount dir itself.
+     */
+    struct fnode *chain[8];
+    int depth = 0;
+    struct fnode *cur = fno;
+    while (cur && depth < 8) {
+        /* Stop if cur is the mount directory (its parent is not flashfs-owned) */
+        if (!cur->parent || cur->parent == cur ||
+            cur->parent->owner != &mod_flashfs) {
+            if (cur->flags & FL_DIR)
+                break; /* cur is the mount point — don't include it */
+        }
+        chain[depth++] = cur;
+        cur = cur->parent;
+    }
+    if (depth == 0) {
+        /* Shouldn't happen — fno is the mount dir itself */
+        buf[0] = '\0';
+        return 0;
+    }
+    if (depth == 1) {
+        /* File directly under mount point */
+        int len = strlen(fno->fname);
+        if (len >= buflen)
+            return -1;
+        memcpy(buf, fno->fname, len + 1);
+        return len;
+    }
+    /* Build path from outermost to innermost */
+    int pos = 0;
+    for (int i = depth - 1; i >= 0; i--) {
+        int slen = strlen(chain[i]->fname);
+        if (pos + slen + (i > 0 ? 1 : 0) >= buflen)
+            return -1;
+        memcpy(buf + pos, chain[i]->fname, slen);
+        pos += slen;
+        if (i > 0)
+            buf[pos++] = '/';
+    }
+    buf[pos] = '\0';
+    return pos;
+}
+
+/* Walk parent chain to find the jedec handle for a file in a subdirectory */
+static const struct jedec_spi_flash *flashfs_find_jedec(struct fnode *fno)
+{
+#ifdef CONFIG_JEDEC_SPI_FLASH
+    struct fnode *cur = fno->parent;
+    while (cur && cur->parent != cur) {
+        if (cur->owner == &mod_flashfs && cur->priv &&
+            (cur->flags & FL_DIR))
+            return (const struct jedec_spi_flash *)cur->priv;
+        cur = cur->parent;
+    }
+#endif
+    return NULL;
+}
+
+/* Find or create a directory fnode under parent for a given component name */
+static struct fnode *flashfs_ensure_dir(struct fnode *parent, const char *name, int namelen)
+{
+    struct fnode *child;
+    char component[CONFIG_MAX_FNAME];
+    if (namelen >= CONFIG_MAX_FNAME)
+        namelen = CONFIG_MAX_FNAME - 1;
+    memcpy(component, name, namelen);
+    component[namelen] = '\0';
+
+    /* Search existing children */
+    child = parent->children;
+    while (child) {
+        if ((child->flags & FL_DIR) && strcmp(child->fname, component) == 0)
+            return child;
+        child = child->next;
+    }
+    /* Create new directory fnode */
+    return fno_mkdir(&mod_flashfs, component, parent);
+}
 
 /* Bitmap in last N flash pages. Inverted logic (starts at 0xFF when formatted).
  * With multi-page bitmap, page p maps to bitmap page (total - bmp_count + p/BITS_PER_BMP_PAGE),
@@ -252,22 +340,12 @@ static int fs_bmp_find_free(const struct jedec_spi_flash *jedec, int pages)
 
 static int get_page_count_on_flash(const char *filename, uint16_t sz)
 {
-    int r;
-    uint16_t first_page_size = FLASH_PAGE_SIZE - (sizeof(struct flashfs_file_hdr) + strlen(filename) + 1);
-    uint16_t nxt_page_size;
-    if (sz <= first_page_size)
+    uint16_t first_cap = FLASH_PAGE_SIZE - (sizeof(struct flashfs_file_hdr) + strlen(filename) + 1);
+    uint16_t cont_cap = FLASH_PAGE_SIZE - sizeof(struct flashfs_file_hdr);
+    if (sz <= first_cap)
         return 1;
-
-    r = 1;
-    while (sz > 0) {
-        nxt_page_size = FLASH_PAGE_SIZE -
-            (sizeof(struct flashfs_file_hdr) + strlen(filename) + 1);
-        if (sz < nxt_page_size)
-            nxt_page_size = sz;
-        sz -= nxt_page_size;
-        r++;
-    }
-    return r;
+    sz -= first_cap;
+    return 1 + (sz + cont_cap - 1) / cont_cap;
 }
 
 struct flashfs_file_hdr *get_page_header(uint16_t page)
@@ -350,19 +428,26 @@ static int flash_commit_file_info(struct fnode *fno)
     struct flashfs_fnode *mfno;
     struct flashfs_file_hdr *hdr;
     uint8_t page_cache[FLASH_PAGE_SIZE];
+    char relpath[MAX_FNAME];
+    int pathlen;
 
     mfno = FNO_MOD_PRIV(fno, &mod_flashfs);
     if (!mfno)
         return -ENOENT;
+
+    pathlen = flashfs_build_relpath(fno, relpath, MAX_FNAME);
+    if (pathlen < 0)
+        return -ENAMETOOLONG;
 
     if (flashfs_read_page(mfno->jedec, mfno->startpage, page_cache) < 0)
         return -EIO;
 
     hdr = (struct flashfs_file_hdr *)page_cache;
     hdr->fsize = fno->size;
-    hdr->fname_len = strlen(fno->fname);
-    memcpy(page_cache + sizeof(struct flashfs_file_hdr), fno->fname,
-            hdr->fname_len + 1);
+    hdr->fname_len = pathlen;
+    mfno->on_flash_fname_len = pathlen;
+    memcpy(page_cache + sizeof(struct flashfs_file_hdr), relpath,
+            pathlen + 1);
     if (flashfs_write_page(mfno->jedec, mfno->startpage, page_cache) != 0)
         return -EIO;
     return 0;
@@ -426,7 +511,7 @@ static int flashfs_read(struct fnode *fno, void *buf, unsigned int len)
     int page_off;
     int take = 0;
     int size_in_page = 0;
-    int i;
+    int fname_len;
     if (len <= 0)
         return len;
 
@@ -434,6 +519,7 @@ static int flashfs_read(struct fnode *fno, void *buf, unsigned int len)
     if (!mfno)
         return -ENOENT;
 
+    fname_len = mfno->on_flash_fname_len;
     off = task_fd_get_off(fno);
 
     if (fno->size <= off)
@@ -443,9 +529,11 @@ static int flashfs_read(struct fnode *fno, void *buf, unsigned int len)
         len = fno->size - off;
 
     while (take < len) {
-        if (off < FLASH_PAGE_SIZE - (sizeof(struct flashfs_file_hdr) + strlen(fno->fname) + 1)) {
-            page_off = off + sizeof(struct flashfs_file_hdr) + strlen(fno->fname) + 1;
-            size_in_page = FLASH_PAGE_SIZE - (sizeof(struct flashfs_file_hdr) + strlen(fno->fname) + 1 + off);
+        int first_cap = FLASH_PAGE_SIZE - (sizeof(struct flashfs_file_hdr) + fname_len + 1);
+        int cont_cap = FLASH_PAGE_SIZE - sizeof(struct flashfs_file_hdr);
+        if (off < (uint32_t)first_cap) {
+            page_off = off + sizeof(struct flashfs_file_hdr) + fname_len + 1;
+            size_in_page = first_cap - off;
             if (size_in_page > len - take)
                 size_in_page = len - take;
             if (mfno->jedec) {
@@ -459,23 +547,20 @@ static int flashfs_read(struct fnode *fno, void *buf, unsigned int len)
             take += size_in_page;
             off += size_in_page;
         } else {
-            int page_count = get_page_count_on_flash(fno->fname, off) - 1;
-            if (page_count < 0)
-                return -EIO;
-            page_off = off - FLASH_PAGE_SIZE;
-            page_off += sizeof(struct flashfs_file_hdr) + strlen(fno->fname) + 1;
-            while (page_off > FLASH_PAGE_SIZE) {
-                page_off -= FLASH_PAGE_SIZE;
-                page_off += sizeof(struct flashfs_file_hdr);
-            }
+            int data_off = off - first_cap;
+            int page_idx = 1 + data_off / cont_cap;
+            page_off = sizeof(struct flashfs_file_hdr) + data_off % cont_cap;
             size_in_page = FLASH_PAGE_SIZE - page_off;
+            if (size_in_page > len - take)
+                size_in_page = len - take;
             if (mfno->jedec) {
-                uint32_t addr = (mfno->startpage + page_count) * FLASH_PAGE_SIZE + page_off;
+                uint32_t addr = (mfno->startpage + page_idx) * FLASH_PAGE_SIZE + page_off;
                 if (jedec_spi_flash_read(mfno->jedec, addr, buf + take, size_in_page) < 0)
                     return take > 0 ? take : -EIO;
             } else {
-                content = get_page_content(mfno->startpage + page_count);
-                memcpy(buf + take,  content + page_off, size_in_page);
+                content = (uint8_t *)part_map_base +
+                    (mfno->startpage + page_idx) * FLASH_PAGE_SIZE + page_off;
+                memcpy(buf + take, content, size_in_page);
             }
             take += size_in_page;
             off += size_in_page;
@@ -494,7 +579,8 @@ static int flashfs_write(struct fnode *fno, const void *buf, unsigned int len)
     int ret = 0;
     int page_off;
     int size_in_page = 0;
-    int i;
+    int fname_len;
+    char relpath[MAX_FNAME];
     static uint8_t page_cache[FLASH_PAGE_SIZE];
 
     if (len <= 0)
@@ -504,12 +590,15 @@ static int flashfs_write(struct fnode *fno, const void *buf, unsigned int len)
     if (!mfno)
         return -ENOENT;
 
+    fname_len = mfno->on_flash_fname_len;
     off = task_fd_get_off(fno);
 
     if (fno->size < (off + len)) {
         int new_page_count, old_page_count;
-        old_page_count = get_page_count_on_flash(fno->fname, fno->size);
-        new_page_count = get_page_count_on_flash(fno->fname, off + len);
+        if (flashfs_build_relpath(fno, relpath, MAX_FNAME) < 0)
+            return -ENAMETOOLONG;
+        old_page_count = get_page_count_on_flash(relpath, fno->size);
+        new_page_count = get_page_count_on_flash(relpath, off + len);
         if (new_page_count > old_page_count) {
             int i, n_new_pages;
             n_new_pages = new_page_count - old_page_count;
@@ -542,16 +631,15 @@ static int flashfs_write(struct fnode *fno, const void *buf, unsigned int len)
 actual_write:
     mutex_lock(flashfs_lock);
     while (written < len) {
-        struct flashfs_file_hdr *hdr = (struct flashfs_file_hdr *)page_cache;
-        if (off < FLASH_PAGE_SIZE - (sizeof(struct flashfs_file_hdr) +
-                    strlen(fno->fname)) + 1) {
+        int first_cap = FLASH_PAGE_SIZE - (sizeof(struct flashfs_file_hdr) + fname_len + 1);
+        int cont_cap = FLASH_PAGE_SIZE - sizeof(struct flashfs_file_hdr);
+        if (off < (uint32_t)first_cap) {
             if (flashfs_read_page(mfno->jedec, mfno->startpage, page_cache) < 0) {
                 mutex_unlock(flashfs_lock);
                 return -EIO;
             }
-            page_off = off + sizeof(struct flashfs_file_hdr) + strlen(fno->fname) + 1;
-            size_in_page = FLASH_PAGE_SIZE - (sizeof(struct flashfs_file_hdr) +
-                    strlen(fno->fname) + 1 + off);
+            page_off = off + sizeof(struct flashfs_file_hdr) + fname_len + 1;
+            size_in_page = first_cap - off;
             if (size_in_page > len - written)
                 size_in_page = len - written;
             memcpy(page_cache + page_off, buf + written, size_in_page);
@@ -563,24 +651,9 @@ actual_write:
                 return ret;
             }
         } else {
-            int current_page_n = get_page_count_on_flash(fno->fname, off) - 1;
-            int page_count_verify = 0;
-            if (current_page_n < 0)
-                return -EIO;
-            /* First page */
-            page_off = off - FLASH_PAGE_SIZE;
-            page_off += sizeof(struct flashfs_file_hdr) + strlen(fno->fname) + 1;
-            page_count_verify++;
-
-            /* Subsequent pages */
-            while (page_off > FLASH_PAGE_SIZE) {
-                page_off -= FLASH_PAGE_SIZE;
-                page_off += sizeof(struct flashfs_file_hdr);
-                page_count_verify++;
-            }
-            if ((page_count_verify - 1) != current_page_n) {
-                return -EIO;
-            }
+            int data_off = off - first_cap;
+            int current_page_n = 1 + data_off / cont_cap;
+            page_off = sizeof(struct flashfs_file_hdr) + data_off % cont_cap;
             if (flashfs_read_page(mfno->jedec, mfno->startpage + current_page_n,
                         page_cache) < 0) {
                 mutex_unlock(flashfs_lock);
@@ -682,11 +755,15 @@ static int flashfs_creat(struct fnode *fno)
 {
     struct flashfs_fnode *mfs;
     const struct jedec_spi_flash *jedec = NULL;
-    int page_count = get_page_count_on_flash(fno->fname, fno->size);
-    int first_page;
-    int page;
-    if (fno && fno->parent)
-        jedec = (const struct jedec_spi_flash *)fno->parent->priv;
+    char relpath[MAX_FNAME];
+    int pathlen;
+    int page_count, first_page, page;
+
+    pathlen = flashfs_build_relpath(fno, relpath, MAX_FNAME);
+    if (pathlen < 0)
+        return -ENAMETOOLONG;
+    page_count = get_page_count_on_flash(relpath, fno->size);
+    jedec = flashfs_find_jedec(fno);
     first_page = fs_bmp_find_free(jedec, page_count);
 
     if (first_page < 0)
@@ -705,6 +782,7 @@ static int flashfs_creat(struct fnode *fno)
     if (mfs) {
         mfs->fno = fno;
         mfs->startpage = first_page;
+        mfs->on_flash_fname_len = pathlen;
 #ifdef CONFIG_JEDEC_SPI_FLASH
         mfs->jedec = jedec;
 #endif
@@ -724,12 +802,17 @@ static int flashfs_unlink(struct fnode *fno)
 {
     struct flashfs_fnode *mfno;
     int page, page_count;
+    char relpath[MAX_FNAME];
+    int pathlen;
     if (!fno)
         return -ENOENT;
     mfno = FNO_MOD_PRIV(fno, &mod_flashfs);
     if (!mfno)
         return -EPERM;
-    page_count = get_page_count_on_flash(fno->fname, fno->size);
+    pathlen = flashfs_build_relpath(fno, relpath, MAX_FNAME);
+    if (pathlen < 0)
+        return -ENAMETOOLONG;
+    page_count = get_page_count_on_flash(relpath, fno->size);
     page = mfno->startpage;
     while(page_count--) {
         if (fs_bmp_clear(mfno->jedec, page++) != 0)
@@ -742,18 +825,18 @@ static int flashfs_unlink(struct fnode *fno)
 static int flashfs_truncate(struct fnode *fno, unsigned int newsize)
 {
     struct flashfs_fnode *mfno;
-    struct flashfs_file_hdr *hdr;
     int old_page_count, new_page_count;
+    char relpath[MAX_FNAME];
     if (!fno)
         return -ENOENT;
     mfno = FNO_MOD_PRIV(fno, &mod_flashfs);
     if (mfno) {
-        if (fno->size <= newsize) {
-            /* Nothing to do here. */
+        if (fno->size <= newsize)
             return 0;
-        }
-        old_page_count = get_page_count_on_flash(fno->fname, fno->size);
-        new_page_count = get_page_count_on_flash(fno->fname, newsize);
+        if (flashfs_build_relpath(fno, relpath, MAX_FNAME) < 0)
+            return -ENAMETOOLONG;
+        old_page_count = get_page_count_on_flash(relpath, fno->size);
+        new_page_count = get_page_count_on_flash(relpath, newsize);
         while (old_page_count > new_page_count) {
             if (fs_bmp_clear(mfno->jedec, mfno->startpage + (--old_page_count)) != 0)
                 return -EIO;
@@ -865,10 +948,27 @@ static int flashfs_mount(char *source, char *tgt, uint32_t flags, void *arg)
                 }
                 if (hdr) {
                     if (fname) {
+                        struct fnode *parent_dir = tgt_dir;
+                        char *basename = fname;
+                        int fname_total_len = strlen(fname);
+
+                        /* Parse '/' separators to create directory tree */
+                        char *slash = basename;
+                        while (*slash) {
+                            if (*slash == '/') {
+                                parent_dir = flashfs_ensure_dir(parent_dir,
+                                    basename, slash - basename);
+                                if (!parent_dir)
+                                    return -ENOMEM;
+                                basename = slash + 1;
+                            }
+                            slash++;
+                        }
+
                         fpriv = pool_alloc(&flashfs_fnode_pool);
                         if (!fpriv)
                             return -ENOMEM;
-                        fno = fno_create_raw(&mod_flashfs, fname, tgt_dir);
+                        fno = fno_create_raw(&mod_flashfs, basename, parent_dir);
                         if (!fno) {
                             pool_free(&flashfs_fnode_pool, fpriv);
                             return -ENOMEM;
@@ -876,10 +976,11 @@ static int flashfs_mount(char *source, char *tgt, uint32_t flags, void *arg)
                         fno->priv = fpriv;
                         fpriv->fno = fno;
                         fpriv->startpage = page;
+                        fpriv->on_flash_fname_len = fname_total_len;
 #ifdef CONFIG_JEDEC_SPI_FLASH
                         fpriv->jedec = jedec;
 #endif
-                        fno->size = fsz; /* Size of content */
+                        fno->size = fsz;
 #ifdef CONFIG_JEDEC_SPI_FLASH
                         fno->flags = jedec ? (FL_RDONLY | FL_EXEC) : (FL_RDWR | FL_EXEC);
 #else

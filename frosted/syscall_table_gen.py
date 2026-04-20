@@ -118,10 +118,12 @@ syscalls = [
 #######
 #################################################################
 hdr = open("../frosted-headers/include/sys/frosted.h", "w")
+kernel_hdr = open("include/syscalls.h", "w")
 usercode = open("../frosted-headers/sys/frosted_syscalls.c", "w")
 code = open("syscall_table.c", "w")
 
 hdr.write("/* The file frosted.h is auto generated. DO NOT EDIT, CHANGES WILL BE LOST. */\n/* If you want to add syscalls, use syscall_table_gen.py  */\n\n")
+kernel_hdr.write("/* The file frosted.h is auto generated. DO NOT EDIT, CHANGES WILL BE LOST. */\n/* If you want to add syscalls, use syscall_table_gen.py  */\n\n")
 usercode.write("/* The file frosted_syscalls.c is auto generated. DO NOT EDIT, CHANGES WILL BE LOST. */\n/* If you want to add syscalls, use syscall_table_gen.py  */\n\n#include <stdint.h>\n#include \"sys/frosted.h\"\nint syscall(uint32_t nr, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5);\n\n")
 
 code.write("/* The file syscall_table.c is auto generated. DO NOT EDIT, CHANGES WILL BE LOST. */\n/* If you want to add syscalls, use syscall_table_gen.py  */\n\n#include \"frosted.h\"\n#include \"sys/frosted.h\"\n")
@@ -129,7 +131,9 @@ code.write("/* The file syscall_table.c is auto generated. DO NOT EDIT, CHANGES 
 for n in range(len(syscalls)):
     name = syscalls[n][0]
     hdr.write("#define SYS_%s \t\t\t(%d)\n" % (name.upper(), n))
+    kernel_hdr.write("#define SYS_%s \t\t\t(%d)\n" % (name.upper(), n))
 hdr.write("#define _SYSCALLS_NR (%d) /* We have %d syscalls! */\n" % (len(syscalls), len(syscalls)))
+kernel_hdr.write("#define _SYSCALLS_NR (%d) /* We have %d syscalls! */\n" % (len(syscalls), len(syscalls)))
 
 for n in range(len(syscalls)):
     name = syscalls[n][0]
@@ -167,6 +171,7 @@ for n in range(len(syscalls)):
         usercode.write("\n")
 
 usercode.close()
+kernel_hdr.close()
 
 
 code.write("/* External handlers (defined elsewhere) : */ \n")

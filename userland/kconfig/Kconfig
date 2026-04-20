@@ -190,6 +190,12 @@ endmenu
 menu "Interpreters"
 config APP_PYTHON
     bool "python interpreter (micropython)"
+config MICROPYTHON_THREAD
+    bool "MicroPython _thread module"
+    depends on APP_PYTHON
+config MICROPYTHON_UNIX_FFI
+    bool "MicroPython FFI (unix-ffi modules)"
+    depends on APP_PYTHON
 endmenu
 
 

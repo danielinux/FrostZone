@@ -106,9 +106,8 @@ static void xipfs_path_abs(const char *src, char *dst, int len)
     dst[0] = '\0';
     if (cwd && (fno_fullpath(cwd, dst, len) > 0)) {
         int nlen = strlen(dst);
-        while ((nlen > 1) && (dst[nlen - 1] == '/')) {
+        while ((nlen > 1) && (dst[nlen - 1] == '/'))
             dst[--nlen] = '\0';
-        }
         strncat(dst, "/", len);
         strncat(dst, src, len);
     } else {
@@ -124,9 +123,8 @@ static struct dlopen_handle *dlopen_handle_lookup(uint16_t pid, void *handle)
     for (i = 0; i < MAX_DLOPEN_LIBS; i++) {
         if (dlopen_handles[i].in_use &&
             (dlopen_handles[i].owner_pid == pid) &&
-            (handle == &dlopen_handles[i])) {
+            (handle == &dlopen_handles[i]))
             return &dlopen_handles[i];
-        }
     }
     return NULL;
 }
@@ -138,9 +136,8 @@ static struct dlopen_handle *dlopen_handle_find_lib(uint16_t pid, uint8_t lib_id
     for (i = 0; i < MAX_DLOPEN_LIBS; i++) {
         if (dlopen_handles[i].in_use &&
             (dlopen_handles[i].owner_pid == pid) &&
-            (dlopen_handles[i].lib_id == lib_id)) {
+            (dlopen_handles[i].lib_id == lib_id))
             return &dlopen_handles[i];
-        }
     }
     return NULL;
 }
@@ -169,7 +166,6 @@ static int shlib_symbol_ordinal(const struct loaded_shlib *sl, const char *name)
         if (strcmp(export_name, name) == 0)
             return (int)ordinal;
     }
-
     return -1;
 }
 #endif
@@ -450,25 +446,30 @@ static struct loaded_shlib *shlib_register(uint8_t lib_id)
                 export_cnt = long_be(hdr.filler[FLAT_SHLIB_EXPORT_CNT]);
                 sl->export_count = export_cnt;
 
-                sl->export_offsets = NULL;
-                sl->export_name_offsets = NULL;
-                sl->export_strings = NULL;
-
                 /* Export table:
-                 * v1: version,count,offsets[]
-                 * v2: version,count,strtab_off,offsets[],name_offsets[],strtab
+                 *   v1: version(4) + count(4) + offsets[]
+                 *   v2: version(4) + count(4) + strtab_off(4) +
+                 *       offsets[] + name_offsets[] + strings
                  */
                 if (export_off && export_cnt) {
                     const uint32_t *etab = (const uint32_t *)(payload + export_off);
                     sl->version = long_be(etab[0]);
+                    sl->export_offsets = NULL;
+                    sl->export_name_offsets = NULL;
+                    sl->export_strings = NULL;
                     if (sl->version >= 2) {
+                        uint32_t strtab_off = long_be(etab[2]);
                         sl->export_offsets = &etab[3];
                         sl->export_name_offsets = &etab[3 + export_cnt];
                         sl->export_strings =
-                            (const char *)(((const uint8_t *)etab) + long_be(etab[2]));
+                            (const char *)(((const uint8_t *)etab) + strtab_off);
                     } else {
                         sl->export_offsets = &etab[2];
                     }
+                } else {
+                    sl->export_offsets = NULL;
+                    sl->export_name_offsets = NULL;
+                    sl->export_strings = NULL;
                 }
                 kprintf("xipfs: registered shlib id=%d (%s) version=%lu exports=%lu\n",
                         lib_id, f->name, sl->version, (unsigned long)export_cnt);
