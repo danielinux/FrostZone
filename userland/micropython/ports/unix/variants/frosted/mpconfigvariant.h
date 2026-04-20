@@ -45,6 +45,7 @@
 #define MICROPY_ALLOC_PARSE_RESULT_INC (8)
 #define MICROPY_ALLOC_PARSE_CHUNK_INIT (64)
 
+
 // Enable features that are not enabled by default with the minimum config.
 #define MICROPY_COMP_CONST_FOLDING (1)
 #define MICROPY_COMP_CONST_LITERAL (1)

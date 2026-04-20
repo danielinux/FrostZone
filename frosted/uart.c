@@ -141,10 +141,12 @@ static void stm32_uart_irq_handler(struct stm32_uart_port *port)
         uint8_t data = (uint8_t)port->regs->RDR;
 
         if (cirbuf_writebyte(port->rxbuf, data) == 0) {
-            waiting = port->dev->task;
-            if (waiting) {
-                port->dev->task = NULL;
-                task_resume(waiting);
+            if (port->dev) {
+                waiting = port->dev->task;
+                if (waiting) {
+                    port->dev->task = NULL;
+                    task_resume(waiting);
+                }
             }
             if (data == 0x03 && port->sid > 1) {
                 tasklet_add(stm32_uart_break_tasklet, port);

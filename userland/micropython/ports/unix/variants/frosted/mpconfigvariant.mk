@@ -36,13 +36,16 @@ CFLAGS_EXTRA += \
     -D__Frosted__ \
     -DMICROPY_VFS_POSIX_HAVE_STATVFS=0 \
     -DMICROPY_VFS_POSIX_HAVE_D_TYPE=0 \
-    -DMICROPY_PORT_HEAP_SIZE=32768 \
-    -DMICROPY_UNIX_STACK_SIZE=6144 \
+    -DMICROPY_PORT_HEAP_SIZE=24576 \
+    -DMICROPY_UNIX_STACK_SIZE=12288 \
     -DUNIX_STACK_MULTIPLIER=1 \
     -DMICROPY_READLINE_MAX_LINE_LEN=2048 \
     -mthumb -mlittle-endian -mthumb-interwork \
     -ffunction-sections -fdata-sections \
-    -fPIC -mlong-calls -fno-common -msingle-pic-base -mno-pic-data-is-text-relative
+    -fPIC -mlong-calls -fno-common -msingle-pic-base -mno-pic-data-is-text-relative \
+    -fno-ipa-ra -fno-ipa-sra -fno-ipa-cp
+
+COPT = -O1 -DNDEBUG
 
 LDFLAGS_EXTRA += -nostartfiles -nostdlib -fPIC -mlong-calls -fno-common -Wl,-elf2flt -Wl,--allow-multiple-definition -Wl,--start-group,-lc,-lgloss,-lgcc,--end-group
 

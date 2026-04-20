@@ -334,6 +334,14 @@ int devspi_xfer(struct spi_slave *sl, const char *obuf, char *ibuf, unsigned int
             while (!(SPI_SR(spi->base) & SPI_SR_TXP) && tx_retries--)
                 ;
             if (tx_retries == 0U) {
+                kprintf("[devspi] TX timeout bus=%u base=0x%08lx i=%lu chunk=%lu sr=0x%08lx cr1=0x%08lx cr2=0x%08lx\n",
+                        (unsigned)sl->bus,
+                        (unsigned long)spi->base,
+                        (unsigned long)i,
+                        (unsigned long)chunk,
+                        (unsigned long)SPI_SR(spi->base),
+                        (unsigned long)SPI_CR1(spi->base),
+                        (unsigned long)SPI_CR2(spi->base));
                 mutex_unlock(spi->mutex);
                 return -ETIMEDOUT;
             }
@@ -342,6 +350,14 @@ int devspi_xfer(struct spi_slave *sl, const char *obuf, char *ibuf, unsigned int
             while (!(SPI_SR(spi->base) & SPI_SR_RXP) && rx_retries--)
                 ;
             if (rx_retries == 0U) {
+                kprintf("[devspi] RX timeout bus=%u base=0x%08lx i=%lu chunk=%lu sr=0x%08lx cr1=0x%08lx cr2=0x%08lx\n",
+                        (unsigned)sl->bus,
+                        (unsigned long)spi->base,
+                        (unsigned long)i,
+                        (unsigned long)chunk,
+                        (unsigned long)SPI_SR(spi->base),
+                        (unsigned long)SPI_CR1(spi->base),
+                        (unsigned long)SPI_CR2(spi->base));
                 mutex_unlock(spi->mutex);
                 return -ETIMEDOUT;
             }

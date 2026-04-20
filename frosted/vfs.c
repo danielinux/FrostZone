@@ -458,7 +458,9 @@ struct fnode *fno_create(struct module *owner, const char *name, struct fnode *p
 struct fnode *fno_create_wronly(struct module *owner, const char *name, struct fnode *parent)
 {
     struct fnode *fno = _fno_create(owner, name, parent);
-    if (fno && parent && parent->owner && parent->owner->ops.creat)
+    if (!fno)
+        return NULL;
+    if (parent && parent->owner && parent->owner->ops.creat)
         parent->owner->ops.creat(fno);
     fno->flags = FL_WRONLY;
     return fno;
@@ -467,7 +469,9 @@ struct fnode *fno_create_wronly(struct module *owner, const char *name, struct f
 struct fnode *fno_create_rdonly(struct module *owner, const char *name, struct fnode *parent)
 {
     struct fnode *fno = _fno_create(owner, name, parent);
-    if (fno && parent && parent->owner && parent->owner->ops.creat)
+    if (!fno)
+        return NULL;
+    if (parent && parent->owner && parent->owner->ops.creat)
         parent->owner->ops.creat(fno);
     fno->flags = FL_RDONLY;
     return fno;
@@ -476,6 +480,8 @@ struct fnode *fno_create_rdonly(struct module *owner, const char *name, struct f
 struct fnode *fno_mkdir(struct module *owner, const char *name, struct fnode *parent)
 {
     struct fnode *fno = _fno_create(owner, name, parent);
+    if (!fno)
+        return NULL;
     fno->flags |= (FL_DIR | FL_RDWR);
     if (parent && parent->owner && parent->owner->ops.creat)
         parent->owner->ops.creat(fno);
@@ -483,19 +489,19 @@ struct fnode *fno_mkdir(struct module *owner, const char *name, struct fnode *pa
     return fno;
 }
 
-void fno_unlink(struct fnode *fno)
+/*
+ * fno_detach — remove `fno` from the parent's children list and release it
+ * back to the fnode pool, without invoking ops.unlink. Intended for cache
+ * eviction of lazily-materialised fnodes that have no on-storage identity
+ * to forget. Do NOT use for real deletes.
+ */
+void fno_detach(struct fnode *fno)
 {
     struct fnode *dir;
 
     if (!fno)
         return;
     dir = fno->parent;
-
-    if (fno && fno->owner && fno->owner->ops.unlink)
-        fno->owner->ops.unlink(fno);
-
-    if (!fno)
-        return;
 
     if (dir) {
         struct fnode *child = dir->children;
@@ -512,8 +518,18 @@ void fno_unlink(struct fnode *fno)
         }
     }
 
-
     pool_free(&fnode_pool, fno);
+}
+
+void fno_unlink(struct fnode *fno)
+{
+    if (!fno)
+        return;
+
+    if (fno->owner && fno->owner->ops.unlink)
+        fno->owner->ops.unlink(fno);
+
+    fno_detach(fno);
 }
 
 int sys_readlink_hdlr(char *path, char *buf, size_t size)

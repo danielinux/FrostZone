@@ -20,10 +20,13 @@
 
 #define JEDEC_SECTOR_SIZE    4096
 
-/* JEDEC capacity codes to bytes */
+/* JEDEC capacity codes to bytes.
+ * Standard RDID encoding: capacity byte == log2(total_bytes). */
 static uint32_t jedec_capacity_code_to_bytes(uint16_t code)
 {
-    return (1UL << (code + 8));
+    if (code == 0 || code >= 32)
+        return 0;
+    return (1UL << code);
 }
 
 struct jedec_spi_flash {

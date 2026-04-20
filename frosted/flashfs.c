@@ -33,6 +33,7 @@ static mutex_t *flashfs_lock;
 #endif
 
 #define F_PREV_PAGE 0xFFFE
+#define F_DIR_FLAG  0x8000   /* top bit of fname_len marks a directory entry */
 
 #if defined(TARGET_rp2350)
 #define PART_MAP_BASE_DEFAULT (0x101F0000U)
@@ -165,27 +166,6 @@ static const struct jedec_spi_flash *flashfs_find_jedec(struct fnode *fno)
     }
 #endif
     return NULL;
-}
-
-/* Find or create a directory fnode under parent for a given component name */
-static struct fnode *flashfs_ensure_dir(struct fnode *parent, const char *name, int namelen)
-{
-    struct fnode *child;
-    char component[CONFIG_MAX_FNAME];
-    if (namelen >= CONFIG_MAX_FNAME)
-        namelen = CONFIG_MAX_FNAME - 1;
-    memcpy(component, name, namelen);
-    component[namelen] = '\0';
-
-    /* Search existing children */
-    child = parent->children;
-    while (child) {
-        if ((child->flags & FL_DIR) && strcmp(child->fname, component) == 0)
-            return child;
-        child = child->next;
-    }
-    /* Create new directory fnode */
-    return fno_mkdir(&mod_flashfs, component, parent);
 }
 
 /* Bitmap in last N flash pages. Inverted logic (starts at 0xFF when formatted).
@@ -759,11 +739,24 @@ static int flashfs_creat(struct fnode *fno)
     int pathlen;
     int page_count, first_page, page;
 
+    if (!fno)
+        return -EINVAL;
+    /* Directory fnodes have no on-flash representation — they're
+     * materialised from file-path prefixes at lookup time. */
+    if (fno->flags & FL_DIR)
+        return 0;
+    jedec = flashfs_find_jedec(fno);
+#ifdef CONFIG_JEDEC_SPI_FLASH
+    /* JEDEC-backed mounts are read-only here; writing would corrupt the
+     * backing image with zero-byte placeholder headers. */
+    if (jedec)
+        return -EROFS;
+#endif
+
     pathlen = flashfs_build_relpath(fno, relpath, MAX_FNAME);
     if (pathlen < 0)
         return -ENAMETOOLONG;
     page_count = get_page_count_on_flash(relpath, fno->size);
-    jedec = flashfs_find_jedec(fno);
     first_page = fs_bmp_find_free(jedec, page_count);
 
     if (first_page < 0)
@@ -847,17 +840,156 @@ static int flashfs_truncate(struct fnode *fno, unsigned int newsize)
     return -EFAULT;
 }
 
+/*
+ * Read the header and filename for `page` into caller-provided buffers.
+ * Returns 1 if the page holds a valid entry (file or directory), 2 for a
+ * directory entry, 0 if the page is used but is a continuation or
+ * unreadable header, -EIO on read error.
+ * On success, `*out_hdr` has fname_len stripped of the DIR flag, and
+ * `out_fname` is null-terminated. out_fname must be at least
+ * MAX_FNAME+1 bytes.
+ */
+#define FLASHFS_ENTRY_FILE 1
+#define FLASHFS_ENTRY_DIR  2
+
+static int flashfs_read_entry(const struct jedec_spi_flash *jedec, uint32_t page,
+        struct flashfs_file_hdr *out_hdr, char *out_fname)
+{
+    uint8_t page_cache[FLASH_PAGE_SIZE];
+    struct flashfs_file_hdr *hdr;
+    uint16_t raw_len;
+    int is_dir;
+    uint16_t name_len;
+
+#ifdef CONFIG_JEDEC_SPI_FLASH
+    if (jedec) {
+        if (flashfs_read_jedec_page(jedec, page, page_cache) < 0)
+            return -EIO;
+        hdr = (struct flashfs_file_hdr *)page_cache;
+    } else
+#endif
+    {
+        /* For internal flash, read straight from the XIP-mapped partition. */
+        hdr = (struct flashfs_file_hdr *)(uintptr_t)
+            (part_map_base + page * FLASH_PAGE_SIZE);
+    }
+
+    raw_len = hdr->fname_len;
+    if (raw_len == 0xFFFF || raw_len == 0x0000 || raw_len == F_PREV_PAGE)
+        return 0;
+
+    is_dir = (raw_len & F_DIR_FLAG) != 0;
+    name_len = (uint16_t)(raw_len & ~F_DIR_FLAG);
+    if (name_len == 0 || name_len > MAX_FNAME)
+        return 0;
+
+#ifdef CONFIG_JEDEC_SPI_FLASH
+    if (jedec) {
+        if (page_cache[sizeof(*hdr) + name_len] != 0)
+            return 0;
+        memcpy(out_hdr, hdr, sizeof(*hdr));
+        out_hdr->fname_len = name_len;
+        memcpy(out_fname, page_cache + sizeof(*hdr), name_len);
+        out_fname[name_len] = '\0';
+        return is_dir ? FLASHFS_ENTRY_DIR : FLASHFS_ENTRY_FILE;
+    }
+#endif
+    {
+        const char *fname = (const char *)hdr + sizeof(*hdr);
+        if (fname[name_len] != 0)
+            return 0;
+        memcpy(out_hdr, hdr, sizeof(*hdr));
+        out_hdr->fname_len = name_len;
+        memcpy(out_fname, fname, name_len);
+        out_fname[name_len] = '\0';
+    }
+    return is_dir ? FLASHFS_ENTRY_DIR : FLASHFS_ENTRY_FILE;
+}
+
+/*
+ * Build the on-flash relative path of a directory fnode `dir`, by walking up
+ * the parent chain until we reach the mount point (first ancestor whose
+ * parent is not owned by flashfs). Writes "" if `dir` is the mount dir.
+ * Returns the written length, or -1 on truncation/overflow.
+ */
+static int flashfs_dir_relpath(struct fnode *dir, char *buf, int buflen)
+{
+    struct fnode *chain[8];
+    int depth = 0;
+    struct fnode *cur = dir;
+    int pos = 0;
+    int i;
+
+    while (cur && depth < 8) {
+        if (!cur->parent || cur->parent == cur ||
+                cur->parent->owner != &mod_flashfs)
+            break; /* cur is the mount dir — don't include */
+        chain[depth++] = cur;
+        cur = cur->parent;
+    }
+
+    if (depth == 0) {
+        if (buflen < 1)
+            return -1;
+        buf[0] = '\0';
+        return 0;
+    }
+
+    for (i = depth - 1; i >= 0; i--) {
+        int slen = strlen(chain[i]->fname);
+        if (pos + slen + (i > 0 ? 1 : 0) >= buflen)
+            return -1;
+        memcpy(buf + pos, chain[i]->fname, slen);
+        pos += slen;
+        if (i > 0)
+            buf[pos++] = '/';
+    }
+    buf[pos] = '\0';
+    return pos;
+}
+
+/*
+ * Walk up from `fno` to find the mount-point fnode (first flashfs-owned
+ * ancestor whose parent is not flashfs). Returns NULL if not inside a
+ * flashfs tree.
+ */
+static struct fnode *flashfs_find_mount(struct fnode *fno)
+{
+    struct fnode *cur = fno;
+    while (cur && cur->owner == &mod_flashfs) {
+        if (!cur->parent || cur->parent == cur ||
+                cur->parent->owner != &mod_flashfs)
+            return cur;
+        cur = cur->parent;
+    }
+    return NULL;
+}
+
+static const struct jedec_spi_flash *flashfs_jedec_for(struct fnode *fno)
+{
+#ifdef CONFIG_JEDEC_SPI_FLASH
+    struct fnode *mnt = flashfs_find_mount(fno);
+    if (mnt)
+        return (const struct jedec_spi_flash *)mnt->priv;
+#endif
+    (void)fno;
+    return NULL;
+}
+
+/*
+ * Lazy mount: record the backing device on the mount fnode and return.
+ * No eager scan of files; entries are materialised on demand in
+ * flashfs_lookup / flashfs_readdir, and released naturally when the
+ * fnode pool needs the slots.
+ */
 static int flashfs_mount(char *source, char *tgt, uint32_t flags, void *arg)
 {
-    struct fnode *tgt_dir = NULL, *fno = NULL;
-    struct flashfs_fnode *fpriv;
-    int page;
-    struct flashfs_file_hdr *hdr;
+    struct fnode *tgt_dir = NULL;
 #ifdef CONFIG_JEDEC_SPI_FLASH
     const struct jedec_spi_flash *jedec = NULL;
-    uint8_t page_cache[FLASH_PAGE_SIZE];
-    uint8_t bitmap_cache[FLASH_PAGE_SIZE];
 #endif
+    (void)flags;
+    (void)arg;
 
 #ifdef CONFIG_JEDEC_SPI_FLASH
     if (source) {
@@ -870,128 +1002,370 @@ static int flashfs_mount(char *source, char *tgt, uint32_t flags, void *arg)
         return -ENODEV;
 #endif
 
-    /* Target must be a valid dir */
     if (!tgt)
         return -EINVAL;
 
     tgt_dir = fno_search(tgt);
-
-    if (!tgt_dir || ((tgt_dir->flags & FL_DIR) == 0)) {
-        /* Not a valid mountpoint. */
+    if (!tgt_dir || ((tgt_dir->flags & FL_DIR) == 0))
         return -ENOTDIR;
-    }
+
     tgt_dir->owner = &mod_flashfs;
 #ifdef CONFIG_JEDEC_SPI_FLASH
     tgt_dir->priv = (void *)jedec;
-    if (jedec) {
-        kprintf("flashfs: mounting JEDEC source %s on %s\n",
-                source ? source : "/dev/spiflash0", tgt);
-    }
 #else
     tgt_dir->priv = NULL;
 #endif
-    {
-        uint32_t max_pages;
-#ifdef CONFIG_JEDEC_SPI_FLASH
-        max_pages = flashfs_usable_pages(jedec);
-#else
-        max_pages = flashfs_usable_pages(NULL);
-#endif
-        for (page = 0; page < (int)max_pages; page++) {
-            int page_used;
+    return 0;
+}
 
-#ifdef CONFIG_JEDEC_SPI_FLASH
-            if (jedec) {
-                if ((page & 0x1F) == 0)
-                    kprintf("flashfs: scan page %d/%d\n", page, (int)max_pages);
-                /* Reload bitmap cache when crossing a bitmap page boundary */
-                if ((page % BITS_PER_BMP_PAGE) == 0) {
-                    uint32_t bp = bmp_flash_page_for(jedec, page);
-                    if (flashfs_read_page(jedec, bp, bitmap_cache) < 0)
-                        return -EIO;
-                }
-                {
-                    uint32_t byte_off = (page % BITS_PER_BMP_PAGE) / 8;
-                    page_used = !(bitmap_cache[byte_off] & (1 << (page & 7)));
-                }
-            } else
-#endif
-            {
-                page_used = fs_bmp_test(NULL, page);
-            }
+/*
+ * Single-page bitmap cache used by scan loops (lookup / readdir).
+ * The tag pairs (jedec pointer, bitmap flash-page number) uniquely identify
+ * the cached content.
+ */
+static uint8_t flashfs_bmp_cache[FLASH_PAGE_SIZE];
+static const struct jedec_spi_flash *flashfs_bmp_cache_jedec;
+static uint32_t flashfs_bmp_cache_page = 0xFFFFFFFFu;
 
-            if (page_used) {
-                char *fname = NULL;
-                uint32_t fsz = 0;
+/*
+ * On-demand page_used probe. Keeps one bitmap page cached across calls,
+ * so sequential scans don't thrash the backing store.
+ */
+static int flashfs_page_used(const struct jedec_spi_flash *jedec, uint32_t page)
+{
 #ifdef CONFIG_JEDEC_SPI_FLASH
-                if (jedec) {
-                    if (flashfs_read_jedec_page(jedec, page, page_cache) < 0)
-                        return -EIO;
-                    hdr = (struct flashfs_file_hdr *)page_cache;
-                    if ((hdr->fname_len == 0xFFFF) || (hdr->fname_len == 0x0000)
-                            || (hdr->fname_len == F_PREV_PAGE))
-                        hdr = NULL;
-                    if (hdr && hdr->fname_len <= MAX_FNAME &&
-                            page_cache[sizeof(struct flashfs_file_hdr) + hdr->fname_len] == 0) {
-                        fname = (char *)page_cache + sizeof(struct flashfs_file_hdr);
-                        fsz = hdr->fsize;
-                    }
-                } else
-#endif
-                {
-                    hdr = get_page_header(page);
-                    if (hdr) {
-                        fname = get_page_filename(page);
-                        if (fname)
-                            fsz = get_content_size(page);
-                    }
-                }
-                if (hdr) {
-                    if (fname) {
-                        struct fnode *parent_dir = tgt_dir;
-                        char *basename = fname;
-                        int fname_total_len = strlen(fname);
-
-                        /* Parse '/' separators to create directory tree */
-                        char *slash = basename;
-                        while (*slash) {
-                            if (*slash == '/') {
-                                parent_dir = flashfs_ensure_dir(parent_dir,
-                                    basename, slash - basename);
-                                if (!parent_dir)
-                                    return -ENOMEM;
-                                basename = slash + 1;
-                            }
-                            slash++;
-                        }
-
-                        fpriv = pool_alloc(&flashfs_fnode_pool);
-                        if (!fpriv)
-                            return -ENOMEM;
-                        fno = fno_create_raw(&mod_flashfs, basename, parent_dir);
-                        if (!fno) {
-                            pool_free(&flashfs_fnode_pool, fpriv);
-                            return -ENOMEM;
-                        }
-                        fno->priv = fpriv;
-                        fpriv->fno = fno;
-                        fpriv->startpage = page;
-                        fpriv->on_flash_fname_len = fname_total_len;
-#ifdef CONFIG_JEDEC_SPI_FLASH
-                        fpriv->jedec = jedec;
-#endif
-                        fno->size = fsz;
-#ifdef CONFIG_JEDEC_SPI_FLASH
-                        fno->flags = jedec ? (FL_RDONLY | FL_EXEC) : (FL_RDWR | FL_EXEC);
-#else
-                        fno->flags = FL_RDWR | FL_EXEC;
-#endif
-                    }
-                }
-            }
+    if (jedec) {
+        uint32_t bp = bmp_flash_page_for(jedec, page);
+        uint32_t byte_off;
+        if (jedec != flashfs_bmp_cache_jedec || bp != flashfs_bmp_cache_page) {
+            if (flashfs_read_page(jedec, bp, flashfs_bmp_cache) < 0)
+                return -1;
+            flashfs_bmp_cache_jedec = jedec;
+            flashfs_bmp_cache_page = bp;
         }
+        byte_off = (page % BITS_PER_BMP_PAGE) / 8;
+        return !(flashfs_bmp_cache[byte_off] & (1 << (page & 7)));
+    }
+#endif
+    return fs_bmp_test(NULL, page);
+}
+
+/*
+ * Cache eviction. flashfs fnodes are materialised on demand by lookup, so
+ * the VFS fnode pool effectively acts as a bounded cache over the on-flash
+ * entries. When it fills up, prune a flashfs-owned file fnode that isn't
+ * currently open (usage_count == 0, FL_INUSE clear). Never evicts the
+ * mount dir or any other directory — those are cheap to keep live and
+ * re-creating them would require another flash prefix scan.
+ *
+ * This does NOT go through fno_unlink / ops.unlink: that path intentionally
+ * clears the on-flash bitmap (a real delete). Eviction is purely in-RAM.
+ */
+static int flashfs_evict_one(void)
+{
+    uint32_t i;
+    for (i = 0; i < flashfs_fnode_pool.capacity; i++) {
+        struct flashfs_fnode *mfs;
+        struct fnode *fno;
+        /* freemap bit == 1 means slot is free, 0 means in use. */
+        if (flashfs_fnode_pool.freemap[i >> 5] & (1u << (i & 31)))
+            continue;
+        mfs = ((struct flashfs_fnode *)flashfs_fnode_pool.base) + i;
+        fno = mfs->fno;
+        if (!fno || fno->owner != &mod_flashfs)
+            continue;
+        if (fno->flags & (FL_DIR | FL_INUSE))
+            continue;
+        if (fno->usage_count != 0)
+            continue;
+        /* Detach without invoking ops.unlink — purely a cache eviction,
+         * not a real delete against the backing store. */
+        fno->priv = NULL;
+        pool_free(&flashfs_fnode_pool, mfs);
+        fno_detach(fno);
+        return 1;
     }
     return 0;
+}
+
+/*
+ * Allocate an fnode under `dir` named `name`, evicting a stale cache entry
+ * if the pool is exhausted.
+ *
+ * Directory fnodes synthesised here are purely in-RAM views of an on-flash
+ * path prefix, so we MUST NOT route them through fno_mkdir: that helper
+ * would invoke parent->owner->ops.creat (= flashfs_creat), which allocates
+ * a flash page and commits a zero-byte file header. Doing so on every
+ * lookup polluted the backing image with phantom entries named after each
+ * subdirectory ("collections", "html", ...). We also skip mkdir_links —
+ * lazy dirs don't need "." / ".." fnodes consuming pool slots.
+ */
+static struct fnode *flashfs_create_cached(struct fnode *dir, const char *name,
+        int is_dir)
+{
+    struct fnode *fno;
+    int retry;
+    for (retry = 0; retry < 2; retry++) {
+        fno = fno_create_raw(&mod_flashfs, name, dir);
+        if (fno) {
+            if (is_dir)
+                fno->flags |= FL_DIR;
+            return fno;
+        }
+        if (!flashfs_evict_one())
+            return NULL;
+    }
+    return NULL;
+}
+
+/*
+ * Attach an existing unclaimed fnode (created by fno_create_raw) to a
+ * newly-allocated flashfs_fnode describing the on-flash file at `page`.
+ */
+static int flashfs_attach_file(struct fnode *fno,
+        const struct jedec_spi_flash *jedec, uint32_t page, uint32_t fsize,
+        int fname_total_len)
+{
+    struct flashfs_fnode *mfs = pool_alloc(&flashfs_fnode_pool);
+    if (!mfs)
+        return -ENOMEM;
+    mfs->fno = fno;
+    mfs->startpage = page;
+    mfs->on_flash_fname_len = fname_total_len;
+#ifdef CONFIG_JEDEC_SPI_FLASH
+    mfs->jedec = jedec;
+#else
+    (void)jedec;
+#endif
+    fno->priv = mfs;
+    fno->size = fsize;
+#ifdef CONFIG_JEDEC_SPI_FLASH
+    fno->flags = jedec ? (FL_RDONLY | FL_EXEC) : (FL_RDWR | FL_EXEC);
+#else
+    fno->flags = FL_RDWR | FL_EXEC;
+#endif
+    return 0;
+}
+
+/*
+ * Lazy lookup: scan the on-flash bitmap + headers for a file whose on-flash
+ * path matches "<dir_relpath>/<name>" (or just "<name>" if dir is the mount
+ * point). If no exact file match but some file lives under that name as a
+ * directory prefix, synthesise a directory fnode. Returns NULL if the name
+ * is not present in the mount.
+ */
+static struct fnode *flashfs_lookup(struct fnode *dir, const char *name)
+{
+    const struct jedec_spi_flash *jedec;
+    char dir_path[MAX_FNAME + 1];
+    char target[MAX_FNAME + 1];
+    char fname[MAX_FNAME + 1];
+    struct flashfs_file_hdr hdr;
+    uint32_t max_pages;
+    uint32_t page;
+    int dlen;
+    int tlen;
+    struct fnode *fno;
+
+    if (!dir || !name)
+        return NULL;
+
+    dlen = flashfs_dir_relpath(dir, dir_path, sizeof(dir_path));
+    if (dlen < 0)
+        return NULL;
+    {
+        int nlen = strlen(name);
+        if (dlen == 0) {
+            if (nlen >= (int)sizeof(target))
+                return NULL;
+            memcpy(target, name, nlen + 1);
+            tlen = nlen;
+        } else {
+            if (dlen + 1 + nlen >= (int)sizeof(target))
+                return NULL;
+            memcpy(target, dir_path, dlen);
+            target[dlen] = '/';
+            memcpy(target + dlen + 1, name, nlen + 1);
+            tlen = dlen + 1 + nlen;
+        }
+    }
+
+    jedec = flashfs_jedec_for(dir);
+    max_pages = flashfs_usable_pages(jedec);
+
+    for (page = 0; page < max_pages; page++) {
+        int used = flashfs_page_used(jedec, page);
+        int rc;
+        int cmp;
+        if (used < 0)
+            return NULL;
+        if (!used)
+            continue;
+        rc = flashfs_read_entry(jedec, page, &hdr, fname);
+        if (rc <= 0)
+            continue;
+
+        /* Sorted layout lets us short-circuit once we're past the target
+         * window. "target" < "target/..." bytewise (NUL < '/'), so the
+         * first entry with fname[0..tlen-1] > target terminates the scan. */
+        cmp = strncmp(fname, target, tlen);
+        if (cmp > 0)
+            break;
+        if (cmp == 0 && fname[tlen] != '\0' && fname[tlen] != '/')
+            break;
+        if (cmp < 0)
+            continue;
+
+        /* Exact name match — could be a FILE entry or a DIR entry. */
+        if (fname[tlen] == '\0') {
+            if (rc == FLASHFS_ENTRY_DIR) {
+                fno = flashfs_create_cached(dir, name, 1);
+                if (!fno)
+                    return NULL;
+#ifdef CONFIG_JEDEC_SPI_FLASH
+                if (jedec)
+                    fno->flags |= FL_RDONLY;
+#endif
+                return fno;
+            }
+            fno = flashfs_create_cached(dir, name, 0);
+            if (!fno)
+                return NULL;
+            if (flashfs_attach_file(fno, jedec, page, hdr.fsize,
+                        (int)strlen(fname)) < 0) {
+                fno_detach(fno);
+                return NULL;
+            }
+            return fno;
+        }
+
+        /* Fallback prefix match: an older image that pre-dates explicit
+         * DIR entries can still be walked by inferring directories from
+         * the file paths underneath them. */
+        if (fname[tlen] == '/') {
+            fno = flashfs_create_cached(dir, name, 1);
+            if (!fno)
+                return NULL;
+#ifdef CONFIG_JEDEC_SPI_FLASH
+            if (jedec)
+                fno->flags |= FL_RDONLY;
+#endif
+            return fno;
+        }
+    }
+    return NULL;
+}
+
+/*
+ * Scratch state for readdir's implicit-directory fallback. Only used when
+ * we encounter entries from an older image that has no explicit DIR
+ * entries and we have to synthesise directory names by looking at path
+ * prefixes. Kept here so the single-element dedup survives between
+ * readdir calls but resets at the start of each scan.
+ *
+ * Caveat: non-reentrant. Two concurrent readdir scans on different dir
+ * fnodes within flashfs would clobber each other. Shell-style single-
+ * enumeration use is fine.
+ */
+static struct fnode *flashfs_readdir_dir;
+static char flashfs_readdir_last[CONFIG_MAX_FNAME];
+static int flashfs_readdir_last_len;
+
+/*
+ * Lazy readdir: enumerate entries living directly under `dir`. With
+ * explicit DIR entries on-flash, each child (file or subdir) appears as
+ * exactly one entry whose name can be emitted directly — no dedup needed.
+ * The fallback path (entries whose name is "dir_path/child/..." but no
+ * DIR entry for "dir_path/child") handles older images that pre-date the
+ * DIR-entry encoding; it uses a single-element dedup guard.
+ */
+static int flashfs_readdir(struct fnode *dir, uint32_t *cursor,
+        struct dirent *ep)
+{
+    const struct jedec_spi_flash *jedec;
+    char dir_path[MAX_FNAME + 1];
+    char fname[MAX_FNAME + 1];
+    struct flashfs_file_hdr hdr;
+    uint32_t max_pages;
+    int dlen;
+
+    if (!dir || !cursor || !ep)
+        return -1;
+
+    dlen = flashfs_dir_relpath(dir, dir_path, sizeof(dir_path));
+    if (dlen < 0)
+        return -1;
+
+    /* Reset fallback dedup state at the start of a fresh scan. */
+    if (*cursor == 0 || flashfs_readdir_dir != dir) {
+        flashfs_readdir_dir = dir;
+        flashfs_readdir_last_len = 0;
+    }
+
+    jedec = flashfs_jedec_for(dir);
+    max_pages = flashfs_usable_pages(jedec);
+
+    while (*cursor < max_pages) {
+        uint32_t page = *cursor;
+        const char *sub;
+        int sub_len;
+        int used = flashfs_page_used(jedec, page);
+        int rc;
+        int has_more_slashes;
+
+        (*cursor)++;
+
+        if (used <= 0)
+            continue;
+        rc = flashfs_read_entry(jedec, page, &hdr, fname);
+        if (rc <= 0)
+            continue;
+
+        /* Is this entry under our directory? */
+        if (dlen == 0) {
+            sub = fname;
+        } else {
+            if (strncmp(fname, dir_path, dlen) != 0 || fname[dlen] != '/')
+                continue;
+            sub = fname + dlen + 1;
+        }
+
+        /* First '/'-separated component of sub — what we'd emit. */
+        sub_len = 0;
+        while (sub[sub_len] && sub[sub_len] != '/' &&
+                sub_len < CONFIG_MAX_FNAME - 1)
+            sub_len++;
+        if (sub_len == 0)
+            continue;
+        has_more_slashes = (sub[sub_len] == '/');
+
+        /* Unified dedup: skip the candidate if its first component matches
+         * the previously-emitted one. Covers both
+         *   - nested paths re-synthesising the same dir name, and
+         *   - an explicit DIR entry followed by its own child files
+         *     (bytewise sort puts "foo" before "foo/...").
+         */
+        if (sub_len == flashfs_readdir_last_len &&
+                memcmp(sub, flashfs_readdir_last, sub_len) == 0)
+            continue;
+        memcpy(flashfs_readdir_last, sub, sub_len);
+        flashfs_readdir_last_len = sub_len;
+        (void)has_more_slashes;
+
+        ep->d_ino = 0;
+        if (sub_len >= (int)sizeof(ep->d_name))
+            sub_len = sizeof(ep->d_name) - 1;
+        memcpy(ep->d_name, sub, sub_len);
+        ep->d_name[sub_len] = '\0';
+        return 0;
+    }
+
+    /* Scan done — drop stale state so the next enumeration starts fresh. */
+    if (flashfs_readdir_dir == dir) {
+        flashfs_readdir_dir = NULL;
+        flashfs_readdir_last_len = 0;
+    }
+    return -1;
 }
 
 static int flashfs_mount_info(struct fnode *fno, char *buf, int len)
@@ -1090,6 +1464,8 @@ void flashfs_init(void)
     mod_flashfs.ops.unlink = flashfs_unlink;
     mod_flashfs.ops.close = flashfs_close;
     mod_flashfs.ops.truncate = flashfs_truncate;
+    mod_flashfs.ops.lookup = flashfs_lookup;
+    mod_flashfs.ops.readdir = flashfs_readdir;
     register_module(&mod_flashfs);
 }
 

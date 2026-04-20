@@ -61,11 +61,11 @@ ifeq ($(ARCH),)
 else
 	CFLAGS+=-mcpu=$(ARCH)
 endif
-CFLAGS+=-DCORE_M33 -D__frosted__ -DHAVE_MMAP=1 -O0
+CFLAGS+=-DCORE_M33 -D__frosted__ -DHAVE_MMAP=1 -O1 -fno-ipa-ra -fno-ipa-sra -fno-ipa-cp
 # COMPILER FLAGS -- No gcc libraries
 CFLAGS+=-nostartfiles
 # COMPILER FLAGS -- GOT/PIC
-CFLAGS+=-fPIC -mlong-calls -fno-common -msingle-pic-base -mno-pic-data-is-text-relative -Wstack-usage=4096 -DSYS_CLOCK=$(SYS_CLOCK)
+CFLAGS+=-fPIC -mlong-calls -fno-common -msingle-pic-base -mno-pic-data-is-text-relative -fno-ipa-ra -Wstack-usage=4096 -DSYS_CLOCK=$(SYS_CLOCK)
 # Debugging
 CFLAGS+=-ggdb
 CFLAGS+=-I../lib/include -I../lib
@@ -134,7 +134,7 @@ sh: FORCE
 	mkdir -p out
 	cp -a $@/* out/ || true
 
-lnk: FORCE
+lnk: binutils netutils FORCE
 	mkdir -p out
 	cp -a $@/* out/ || true
 

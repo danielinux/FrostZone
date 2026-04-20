@@ -139,13 +139,11 @@ static int jedec_send_cmd_then_read(struct jedec_spi_flash *flash,
     int ret;
 
     stm32x5_gpio_reset(flash->gpio_base, flash->cs_pin);
-
     ret = devspi_xfer(&flash->spi_slave, (const char *)cmd, (char *)rx, cmd_len);
     if (ret < 0)
         goto done;
 
     if (rx_len > 0) {
-        /* Pad TX with 0xFF for clocking while receiving */
         int rx2_ret = devspi_xfer(&flash->spi_slave, NULL, (char *)rx, rx_len);
         if (rx2_ret < 0)
             ret = rx2_ret;
@@ -433,7 +431,8 @@ int jedec_spi_flash_probe(struct jedec_spi_flash *flash,
         .pio_sck                    = sck,
         .pio_mosi                   = mosi,
         .pio_miso                   = miso,
-        .pio_nss                    = nss,
+        /* CS is driven manually through GPIO; do not remux the same pin to NSS. */
+        .pio_nss                    = (struct gpio_config){ 0 },
     };
     cfgp = &cfg;
 
@@ -534,6 +533,11 @@ int jedec_spi_flash_read(const struct jedec_spi_flash *flash, uint32_t addr,
 {
     uint8_t cmd[4];
     int ret;
+
+    if (!flash || !buf)
+        return -EINVAL;
+    if ((addr + len) < addr || (addr + len) > flash->size_bytes)
+        return -EINVAL;
 
     cmd[0] = JEDEC_CMD_READ;
     cmd[1] = (uint8_t)(addr >> 16);
