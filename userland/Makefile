@@ -89,7 +89,9 @@ xipfstool: xipfs
 userspace.bin: $(APPS-y) $(DIR-y) sh xipfstool lnk
 	mv out/*.gdb gdb/ 2>/dev/null || true
 	./xipfstool $@ \
-		$(wildcard out/*.so) \
+		$(wildcard out/libwolfssl.so) \
+		$(wildcard out/libdltest.so) \
+		$(filter-out out/libwolfssl.so out/libdltest.so,$(wildcard out/*.so)) \
 		$(APPS-y) \
 		$(filter-out %.map %.gdb %.so,$(wildcard out/*))
 

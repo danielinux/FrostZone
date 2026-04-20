@@ -107,6 +107,9 @@ syscalls = [
     ["pthread_getspecific", 2, "sys_pthread_getspecific_hdlr"],
     ["alarm", 1, "sys_alarm_hdlr"],
     ["ualarm", 2, "sys_ualarm_hdlr"],
+    ["dlopen", 2, "sys_dlopen_hdlr"],
+    ["dlsym", 2, "sys_dlsym_hdlr"],
+    ["dlclose", 1, "sys_dlclose_hdlr"],
 ]
 
    #

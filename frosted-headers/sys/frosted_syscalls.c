@@ -485,3 +485,18 @@ int sys_ualarm(uint32_t arg1, uint32_t arg2){
     return syscall(SYS_UALARM, arg1, arg2, 0, 0, 0); 
 }
 
+/* Syscall: dlopen(2 arguments) */
+int sys_dlopen(uint32_t arg1, uint32_t arg2){
+    return syscall(SYS_DLOPEN, arg1, arg2, 0, 0, 0); 
+}
+
+/* Syscall: dlsym(2 arguments) */
+int sys_dlsym(uint32_t arg1, uint32_t arg2){
+    return syscall(SYS_DLSYM, arg1, arg2, 0, 0, 0); 
+}
+
+/* Syscall: dlclose(1 arguments) */
+int sys_dlclose(uint32_t arg1){
+    return syscall(SYS_DLCLOSE, arg1, 0, 0, 0, 0); 
+}
+

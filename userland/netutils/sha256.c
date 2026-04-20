@@ -1,9 +1,9 @@
 /*
  * sha256 - compute SHA-256 hash of stdin or a file
  *
- * Demonstrates dynamic linking: wc_InitSha256 / wc_Sha256Update /
- * wc_Sha256Final are resolved at load time from libwolfssl.so via
- * the shared library trampoline mechanism.
+ * Demonstrates runtime linking: wc_InitSha256 / wc_Sha256Update /
+ * wc_Sha256Final are resolved from libwolfssl.so through a
+ * userspace dlopen()/dlsym() resolver shim.
  */
 
 #include <stdio.h>

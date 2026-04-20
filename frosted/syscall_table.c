@@ -1,22 +1,3 @@
-/*
- *      This file is part of frostzone.
- *
- *      frostzone is free software: you can redistribute it and/or modify
- *      it under the terms of the GNU General Public License version 2, as
- *      published by the Free Software Foundation.
- *
- *
- *      frostzone is distributed in the hope that it will be useful,
- *      but WITHOUT ANY WARRANTY; without even the implied warranty of
- *      MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *      GNU General Public License for more details.
- *
- *      You should have received a copy of the GNU General Public License
- *      along with frostzone.  If not, see <http://www.gnu.org/licenses/>.
- *
- *      Authors: Daniele Lacamera
- *
- */
 /* The file syscall_table.c is auto generated. DO NOT EDIT, CHANGES WILL BE LOST. */
 /* If you want to add syscalls, use syscall_table_gen.py  */
 
@@ -119,6 +100,9 @@ extern int sys_pthread_setspecific_hdlr(uint32_t, uint32_t, uint32_t, uint32_t, 
 extern int sys_pthread_getspecific_hdlr(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 extern int sys_alarm_hdlr(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 extern int sys_ualarm_hdlr(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+extern int sys_dlopen_hdlr(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+extern int sys_dlsym_hdlr(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+extern int sys_dlclose_hdlr(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 
 void syscalls_init(void) {
 	sys_register_handler(0, sys_sleep_hdlr);
@@ -217,4 +201,7 @@ void syscalls_init(void) {
 	sys_register_handler(93, sys_pthread_getspecific_hdlr);
 	sys_register_handler(94, sys_alarm_hdlr);
 	sys_register_handler(95, sys_ualarm_hdlr);
+	sys_register_handler(96, sys_dlopen_hdlr);
+	sys_register_handler(97, sys_dlsym_hdlr);
+	sys_register_handler(98, sys_dlclose_hdlr);
 }

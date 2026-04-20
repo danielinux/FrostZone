@@ -553,6 +553,7 @@ static void task_destroy(void *arg)
         /* Remove all heap allocations, stack, .data and .bss
          * associated to this pid.
          */
+        xipfs_task_cleanup(t->tb.pid);
         secure_munmap_task(t->tb.pid);
     }
     /* Free any pthread-specific key value */
@@ -576,6 +577,7 @@ static void task_destroy(void *arg)
     }
     ftable_destroy(t);
     /* Remove heap allocations spawned by this pid. */
+    xipfs_task_cleanup(t->tb.pid);
     secure_munmap_task(t->tb.pid);
 #endif
     /* Remove /sys/proc/<pid> entry */
@@ -1540,6 +1542,8 @@ int scheduler_exec(struct task_exec_info *info, void *args)
 {
     struct task *t = _cur_task;
     uint32_t i;
+
+    xipfs_task_cleanup(t->tb.pid);
     memcpy(&t->tb.exec_info, info, sizeof(struct task_exec_info));
     secure_mempool_chown(t->tb.exec_info.mmap_base, t->tb.pid, 0);
 #ifdef CONFIG_SHLIB

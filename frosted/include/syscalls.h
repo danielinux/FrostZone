@@ -97,4 +97,7 @@
 #define SYS_PTHREAD_GETSPECIFIC 			(93)
 #define SYS_ALARM 			(94)
 #define SYS_UALARM 			(95)
-#define _SYSCALLS_NR (96) /* We have 96 syscalls! */
+#define SYS_DLOPEN 			(96)
+#define SYS_DLSYM 			(97)
+#define SYS_DLCLOSE 			(98)
+#define _SYSCALLS_NR (99) /* We have 99 syscalls! */

@@ -2,7 +2,7 @@
  * sha256sum - compute SHA-256 hash of files or stdin
  *
  * Uses wolfSSL shared library (libwolfssl.so) for SHA-256 via
- * the bFLT dynamic linking / trampoline mechanism.
+ * a userspace dlopen()/dlsym() resolver shim.
  */
 
 #include <stdio.h>

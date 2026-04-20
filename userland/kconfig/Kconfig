@@ -249,6 +249,15 @@ menu "Test suites"
         bool "Phase 0 memfs harness"
         default n
 
+    config APP_DLOPEN_TEST
+        bool "dlopen/dlsym test app"
+        default n
+        help
+          Build a minimal shared bFLT library plus a userspace test app that
+          exercises dlopen(), dlsym(), and dlclose().
+          userland shared-library packaging flow still assumes one fixed-base
+          shared library image.
+
     menuconfig HWTESTS
     bool "Hardware test suite"
     default n

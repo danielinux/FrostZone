@@ -33,7 +33,7 @@ APPS-$(APP_PING)+=ping
 CFLAGS-$(APP_PING)+=-DAPP_PING_STANDALONE
 CFLAGS-ICEBOX-$(APP_PING)+=-DAPP_PING_MODULE
 
-# wolfSSL is a shared library — everything links via stub archive + import map.
+# wolfSSL is loaded at runtime; apps link against the resolver archive.
 CFLAGS-$(LIB_WOLFSSL)+=-I../lib/include/
 
 BIN:=$(patsubst %,../out/%,$(APPS-y))
@@ -58,7 +58,7 @@ endif
 endif
 
 # ---------------------------------------------------------------
-# sshd - statically bundles wolfSSH, uses wolfCrypt via libwolfssl.so
+# sshd - statically bundles wolfSSH, resolves wolfCrypt via libwolfssl.so
 # ---------------------------------------------------------------
 WOLFSSH_ROOT    := ../lib/wolfssh
 # misc.c is included inline by internal.c when NO_INLINE is unset, so
@@ -72,7 +72,7 @@ WOLFSSH_SRCS    := \
 	$(WOLFSSH_ROOT)/src/keygen.c
 WOLFSSH_OBJS    := $(WOLFSSH_SRCS:.c=.o)
 
-# wolfSSH uses wolfCrypt via libwolfssl.so (stub archive + import map).
+# wolfSSH uses wolfCrypt through the userland dlopen/dlsym resolver archive.
 # Share the wolfSSL user_settings so wolfSSH sees the same wolfCrypt
 # configuration it's expecting at compile time. -Os overrides the
 # parent's -O0 and keeps code size down; WOLFSSL_SMALL_STACK propagates
@@ -93,9 +93,8 @@ $(WOLFSSH_ROOT)/src/%.o: $(WOLFSSH_ROOT)/src/%.c
 sshd.o: sshd.c sshd_hostkey.h sshd_wolfssh_settings.h
 	$(CC) -c -o $@ sshd.c $(SSHD_CFLAGS)
 
-../out/sshd: sshd.o $(WOLFSSH_OBJS) ../lib/libwolfssl_stubs.a
-	@FLTFLAGS="-I$(CURDIR)/../out/libwolfssl.map" \
-		arm-frosted-eabi-gcc -o $@ $^ \
+../out/sshd: sshd.o $(WOLFSSH_OBJS) ../lib/libwolfssl_runtime.a
+	@arm-frosted-eabi-gcc -o $@ $^ \
 		$(CFLAGS) $(CFLAGS-y) $(LDFLAGS) -lm
 
 ice/%.o: %.c

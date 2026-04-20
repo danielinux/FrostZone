@@ -40,21 +40,25 @@ volatile int phase0_bflt_trace_tag;
 #ifdef CONFIG_SHLIB
 /* --- Shared library registry --- */
 #define MAX_SHLIBS 8
-
-struct loaded_shlib {
-    uint8_t  lib_id;
-    uint32_t version;
-    const uint8_t *flash_base;     /* pointer to bFLT start in flash */
-    const uint8_t *text_base;      /* .text start (XIP) */
-    uint32_t text_len;
-    uint32_t data_len;
-    uint32_t bss_len;
-    uint32_t export_count;
-    const uint32_t *export_table;  /* ordinal→offset array in flash */
-};
+#define MAX_DLOPEN_LIBS 8
+#define RTLD_BIND_MASK 0x3u
+#define RTLD_LAZY 0x1u
+#define RTLD_NOW 0x2u
+#define RTLD_LOCAL 0x0u
 
 static struct loaded_shlib shlibs[MAX_SHLIBS];
 static const uint8_t *xipfs_blob_ptr; /* cached blob pointer from mount */
+
+struct dlopen_handle {
+    uint8_t in_use;
+    uint8_t lib_id;
+    uint16_t owner_pid;
+    uint32_t refs;
+    const struct loaded_shlib *sl;
+    struct shlib_runtime runtime;
+};
+
+static struct dlopen_handle dlopen_handles[MAX_DLOPEN_LIBS];
 #endif
 
 /* Helper: scan FAT for entry at given index.  Returns offset to fhdr, or -1. */
@@ -84,6 +88,91 @@ static int xipfs_fat_offset(const uint8_t *blob, int idx)
     }
     return offset;
 }
+
+#ifdef CONFIG_SHLIB
+static void xipfs_path_abs(const char *src, char *dst, int len)
+{
+    struct fnode *cwd = task_getcwd();
+
+    if (!src || !dst || (len <= 0))
+        return;
+
+    if (src[0] == '/') {
+        strncpy(dst, src, len);
+        dst[len - 1] = '\0';
+        return;
+    }
+
+    dst[0] = '\0';
+    if (cwd && (fno_fullpath(cwd, dst, len) > 0)) {
+        int nlen = strlen(dst);
+        while ((nlen > 1) && (dst[nlen - 1] == '/')) {
+            dst[--nlen] = '\0';
+        }
+        strncat(dst, "/", len);
+        strncat(dst, src, len);
+    } else {
+        strncpy(dst, src, len);
+        dst[len - 1] = '\0';
+    }
+}
+
+static struct dlopen_handle *dlopen_handle_lookup(uint16_t pid, void *handle)
+{
+    int i;
+
+    for (i = 0; i < MAX_DLOPEN_LIBS; i++) {
+        if (dlopen_handles[i].in_use &&
+            (dlopen_handles[i].owner_pid == pid) &&
+            (handle == &dlopen_handles[i])) {
+            return &dlopen_handles[i];
+        }
+    }
+    return NULL;
+}
+
+static struct dlopen_handle *dlopen_handle_find_lib(uint16_t pid, uint8_t lib_id)
+{
+    int i;
+
+    for (i = 0; i < MAX_DLOPEN_LIBS; i++) {
+        if (dlopen_handles[i].in_use &&
+            (dlopen_handles[i].owner_pid == pid) &&
+            (dlopen_handles[i].lib_id == lib_id)) {
+            return &dlopen_handles[i];
+        }
+    }
+    return NULL;
+}
+
+static struct dlopen_handle *dlopen_handle_alloc(void)
+{
+    int i;
+
+    for (i = 0; i < MAX_DLOPEN_LIBS; i++) {
+        if (!dlopen_handles[i].in_use)
+            return &dlopen_handles[i];
+    }
+    return NULL;
+}
+
+static int shlib_symbol_ordinal(const struct loaded_shlib *sl, const char *name)
+{
+    uint32_t ordinal;
+
+    if (!sl || !name || !sl->export_name_offsets || !sl->export_strings)
+        return -1;
+
+    for (ordinal = 0; ordinal < sl->export_count; ordinal++) {
+        const char *export_name = sl->export_strings +
+                                  long_be(sl->export_name_offsets[ordinal]);
+        if (strcmp(export_name, name) == 0)
+            return (int)ordinal;
+    }
+
+    return -1;
+}
+#endif
 
 static int xipfs_read(struct fnode *fno, void *buf, unsigned int len)
 {
@@ -361,14 +450,25 @@ static struct loaded_shlib *shlib_register(uint8_t lib_id)
                 export_cnt = long_be(hdr.filler[FLAT_SHLIB_EXPORT_CNT]);
                 sl->export_count = export_cnt;
 
-                /* Export table: version(4) + count(4) + offsets[] */
+                sl->export_offsets = NULL;
+                sl->export_name_offsets = NULL;
+                sl->export_strings = NULL;
+
+                /* Export table:
+                 * v1: version,count,offsets[]
+                 * v2: version,count,strtab_off,offsets[],name_offsets[],strtab
+                 */
                 if (export_off && export_cnt) {
                     const uint32_t *etab = (const uint32_t *)(payload + export_off);
                     sl->version = long_be(etab[0]);
-                    /* etab[1] is count (redundant), offsets start at etab[2] */
-                    sl->export_table = &etab[2];
-                } else {
-                    sl->export_table = NULL;
+                    if (sl->version >= 2) {
+                        sl->export_offsets = &etab[3];
+                        sl->export_name_offsets = &etab[3 + export_cnt];
+                        sl->export_strings =
+                            (const char *)(((const uint8_t *)etab) + long_be(etab[2]));
+                    } else {
+                        sl->export_offsets = &etab[2];
+                    }
                 }
                 kprintf("xipfs: registered shlib id=%d (%s) version=%lu exports=%lu\n",
                         lib_id, f->name, sl->version, (unsigned long)export_cnt);
@@ -395,6 +495,139 @@ const struct loaded_shlib *xipfs_shlib_find(uint8_t lib_id)
             return &shlibs[i];
     }
     return shlib_register(lib_id);
+}
+
+void xipfs_task_cleanup(uint16_t pid)
+{
+    int i;
+
+    for (i = 0; i < MAX_DLOPEN_LIBS; i++) {
+        if (dlopen_handles[i].in_use && (dlopen_handles[i].owner_pid == pid)) {
+            if (dlopen_handles[i].runtime.alloc_base)
+                secure_munmap(dlopen_handles[i].runtime.alloc_base, pid);
+            memset(&dlopen_handles[i], 0, sizeof(dlopen_handles[i]));
+        }
+    }
+}
+
+int sys_dlopen_hdlr(char *path, uint32_t flags)
+{
+    char abs_path[MAX_FILE];
+    struct fnode *fno;
+    struct flat_hdr hdr;
+    uint8_t lib_id;
+    uint16_t pid = this_task_getpid();
+    struct dlopen_handle *handle;
+    const struct loaded_shlib *sl;
+    uint32_t bind_mode = flags & RTLD_BIND_MASK;
+
+    if (!path || task_ptr_valid(path))
+        return -EACCES;
+
+    if ((bind_mode != 0u) && (bind_mode != RTLD_LAZY) && (bind_mode != RTLD_NOW))
+        return -EINVAL;
+
+    xipfs_path_abs(path, abs_path, MAX_FILE);
+    fno = fno_search(abs_path);
+    if (!fno || !fno->priv)
+        return -ENOENT;
+
+    memcpy(&hdr, fno->priv, sizeof(hdr));
+    if ((long_be(hdr.flags) & FLAT_FLAG_SHLIB) == 0)
+        return -ELIBEXEC;
+
+    lib_id = (uint8_t)long_be(hdr.filler[FLAT_SHLIB_LIB_ID]);
+    if (lib_id == 0)
+        return -ELIBBAD;
+
+    handle = dlopen_handle_find_lib(pid, lib_id);
+    if (handle) {
+        handle->refs++;
+        return (int)(uintptr_t)handle;
+    }
+
+    sl = xipfs_shlib_find(lib_id);
+    if (!sl)
+        return -ELIBACC;
+
+    handle = dlopen_handle_alloc();
+    if (!handle)
+        return -EMFILE;
+
+    memset(handle, 0, sizeof(*handle));
+    if (shlib_runtime_load(sl, pid, &handle->runtime) != 0)
+        return -ELIBBAD;
+
+    handle->in_use = 1;
+    handle->lib_id = lib_id;
+    handle->owner_pid = pid;
+    handle->refs = 1;
+    handle->sl = sl;
+    return (int)(uintptr_t)handle;
+}
+
+int sys_dlsym_hdlr(void *handle_ptr, char *symbol)
+{
+    struct dlopen_handle *handle;
+    int ordinal;
+
+    if (!symbol || task_ptr_valid(symbol))
+        return -EACCES;
+
+    handle = dlopen_handle_lookup(this_task_getpid(), handle_ptr);
+    if (!handle)
+        return -EBADF;
+
+    ordinal = shlib_symbol_ordinal(handle->sl, symbol);
+    if (ordinal < 0)
+        return -ENOENT;
+
+    return (int)(uintptr_t)(handle->runtime.trampoline_base +
+                            (ordinal * SHLIB_TRAMPOLINE_SIZE) + 1u);
+}
+
+int sys_dlclose_hdlr(void *handle_ptr)
+{
+    struct dlopen_handle *handle =
+        dlopen_handle_lookup(this_task_getpid(), handle_ptr);
+
+    if (!handle)
+        return -EBADF;
+
+    if (handle->refs > 1) {
+        handle->refs--;
+        return 0;
+    }
+
+    if (handle->runtime.alloc_base)
+        secure_munmap(handle->runtime.alloc_base, handle->owner_pid);
+    memset(handle, 0, sizeof(*handle));
+    return 0;
+}
+#else
+int sys_dlopen_hdlr(char *path, uint32_t flags)
+{
+    (void)path;
+    (void)flags;
+    return -ENOSYS;
+}
+
+int sys_dlsym_hdlr(void *handle_ptr, char *symbol)
+{
+    (void)handle_ptr;
+    (void)symbol;
+    return -ENOSYS;
+}
+
+int sys_dlclose_hdlr(void *handle_ptr)
+{
+    (void)handle_ptr;
+    return -ENOSYS;
+}
+
+void xipfs_task_cleanup(uint16_t pid)
+{
+    (void)pid;
 }
 #endif
 

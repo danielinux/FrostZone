@@ -90,6 +90,7 @@ struct sysfs_fnode {
 };
 void sysfs_init(void);
 int sysfs_no_write(struct sysfs_fnode *sfs, const void *buf, int len);
+void xipfs_task_cleanup(uint16_t pid);
 
 
 /* Scheduler */

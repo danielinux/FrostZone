@@ -216,26 +216,23 @@ icebox-refresh: ../out/icebox
 
 
 
-# sha256sum links dynamically against libwolfssl.so via import map
-../out/sha256sum: sha256sum.o ../lib/libwolfssl_stubs.a
-	@FLTFLAGS="-I$(CURDIR)/../out/libwolfssl.map" \
-		arm-frosted-eabi-gcc -o $@ $^ $(CFLAGS) $(CFLAGS-y) $(LDFLAGS) -lm
+# sha256sum resolves wolfSSL entry points at runtime via dlopen/dlsym.
+../out/sha256sum: sha256sum.o ../lib/libwolfssl_runtime.a
+	@arm-frosted-eabi-gcc -o $@ $^ $(CFLAGS) $(CFLAGS-y) $(LDFLAGS) -lm
 
 sha256sum.o: sha256sum.c
 	$(CC) -c -o $@ $^ $(CFLAGS) $(CFLAGS-y) -I../lib -I../lib/wolfssl -DWOLFSSL_USER_SETTINGS
 
-# aes128 links dynamically against libwolfssl.so via import map
-../out/aes128: aes128.o ../lib/libwolfssl_stubs.a
-	@FLTFLAGS="-I$(CURDIR)/../out/libwolfssl.map" \
-		arm-frosted-eabi-gcc -o $@ $^ $(CFLAGS) $(CFLAGS-y) $(LDFLAGS) -lm
+# aes128 resolves wolfSSL entry points at runtime via dlopen/dlsym.
+../out/aes128: aes128.o ../lib/libwolfssl_runtime.a
+	@arm-frosted-eabi-gcc -o $@ $^ $(CFLAGS) $(CFLAGS-y) $(LDFLAGS) -lm
 
 aes128.o: aes128.c
 	$(CC) -c -o $@ $^ $(CFLAGS) $(CFLAGS-y) -I../lib -I../lib/wolfssl -DWOLFSSL_USER_SETTINGS
 
-# ecdsa links dynamically against libwolfssl.so via import map
-../out/ecdsa: ecdsa.o ../lib/libwolfssl_stubs.a
-	@FLTFLAGS="-I$(CURDIR)/../out/libwolfssl.map" \
-		arm-frosted-eabi-gcc -o $@ $^ $(CFLAGS) $(CFLAGS-y) $(LDFLAGS) -lm
+# ecdsa resolves wolfSSL entry points at runtime via dlopen/dlsym.
+../out/ecdsa: ecdsa.o ../lib/libwolfssl_runtime.a
+	@arm-frosted-eabi-gcc -o $@ $^ $(CFLAGS) $(CFLAGS-y) $(LDFLAGS) -lm
 
 ecdsa.o: ecdsa.c
 	$(CC) -c -o $@ $^ $(CFLAGS) $(CFLAGS-y) -I../lib -I../lib/wolfssl -DWOLFSSL_USER_SETTINGS

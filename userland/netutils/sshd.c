@@ -7,8 +7,8 @@
  *      request, spawns /bin/fresh over a socketpair and relays the SSH
  *      channel to the child's stdio (telnetd-style, SSH-wrapped).
  *
- *      wolfCrypt primitives come from libwolfssl.so via the stub archive
- *      + import map; wolfSSH is linked statically.
+ *      wolfCrypt primitives come from libwolfssl.so via a userspace
+ *      dlopen()/dlsym() resolver archive; wolfSSH is linked statically.
  *
  *      SPDX-License-Identifier: GPL-2.0-or-later
  */

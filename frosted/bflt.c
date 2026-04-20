@@ -277,19 +277,6 @@ int process_relocs(struct flat_hdr * hdr, unsigned long * base, unsigned long da
  *   .word <lib_got>       // per-process library GOT base
  */
 
-/* Forward declaration — defined in xipfs.c */
-struct loaded_shlib {
-    uint8_t  lib_id;
-    uint32_t version;
-    const uint8_t *flash_base;
-    const uint8_t *text_base;
-    uint32_t text_len;
-    uint32_t data_len;
-    uint32_t bss_len;
-    uint32_t export_count;
-    const uint32_t *export_table;
-};
-
 /* Per-library per-process state during resolution */
 struct shlib_proc {
     uint8_t  lib_id;
@@ -356,8 +343,6 @@ static void generate_trampoline(uint8_t *dst, uint32_t lib_func_addr, uint32_t l
     w[1] = lib_func_addr;
 }
 
-#define TRAMPOLINE_SIZE 32
-
 int shlib_resolve_got(uint32_t *got_start, uint32_t got_words,
                       const uint8_t *app_text_base, uint8_t *app_data_base,
                       void **extra_mmap_out, uint32_t *extra_mmap_count_out)
@@ -423,7 +408,7 @@ int shlib_resolve_got(uint32_t *got_start, uint32_t got_words,
         uint8_t *mem;
         struct flat_hdr lib_hdr;
 
-        if (!sl || !sl->export_table) {
+        if (!sl || !sl->export_offsets) {
             kprintf("bFLT: shared library id=%d not found\r\n", libs[li].lib_id);
             return -1;
         }
@@ -436,7 +421,7 @@ int shlib_resolve_got(uint32_t *got_start, uint32_t got_words,
             return -1;
         }
 
-        tramp_size = libs[li].n_trampolines * TRAMPOLINE_SIZE;
+        tramp_size = libs[li].n_trampolines * SHLIB_TRAMPOLINE_SIZE;
         /* Round up to 4-byte alignment */
         tramp_size = (tramp_size + 3) & ~3u;
         total = tramp_size + sl->data_len + sl->bss_len;
@@ -527,7 +512,7 @@ int shlib_resolve_got(uint32_t *got_start, uint32_t got_words,
         }
 
         /* Look up the exported function's .text-relative offset */
-        func_offset = long_be(sl->export_table[ordinal]);
+        func_offset = long_be(sl->export_offsets[ordinal]);
         func_addr = (uint32_t)sl->text_base + func_offset;
         if ((func_offset >= sl->text_len) ||
             (func_addr < (uint32_t)sl->text_base) ||
@@ -541,7 +526,7 @@ int shlib_resolve_got(uint32_t *got_start, uint32_t got_words,
 
         /* Generate trampoline */
         tramp = libs[li].trampoline_base +
-                libs[li].n_trampolines * TRAMPOLINE_SIZE;
+                libs[li].n_trampolines * SHLIB_TRAMPOLINE_SIZE;
         generate_trampoline(tramp, func_addr | 1, libs[li].got_loc);
         libs[li].n_trampolines++;
 
@@ -551,6 +536,90 @@ int shlib_resolve_got(uint32_t *got_start, uint32_t got_words,
                 (unsigned long)idx, lib_id, (unsigned long)ordinal,
                 (unsigned long)((uint32_t)tramp | 1),
                 (unsigned long)(func_addr | 1));
+    }
+
+    return 0;
+}
+
+int shlib_runtime_load(const struct loaded_shlib *sl, uint16_t owner_pid,
+                       struct shlib_runtime *runtime)
+{
+    struct flat_hdr lib_hdr;
+    uint32_t tramp_size;
+    uint32_t total;
+    uint8_t *mem;
+    uint8_t *lib_relocs_src;
+    int32_t lib_relocs;
+    int rc;
+    uint32_t ordinal;
+
+    if (!sl || !runtime || !sl->export_offsets || (sl->export_count == 0))
+        return -EINVAL;
+
+    memset(runtime, 0, sizeof(*runtime));
+    memcpy(&lib_hdr, sl->flash_base, sizeof(struct flat_hdr));
+
+    if ((check_header(&lib_hdr) != 0) ||
+        ((long_be(lib_hdr.flags) & FLAT_FLAG_SHLIB) == 0)) {
+        kprintf("bFLT: shlib header check failed\r\n");
+        return -ENOEXEC;
+    }
+
+    tramp_size = sl->export_count * SHLIB_TRAMPOLINE_SIZE;
+    tramp_size = (tramp_size + 3u) & ~3u;
+    total = tramp_size + sl->data_len + sl->bss_len;
+
+    mem = secure_mmap(total, owner_pid, MMAP_NEWPAGE);
+    if (!mem) {
+        kprintf("bFLT: shlib alloc failed (%lu bytes)\r\n", (unsigned long)total);
+        return -ENOMEM;
+    }
+
+    runtime->alloc_base = mem;
+    runtime->trampoline_base = mem;
+    runtime->data_base = mem + tramp_size;
+    runtime->got_loc = (uint32_t)runtime->data_base;
+
+    memcpy(runtime->data_base,
+           sl->flash_base + long_be(((struct flat_hdr *)sl->flash_base)->data_start),
+           sl->data_len);
+    memset(runtime->data_base + sl->data_len, 0, sl->bss_len);
+
+    rc = process_got_relocs(&lib_hdr, (uint8_t *)sl->flash_base,
+                            runtime->data_base, NULL);
+    if (rc != 0) {
+        secure_munmap(runtime->alloc_base, owner_pid);
+        memset(runtime, 0, sizeof(*runtime));
+        return -ENOEXEC;
+    }
+
+    lib_relocs = long_be(lib_hdr.reloc_count);
+    lib_relocs_src = (uint8_t *)sl->flash_base + long_be(lib_hdr.reloc_start);
+    rc = process_relocs(&lib_hdr, (unsigned long *)sl->flash_base,
+                        (uint32_t)runtime->data_base,
+                        (unsigned long *)lib_relocs_src,
+                        lib_relocs);
+    if (rc != 0) {
+        secure_munmap(runtime->alloc_base, owner_pid);
+        memset(runtime, 0, sizeof(*runtime));
+        return -ENOEXEC;
+    }
+
+    for (ordinal = 0; ordinal < sl->export_count; ordinal++) {
+        uint32_t func_offset = long_be(sl->export_offsets[ordinal]);
+        uint32_t func_addr = (uint32_t)sl->text_base + func_offset;
+        uint8_t *tramp = runtime->trampoline_base +
+                         (ordinal * SHLIB_TRAMPOLINE_SIZE);
+
+        if ((func_offset >= sl->text_len) ||
+            (func_addr < (uint32_t)sl->text_base) ||
+            (func_addr >= ((uint32_t)sl->text_base + sl->text_len))) {
+            secure_munmap(runtime->alloc_base, owner_pid);
+            memset(runtime, 0, sizeof(*runtime));
+            return -ENOEXEC;
+        }
+
+        generate_trampoline(tramp, func_addr | 1u, runtime->got_loc);
     }
 
     return 0;
