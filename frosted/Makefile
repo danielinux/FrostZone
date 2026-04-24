@@ -182,6 +182,35 @@ else
 CFLAGS += -DCONFIG_WOLFIP_MAX_INTERFACES=2
 endif
 
+ifeq ($(CONFIG_WOLFIP_RAWSOCKETS),1)
+CFLAGS += -DCONFIG_WOLFIP_RAWSOCKETS=1
+ifdef WOLFIP_MAX_RAWSOCKETS
+CFLAGS += -DCONFIG_WOLFIP_MAX_RAWSOCKETS=$(WOLFIP_MAX_RAWSOCKETS)
+endif
+endif
+
+ifeq ($(CONFIG_WOLFIP_PACKET_SOCKETS),1)
+CFLAGS += -DCONFIG_WOLFIP_PACKET_SOCKETS=1
+ifdef WOLFIP_MAX_PACKETSOCKETS
+CFLAGS += -DCONFIG_WOLFIP_MAX_PACKETSOCKETS=$(WOLFIP_MAX_PACKETSOCKETS)
+endif
+endif
+
+ifeq ($(CONFIG_IP_MULTICAST),1)
+CFLAGS += -DCONFIG_IP_MULTICAST=1
+ifdef WOLFIP_UDP_MCAST_MEMBERSHIPS
+CFLAGS += -DCONFIG_WOLFIP_UDP_MCAST_MEMBERSHIPS=$(WOLFIP_UDP_MCAST_MEMBERSHIPS)
+endif
+endif
+
+ifeq ($(CONFIG_MDNS),1)
+CFLAGS += -DCONFIG_MDNS=1
+ifdef MDNS_HOSTNAME
+CFLAGS += -DCONFIG_MDNS_HOSTNAME=\"$(MDNS_HOSTNAME)\"
+endif
+endif
+
+
 ifneq ($(PHASE0_TRACE),)
 CFLAGS += -DCONFIG_PHASE0_TRACE=1
 endif
@@ -254,6 +283,9 @@ endif
 
 ifeq ($(CONFIG_TCPIP),1)
 SRCS += socket_in.c wolfip.c
+ifeq ($(CONFIG_MDNS),1)
+SRCS += mdns.c
+endif
 endif
 
 ifeq ($(CONFIG_DEVUSB),1)
@@ -282,6 +314,10 @@ SRCS += frosted_$(TARGET).c
 OBJS = $(SRCS:.c=.o) ../nsc-gateway/nsc_kernel.o
 
 stm32_spi.o ili9341_spi.o fbcon.o framebuffer.o: CFLAGS += -Os
+
+# Compile wolfip.c with per-function/data sections so unreferenced code
+# (e.g. the removed in-stack DHCP client) gets dropped by --gc-sections.
+wolfip.o: CFLAGS += -ffunction-sections -fdata-sections
 
 
 

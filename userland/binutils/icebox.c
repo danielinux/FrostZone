@@ -135,6 +135,18 @@ extern int icebox_telnetd(int argc, char *argv[]);
 #ifdef APP_NETCAT_MODULE
 extern int icebox_nc(int argc, char *argv[]);
 #endif
+#ifdef APP_HOST_MODULE
+extern int icebox_host(int argc, char *argv[]);
+#endif
+#ifdef APP_NTPC_MODULE
+extern int icebox_ntpc(int argc, char *argv[]);
+#endif
+#ifdef APP_DHCLIENT_MODULE
+extern int icebox_dhclient(int argc, char *argv[]);
+#endif
+#ifdef APP_PING_MODULE
+extern int icebox_ping(int argc, char *argv[]);
+#endif
 
 int main(int argc, char *argv[])
 {
@@ -348,6 +360,26 @@ int main(int argc, char *argv[])
 #ifdef APP_NETCAT_MODULE
     if(strcmp("nc", argv[0]) == 0)
         return icebox_nc(argc, argv);
+#endif
+
+#ifdef APP_HOST_MODULE
+    if(strcmp("host", argv[0]) == 0)
+        return icebox_host(argc, argv);
+#endif
+
+#ifdef APP_NTPC_MODULE
+    if(strcmp("ntpc", argv[0]) == 0)
+        return icebox_ntpc(argc, argv);
+#endif
+
+#ifdef APP_DHCLIENT_MODULE
+    if(strcmp("dhclient", argv[0]) == 0)
+        return icebox_dhclient(argc, argv);
+#endif
+
+#ifdef APP_PING_MODULE
+    if(strcmp("ping", argv[0]) == 0)
+        return icebox_ping(argc, argv);
 #endif
 
     fprintf(stderr,"%s: command not implemented.\r\n", argv[0]);

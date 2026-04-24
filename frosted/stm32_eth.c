@@ -883,7 +883,6 @@ static int stm32_eth_attach(struct wolfIP *stack, struct wolfIP_ll_dev *ll, unsi
                            atoip4(STM32_ETH_GATEWAY));
 #else
     wolfIP_ipconfig_set_ex(stack, if_idx, 0, 0, 0);
-    dhcp_client_init(stack);
 #endif
 
     eth_initialized = 1;

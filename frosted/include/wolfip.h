@@ -32,6 +32,22 @@ typedef unsigned long size_t;
 #endif
 #endif
 
+#ifndef WOLFIP_SOL_SOCKET
+#ifdef SOL_SOCKET
+#define WOLFIP_SOL_SOCKET SOL_SOCKET
+#else
+#define WOLFIP_SOL_SOCKET 1
+#endif
+#endif
+
+#ifndef WOLFIP_SOL_PACKET
+#ifdef SOL_PACKET
+#define WOLFIP_SOL_PACKET SOL_PACKET
+#else
+#define WOLFIP_SOL_PACKET 263
+#endif
+#endif
+
 #ifndef WOLFIP_IP_RECVTTL
 #ifdef IP_RECVTTL
 #define WOLFIP_IP_RECVTTL IP_RECVTTL
@@ -39,6 +55,64 @@ typedef unsigned long size_t;
 #define WOLFIP_IP_RECVTTL 12
 #endif
 #endif
+
+#ifndef WOLFIP_IP_HDRINCL
+#ifdef IP_HDRINCL
+#define WOLFIP_IP_HDRINCL IP_HDRINCL
+#else
+#define WOLFIP_IP_HDRINCL 3
+#endif
+#endif
+
+#ifndef WOLFIP_SO_DONTROUTE
+#ifdef SO_DONTROUTE
+#define WOLFIP_SO_DONTROUTE SO_DONTROUTE
+#else
+#define WOLFIP_SO_DONTROUTE 5
+#endif
+#endif
+
+#ifdef IP_MULTICAST
+#ifndef WOLFIP_IP_ADD_MEMBERSHIP
+#ifdef IP_ADD_MEMBERSHIP
+#define WOLFIP_IP_ADD_MEMBERSHIP IP_ADD_MEMBERSHIP
+#else
+#define WOLFIP_IP_ADD_MEMBERSHIP 35
+#endif
+#endif
+
+#ifndef WOLFIP_IP_DROP_MEMBERSHIP
+#ifdef IP_DROP_MEMBERSHIP
+#define WOLFIP_IP_DROP_MEMBERSHIP IP_DROP_MEMBERSHIP
+#else
+#define WOLFIP_IP_DROP_MEMBERSHIP 36
+#endif
+#endif
+
+#ifndef WOLFIP_IP_MULTICAST_IF
+#ifdef IP_MULTICAST_IF
+#define WOLFIP_IP_MULTICAST_IF IP_MULTICAST_IF
+#else
+#define WOLFIP_IP_MULTICAST_IF 32
+#endif
+#endif
+
+#ifndef WOLFIP_IP_MULTICAST_TTL
+#ifdef IP_MULTICAST_TTL
+#define WOLFIP_IP_MULTICAST_TTL IP_MULTICAST_TTL
+#else
+#define WOLFIP_IP_MULTICAST_TTL 33
+#endif
+#endif
+
+#ifndef WOLFIP_IP_MULTICAST_LOOP
+#ifdef IP_MULTICAST_LOOP
+#define WOLFIP_IP_MULTICAST_LOOP IP_MULTICAST_LOOP
+#else
+#define WOLFIP_IP_MULTICAST_LOOP 34
+#endif
+#endif
+#endif /* IP_MULTICAST */
 
 /* Types */
 struct wolfIP;
@@ -48,6 +122,7 @@ typedef uint32_t ip4;
 #define PACKED __attribute__((packed))
 #define ee16(x) __builtin_bswap16(x)
 #define ee32(x) __builtin_bswap32(x)
+
 #ifndef WOLFIP_EAGAIN
 #ifdef EAGAIN
 #define WOLFIP_EAGAIN EAGAIN
@@ -112,14 +187,29 @@ struct ipconf {
     ip4 gw;
 };
 
+#ifdef IP_MULTICAST
+struct wolfIP_mreq_addr {
+    uint32_t s_addr;
+};
+
+struct wolfIP_ip_mreq {
+    struct wolfIP_mreq_addr imr_multiaddr;
+    struct wolfIP_mreq_addr imr_interface;
+};
+#endif
+
 /* Socket interface */
 #define MARK_TCP_SOCKET 0x100 /* Mark a socket as TCP */
 #define MARK_UDP_SOCKET 0x200 /* Mark a socket as UDP */
 #define MARK_ICMP_SOCKET 0x400 /* Mark a socket as ICMP */
+#define MARK_RAW_SOCKET 0x800 /* Mark a socket as RAW */
+#define MARK_PACKET_SOCKET 0x1000 /* Mark a socket as PACKET */
 
 #define IS_SOCKET_TCP(fd) (((fd) & MARK_TCP_SOCKET) == MARK_TCP_SOCKET)
 #define IS_SOCKET_UDP(fd) (((fd) & MARK_UDP_SOCKET) == MARK_UDP_SOCKET)
 #define IS_SOCKET_ICMP(fd)(((fd) & MARK_ICMP_SOCKET) == MARK_ICMP_SOCKET)
+#define IS_SOCKET_RAW(fd) (((fd) & MARK_RAW_SOCKET) == MARK_RAW_SOCKET)
+#define IS_SOCKET_PACKET(fd) (((fd) & MARK_PACKET_SOCKET) == MARK_PACKET_SOCKET)
 #define SOCKET_UNMARK(fd) ((fd) & 0xFF)
 
 /* Compile-time sanity check for socket marks & number of sockets */
@@ -129,6 +219,14 @@ struct ipconf {
 
 #if (MARK_UDP_SOCKET >= MARK_ICMP_SOCKET)
 #error "MARK_UDP_SOCKET must be less than MARK_ICMP_SOCKET"
+#endif
+
+#if (MARK_ICMP_SOCKET >= MARK_RAW_SOCKET)
+#error "MARK_ICMP_SOCKET must be less than MARK_RAW_SOCKET"
+#endif
+
+#if (MARK_RAW_SOCKET >= MARK_PACKET_SOCKET)
+#error "MARK_RAW_SOCKET must be less than MARK_PACKET_SOCKET"
 #endif
 
 #if MAX_TCPSOCKETS > 255
@@ -143,11 +241,26 @@ struct ipconf {
 #error "MAX_ICMPSOCKETS must be less than 256"
 #endif
 
+#if WOLFIP_RAWSOCKETS
+#if WOLFIP_MAX_RAWSOCKETS > 255
+#error "WOLFIP_MAX_RAWSOCKETS must be less than 256"
+#endif
+#endif
+
+#if WOLFIP_PACKET_SOCKETS
+#if WOLFIP_MAX_PACKETSOCKETS > 255
+#error "WOLFIP_MAX_PACKETSOCKETS must be less than 256"
+#endif
+#endif
 
 
 #ifndef WOLF_POSIX
 #define IPSTACK_SOCK_STREAM 1
 #define IPSTACK_SOCK_DGRAM 2
+#define IPSTACK_SOCK_RAW 3
+#ifndef AF_PACKET
+#define AF_PACKET 17
+#endif
 
 
 struct wolfIP_sockaddr_in {
@@ -179,14 +292,38 @@ struct msghdr {
 #ifndef AF_INET
 #define AF_INET 2
 #endif
+#ifndef AF_PACKET
+#define AF_PACKET 17
+#endif
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <sys/uio.h>
+#include <net/if.h>
+#ifdef __has_include
+#if __has_include(<netpacket/packet.h>)
+#include <netpacket/packet.h>
+#define wolfIP_sockaddr_ll sockaddr_ll
+#endif
+#endif
 #define wolfIP_sockaddr_in sockaddr_in
 #define wolfIP_sockaddr sockaddr
+#define IPSTACK_SOCK_RAW SOCK_RAW
+#endif
+
+#ifndef wolfIP_sockaddr_ll
+struct wolfIP_sockaddr_ll {
+    unsigned short sll_family;
+    unsigned short sll_protocol;
+    int sll_ifindex;
+    unsigned short sll_hatype;
+    unsigned char sll_pkttype;
+    unsigned char sll_halen;
+    unsigned char sll_addr[8];
+};
+typedef struct wolfIP_sockaddr_ll wolfIP_sockaddr_ll;
 #endif
 
 int wolfIP_sock_socket(struct wolfIP *s, int domain, int type, int protocol);
@@ -227,9 +364,9 @@ int wolfIP_sock_can_read(struct wolfIP *s, int sockfd);
 int wolfIP_sock_can_write(struct wolfIP *s, int sockfd);
 
 void wolfIP_set_dns_server(struct wolfIP *s, ip4 addr);
-int dhcp_client_init(struct wolfIP *s);
-int dhcp_bound(struct wolfIP *s);
-int dhcp_client_is_running(struct wolfIP *s);
+/* In-stack DHCP client removed from the frosted port — use the userland
+ * dhclient over AF_PACKET instead. The wolfIP implementation bodies are
+ * still in wolfip.c but are unreferenced and stripped by --gc-sections. */
 
 /* DNS client */
 
@@ -256,6 +393,7 @@ int wolfIP_mtu_set(struct wolfIP *s, unsigned int if_idx, uint32_t mtu);
 int wolfIP_mtu_get(struct wolfIP *s, unsigned int if_idx, uint32_t *mtu);
 void wolfIP_ipconfig_set_ex(struct wolfIP *s, unsigned int if_idx, ip4 ip, ip4 mask, ip4 gw);
 void wolfIP_ipconfig_get_ex(struct wolfIP *s, unsigned int if_idx, ip4 *ip, ip4 *mask, ip4 *gw);
+int wolfIP_arp_lookup_ex(struct wolfIP *s, unsigned int if_idx, ip4 ip, uint8_t *mac);
 
 /* Callback flags */
 #define CB_EVENT_READABLE 0x01 /* Accepted connection or data available */

@@ -164,7 +164,7 @@ out:
 int sys_bind_hdlr(int sd, struct sockaddr_env *se)
 {
     struct fnode *fno;
-    struct sockaddr kaddr;
+    union { struct sockaddr sa; uint8_t raw[32]; } kaddr;
     int ret = -EINVAL;
 
     TCPIP_LOCK();
@@ -178,12 +178,12 @@ int sys_bind_hdlr(int sd, struct sockaddr_env *se)
         ret = -EACCES;
         goto out;
     }
-    memcpy(&kaddr, se->se_addr, se->se_len);
+    memcpy(&kaddr.sa, se->se_addr, se->se_len);
 
     fno = task_filedesc_get(sd);
 
     if (fno && fno->owner && fno->owner->ops.bind)
-        ret = fno->owner->ops.bind(sd, &kaddr, se->se_len);
+        ret = fno->owner->ops.bind(sd, &kaddr.sa, se->se_len);
 
 out:
     TCPIP_UNLOCK();
@@ -206,7 +206,7 @@ int sys_listen_hdlr(int sd, unsigned int backlog)
 int sys_connect_hdlr(int sd, struct sockaddr_env *se)
 {
     struct fnode *fno;
-    struct sockaddr kaddr;
+    union { struct sockaddr sa; uint8_t raw[32]; } kaddr;
     int ret = -EINVAL;
 
     TCPIP_LOCK();
@@ -220,12 +220,12 @@ int sys_connect_hdlr(int sd, struct sockaddr_env *se)
         ret = -EACCES;
         goto out;
     }
-    memcpy(&kaddr, se->se_addr, se->se_len);
+    memcpy(&kaddr.sa, se->se_addr, se->se_len);
 
     fno = task_filedesc_get(sd);
 
     if (fno && fno->owner && fno->owner->ops.connect)
-        ret = fno->owner->ops.connect(sd, &kaddr, se->se_len);
+        ret = fno->owner->ops.connect(sd, &kaddr.sa, se->se_len);
 
 out:
     TCPIP_UNLOCK();
@@ -235,7 +235,7 @@ out:
 int sys_accept_hdlr(int sd, struct sockaddr_env *se)
 {
     struct fnode *fno;
-    struct sockaddr kaddr;
+    union { struct sockaddr sa; uint8_t raw[32]; } kaddr;
     unsigned int kaddrlen;
     int ret = -EINVAL;
 
@@ -252,11 +252,11 @@ int sys_accept_hdlr(int sd, struct sockaddr_env *se)
                 goto out;
             }
             kaddrlen = sizeof(kaddr);
-            ret = fno->owner->ops.accept(sd, &kaddr, &kaddrlen);
+            ret = fno->owner->ops.accept(sd, &kaddr.sa, &kaddrlen);
             if (ret >= 0) {
                 if (kaddrlen > se->se_len)
                     kaddrlen = se->se_len;
-                memcpy(se->se_addr, &kaddr, kaddrlen);
+                memcpy(se->se_addr, &kaddr.sa, kaddrlen);
                 se->se_len = kaddrlen;
             }
         } else {
@@ -272,7 +272,7 @@ out:
 int sys_recvfrom_hdlr(int sd, void *buf, int len, int flags, struct sockaddr_env *se)
 {
     struct fnode *fno;
-    struct sockaddr kaddr;
+    union { struct sockaddr sa; uint8_t raw[32]; } kaddr;
     unsigned int kaddrlen;
     int ret = -EINVAL;
 
@@ -294,11 +294,11 @@ int sys_recvfrom_hdlr(int sd, void *buf, int len, int flags, struct sockaddr_env
                 goto out;
             }
             kaddrlen = sizeof(kaddr);
-            ret = fno->owner->ops.recvfrom(sd, buf, len, flags, &kaddr, &kaddrlen);
+            ret = fno->owner->ops.recvfrom(sd, buf, len, flags, &kaddr.sa, &kaddrlen);
             if (ret >= 0) {
                 if (kaddrlen > se->se_len)
                     kaddrlen = se->se_len;
-                memcpy(se->se_addr, &kaddr, kaddrlen);
+                memcpy(se->se_addr, &kaddr.sa, kaddrlen);
                 se->se_len = kaddrlen;
             }
             goto out;
@@ -314,7 +314,7 @@ out:
 int sys_sendto_hdlr(int sd, const void *buf, int len, int flags, struct sockaddr_env *se )
 {
     struct fnode *fno;
-    struct sockaddr kaddr;
+    union { struct sockaddr sa; uint8_t raw[32]; } kaddr;
     int ret = -EINVAL;
 
     TCPIP_LOCK();
@@ -335,8 +335,8 @@ int sys_sendto_hdlr(int sd, const void *buf, int len, int flags, struct sockaddr
                 ret = -EACCES;
                 goto out;
             }
-            memcpy(&kaddr, se->se_addr, se->se_len);
-            ret = fno->owner->ops.sendto(sd, buf, len, flags, &kaddr, se->se_len);
+            memcpy(&kaddr.sa, se->se_addr, se->se_len);
+            ret = fno->owner->ops.sendto(sd, buf, len, flags, &kaddr.sa, se->se_len);
             goto out;
         }
         ret = fno->owner->ops.sendto(sd, buf, len, flags, NULL, 0);
@@ -408,7 +408,7 @@ out:
 int sys_getsockname_hdlr(int sd, struct sockaddr_env *se)
 {
     struct fnode *fno;
-    struct sockaddr kaddr;
+    union { struct sockaddr sa; uint8_t raw[32]; } kaddr;
     unsigned int kaddrlen;
     int ret = -EINVAL;
 
@@ -429,11 +429,11 @@ int sys_getsockname_hdlr(int sd, struct sockaddr_env *se)
     fno = task_filedesc_get(sd);
     if (fno && fno->owner && fno->owner->ops.getsockname) {
         kaddrlen = sizeof(kaddr);
-        ret = fno->owner->ops.getsockname(sd, &kaddr, &kaddrlen);
+        ret = fno->owner->ops.getsockname(sd, &kaddr.sa, &kaddrlen);
         if (ret >= 0) {
             if (kaddrlen > se->se_len)
                 kaddrlen = se->se_len;
-            memcpy(se->se_addr, &kaddr, kaddrlen);
+            memcpy(se->se_addr, &kaddr.sa, kaddrlen);
             se->se_len = kaddrlen;
         }
     }
@@ -446,7 +446,7 @@ out:
 int sys_getpeername_hdlr(int sd, struct sockaddr_env *se)
 {
     struct fnode *fno;
-    struct sockaddr kaddr;
+    union { struct sockaddr sa; uint8_t raw[32]; } kaddr;
     unsigned int kaddrlen;
     int ret = -EINVAL;
 
@@ -467,11 +467,11 @@ int sys_getpeername_hdlr(int sd, struct sockaddr_env *se)
     fno = task_filedesc_get(sd);
     if (fno && fno->owner && fno->owner->ops.getpeername) {
         kaddrlen = sizeof(kaddr);
-        ret = fno->owner->ops.getpeername(sd, &kaddr, &kaddrlen);
+        ret = fno->owner->ops.getpeername(sd, &kaddr.sa, &kaddrlen);
         if (ret >= 0) {
             if (kaddrlen > se->se_len)
                 kaddrlen = se->se_len;
-            memcpy(se->se_addr, &kaddr, kaddrlen);
+            memcpy(se->se_addr, &kaddr.sa, kaddrlen);
             se->se_len = kaddrlen;
         }
     }

@@ -191,6 +191,7 @@ CFLAGS-ICEBOX-$(APP_XXD)+=-DAPP_XXD_MODULE
 APPS-$(APP_SHA256SUM)+=sha256sum
 APPS-$(APP_AES128)+=aes128
 APPS-$(APP_ECDSA)+=ecdsa
+APPS-$(APP_SQLITE)+=sqlite
 
 BIN:=$(patsubst %,../out/%,$(APPS-y))
 OBJ:=$(patsubst %,%.o,$(APPS-y))
@@ -236,6 +237,13 @@ aes128.o: aes128.c
 
 ecdsa.o: ecdsa.c
 	$(CC) -c -o $@ $^ $(CFLAGS) $(CFLAGS-y) -I../lib -I../lib/wolfssl -DWOLFSSL_USER_SETTINGS
+
+# sqlite CLI stub - invokes sqlite_shell_main inside /bin/libsqlite.so via dlsym.
+../out/sqlite: sqlite.o ../lib/libsqlite_runtime.a
+	@arm-frosted-eabi-gcc -o $@ $^ $(CFLAGS) $(CFLAGS-y) $(LDFLAGS) -lm
+
+sqlite.o: sqlite.c
+	$(CC) -c -o $@ $^ $(CFLAGS) $(CFLAGS-y) -I../lib
 
 ../lnk/%: ../out/icebox
 	ln -s $^ $@

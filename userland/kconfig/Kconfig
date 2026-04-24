@@ -37,6 +37,41 @@ menu "Libraries"
     depends on LIB_WOLFSSL
     default n
 
+    config LIB_SQLITE
+    bool "SQLite embedded SQL engine"
+    default n
+    help
+      Fetch SQLite source from sqlite.org, generate the amalgamation on
+      the build host (requires tclsh), and cross-compile a minimal bFLT
+      shared library (libsqlite.so) together with a dlopen/dlsym runtime
+      resolver archive (libsqlite_runtime.a).
+
+    if LIB_SQLITE
+    menu "SQLite"
+
+    config LIB_SQLITE_ENABLE_FTS5
+    bool "Enable FTS5 full-text search"
+    default n
+
+    config LIB_SQLITE_ENABLE_RTREE
+    bool "Enable R*Tree spatial index"
+    default n
+
+    config LIB_SQLITE_ENABLE_JSON1
+    bool "Enable JSON1 extension"
+    default n
+
+    config LIB_SQLITE_THREADSAFE
+    bool "Build threadsafe (SQLITE_THREADSAFE=1)"
+    default n
+    help
+      When disabled SQLite is built with SQLITE_THREADSAFE=0, which
+      produces the smallest / fastest code but forbids use of a single
+      connection from more than one task.
+
+    endmenu
+    endif
+
 endmenu
 
 menu "Applications"
@@ -163,6 +198,16 @@ config APP_ECDSA
     depends on LIB_WOLFSSL
 endmenu
 
+menu "Database tools"
+config APP_SQLITE
+    bool "sqlite - SQLite command-line shell"
+    depends on LIB_SQLITE
+    help
+      Build the SQLite CLI (upstream shell.c) as a bFLT executable that
+      resolves sqlite3_* entry points against libsqlite.so at runtime
+      via libsqlite_runtime.a.
+endmenu
+
 menu "Networking utils"
 config APP_IFCONFIG
     tristate "ifconfig"
@@ -183,6 +228,11 @@ config APP_SSHD
     depends on LIB_WOLFSSH
 config APP_NTPC
     tristate "ntpc"
+config APP_DHCLIENT
+    tristate "dhclient"
+    help
+      Minimal userland DHCP client using AF_PACKET sockets.
+      Run as: dhclient <ifname>
 config APP_STARWARS
     tristate "starwars"
 endmenu

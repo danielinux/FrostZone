@@ -74,6 +74,11 @@ CFLAGS+=-DCONFIG_LIB_WOLFSSL_STM32_HW_DRIVERS=$(call kconfig_bool,$(LIB_WOLFSSL_
 CFLAGS+=-DCONFIG_LIB_WOLFSSL_STM32_HW_HASH=$(call kconfig_bool,$(LIB_WOLFSSL_STM32_HW_HASH))
 CFLAGS+=-DCONFIG_LIB_WOLFSSL_STM32_HW_AES=$(call kconfig_bool,$(LIB_WOLFSSL_STM32_HW_AES))
 CFLAGS+=-DCONFIG_LIB_WOLFSSL_STM32_HW_PKA=$(call kconfig_bool,$(LIB_WOLFSSL_STM32_HW_PKA))
+CFLAGS+=-DCONFIG_LIB_SQLITE=$(call kconfig_bool,$(LIB_SQLITE))
+CFLAGS+=-DCONFIG_LIB_SQLITE_THREADSAFE=$(call kconfig_bool,$(LIB_SQLITE_THREADSAFE))
+CFLAGS+=-DCONFIG_LIB_SQLITE_ENABLE_FTS5=$(call kconfig_bool,$(LIB_SQLITE_ENABLE_FTS5))
+CFLAGS+=-DCONFIG_LIB_SQLITE_ENABLE_RTREE=$(call kconfig_bool,$(LIB_SQLITE_ENABLE_RTREE))
+CFLAGS+=-DCONFIG_LIB_SQLITE_ENABLE_JSON1=$(call kconfig_bool,$(LIB_SQLITE_ENABLE_JSON1))
 CFLAGS+=$(CFLAGS-y)
 
 # LINKER FLAGS
@@ -91,7 +96,8 @@ userspace.bin: $(APPS-y) $(DIR-y) sh xipfstool lnk
 	./xipfstool $@ \
 		$(wildcard out/libwolfssl.so) \
 		$(wildcard out/libdltest.so) \
-		$(filter-out out/libwolfssl.so out/libdltest.so,$(wildcard out/*.so)) \
+		$(wildcard out/libsqlite.so) \
+		$(filter-out out/libwolfssl.so out/libdltest.so out/libsqlite.so,$(wildcard out/*.so)) \
 		$(APPS-y) \
 		$(filter-out %.map %.gdb %.so,$(wildcard out/*))
 

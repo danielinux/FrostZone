@@ -80,10 +80,10 @@ struct ntp_request {
 int mk_ntp(uint8_t *buf)
 {
     struct timeval ref;
-    gettimeofday(&ref, NULL);
     struct ntp_request *ntp = NULL;
     int len = 0;
 
+    gettimeofday(&ref, NULL);
     ntp = (struct ntp_request *)buf;
     memset(buf, 0, MAX_LEN);
 
@@ -115,11 +115,17 @@ int query_ntp(int nfd, char *host)
     struct sockaddr_in dest;
     int destsz;
     struct timeval tv;
+    int len;
+    struct pollfd pfd;
+    int pollret;
 
-    int len = mk_ntp(buffer);
+    len = mk_ntp(buffer);
 
     dest.sin_family = AF_INET;
-    inet_aton(host, &dest.sin_addr);
+    if (inet_pton(AF_INET, host, &dest.sin_addr) != 1) {
+        fprintf(stderr, "ntpc: bad address: %s\r\n", host);
+        return -1;
+    }
     dest.sin_port = htons(NTP_PORT);
     destsz = sizeof (dest);
 
@@ -131,8 +137,6 @@ int query_ntp(int nfd, char *host)
 
     memset(buffer, 0, MAX_LEN);
 
-    struct pollfd pfd;
-    int pollret;
     pfd.fd = nfd;
     pfd.events = POLLIN | POLLHUP | POLLERR;
     pollret = poll(&pfd, 1, (TIME_OUT * 1000));
@@ -157,13 +161,16 @@ int query_ntp(int nfd, char *host)
             gettimeofday(&tv, NULL);
 
             if ((tv.tv_sec > (sec + MAX_DIFF)) || (sec > (tv.tv_sec + MAX_DIFF))) {
-                tv.tv_sec = sec;
-                settimeofday(&tv, NULL);
+                struct timespec ts;
+                ts.tv_sec = sec;
+                ts.tv_nsec = 0;
+                clock_settime(CLOCK_REALTIME, &ts);
             }
 
             return 0;
         }
     }
+    return -1;
 }
 
 #ifndef APP_NTPC_MODULE

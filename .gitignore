@@ -12,4 +12,5 @@ secure-supervisor/tests/unit_mempool
 frosted/build
 userland/out/*
 userland/gdb/*
+userland/lnk/*
 tags

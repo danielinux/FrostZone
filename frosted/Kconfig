@@ -415,6 +415,55 @@ config WOLFIP_MAX_INTERFACES
     help
       Must be >= 2 when loopback is enabled.
 
+config WOLFIP_RAWSOCKETS
+    bool "Enable RAW (IPPROTO_RAW/SOCK_RAW) sockets"
+    default n
+    help
+      Build support for BSD-style raw IP sockets.
+
+config WOLFIP_MAX_RAWSOCKETS
+    int "Maximum RAW sockets"
+    depends on WOLFIP_RAWSOCKETS
+    default 2
+
+config WOLFIP_PACKET_SOCKETS
+    bool "Enable AF_PACKET sockets"
+    default n
+    help
+      Build support for AF_PACKET link-layer sockets. Requires Ethernet.
+
+config WOLFIP_MAX_PACKETSOCKETS
+    int "Maximum AF_PACKET sockets"
+    depends on WOLFIP_PACKET_SOCKETS
+    default 2
+
+config IP_MULTICAST
+    bool "Enable IPv4 multicast UDP"
+    default n
+    help
+      Build IGMPv3 multicast group membership support and multicast socket
+      options (IP_ADD_MEMBERSHIP, IP_DROP_MEMBERSHIP, IP_MULTICAST_IF/TTL/LOOP).
+
+config WOLFIP_UDP_MCAST_MEMBERSHIPS
+    int "Multicast group memberships per UDP socket"
+    depends on IP_MULTICAST
+    default 4
+
+config MDNS
+    bool "In-kernel mDNS responder / resolver"
+    depends on TCPIP && IP_MULTICAST
+    default n
+    help
+      Advertise <hostname>.local on the LAN and resolve .local
+      names from the kernel (used automatically by getaddrinfo).
+
+config MDNS_HOSTNAME
+    string "mDNS hostname (without .local)"
+    depends on MDNS
+    default "frosted"
+    help
+      Pre-compiled hostname published as <hostname>.local.
+
 endmenu
 
 endmenu

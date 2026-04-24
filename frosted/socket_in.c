@@ -159,6 +159,12 @@ struct frosted_inet_socket {
 struct frosted_inet_socket tcp_socket[MAX_TCPSOCKETS];
 struct frosted_inet_socket udp_socket[MAX_UDPSOCKETS];
 struct frosted_inet_socket icmp_socket[MAX_ICMPSOCKETS];
+#if WOLFIP_RAWSOCKETS
+struct frosted_inet_socket raw_socket[WOLFIP_MAX_RAWSOCKETS];
+#endif
+#if WOLFIP_PACKET_SOCKETS
+struct frosted_inet_socket packet_socket[WOLFIP_MAX_PACKETSOCKETS];
+#endif
 
 static struct frosted_inet_socket *fd_inet(int fd)
 {
@@ -176,6 +182,22 @@ static struct frosted_inet_socket *fd_inet(int fd)
 
 static struct frosted_inet_socket *sockfd_inet(int fd)
 {
+#if WOLFIP_PACKET_SOCKETS
+    if ((fd & MARK_PACKET_SOCKET) == MARK_PACKET_SOCKET) {
+        fd &= ~MARK_PACKET_SOCKET;
+        if (fd < WOLFIP_MAX_PACKETSOCKETS)
+            return &packet_socket[fd];
+        return NULL;
+    }
+#endif
+#if WOLFIP_RAWSOCKETS
+    if ((fd & MARK_RAW_SOCKET) == MARK_RAW_SOCKET) {
+        fd &= ~MARK_RAW_SOCKET;
+        if (fd < WOLFIP_MAX_RAWSOCKETS)
+            return &raw_socket[fd];
+        return NULL;
+    }
+#endif
     if ((fd & MARK_ICMP_SOCKET) == MARK_ICMP_SOCKET) {
         fd &= ~MARK_ICMP_SOCKET;
         if (fd < MAX_ICMPSOCKETS)
@@ -192,7 +214,7 @@ static struct frosted_inet_socket *sockfd_inet(int fd)
             return &tcp_socket[fd];
     }
     return NULL;
-} 
+}
 
 #define SOCK_BLOCKING(s) (((s->node->flags & O_NONBLOCK) == 0))
 
@@ -289,13 +311,17 @@ static int sock_recvfrom(int fd, void *buf, unsigned int len, int flags, struct 
 {
     struct frosted_inet_socket *s;
     int ret;
-    struct wolfIP_sockaddr_in paddr;
-    socklen_t sockaddr_len = sizeof(struct wolfIP_sockaddr_in);
+    union {
+        struct wolfIP_sockaddr_in in;
+        struct wolfIP_sockaddr_ll ll;
+    } paddr;
+    socklen_t sockaddr_len = sizeof(paddr);
     s = fd_inet(fd);
     if (!s)
         return -EINVAL;
     while (s->bytes < len) {
         if ((addr) && ((*addrlen) > 0)) {
+            sockaddr_len = sizeof(paddr);
             ret = wolfIP_sock_recvfrom(IPStack, s->sock_fd, buf + s->bytes, len - s->bytes, flags, (struct wolfIP_sockaddr *)&paddr, &sockaddr_len);
         } else {
             ret = wolfIP_sock_read(IPStack, s->sock_fd, buf + s->bytes, len - s->bytes);
@@ -326,9 +352,12 @@ static int sock_recvfrom(int fd, void *buf, unsigned int len, int flags, struct 
     if ((ret == 0) && !SOCK_BLOCKING(s)) {
         ret = -EAGAIN;
     }
-    if ((ret > 0) && addr && addrlen && (*addrlen >= sizeof(struct sockaddr_in))) {
-        memcpy(addr, &paddr, sizeof(struct sockaddr_in));
-        *addrlen = sizeof(struct sockaddr_in);
+    if ((ret > 0) && addr && addrlen && (*addrlen > 0)) {
+        socklen_t copy_len = sockaddr_len;
+        if (copy_len > *addrlen)
+            copy_len = *addrlen;
+        memcpy(addr, &paddr, copy_len);
+        *addrlen = sockaddr_len;
     }
 out:
 
@@ -373,8 +402,10 @@ static int sock_sendto(int fd, const void *buf, unsigned int len, int flags, str
         }
 
         s->bytes += ret;
-        if ((((s->sock_fd & MARK_UDP_SOCKET) == MARK_UDP_SOCKET) ||
-             ((s->sock_fd & MARK_ICMP_SOCKET) == MARK_ICMP_SOCKET)) && (s->bytes > 0))
+        if ((IS_SOCKET_UDP(s->sock_fd) ||
+             IS_SOCKET_ICMP(s->sock_fd) ||
+             IS_SOCKET_RAW(s->sock_fd) ||
+             IS_SOCKET_PACKET(s->sock_fd)) && (s->bytes > 0))
             break;
     }
     ret = s->bytes;
@@ -1095,6 +1126,9 @@ void socket_in_init(void)
 
     register_module(&mod_socket_in);
     register_addr_family(&mod_socket_in, FAMILY_INET);
+#if WOLFIP_PACKET_SOCKETS
+    register_addr_family(&mod_socket_in, AF_PACKET);
+#endif
 
     netdev_attach_registered();
 

@@ -21,6 +21,8 @@
 #include "socket_in.h"
 #include "net.h"
 #include "locks.h"
+#include "wolfip.h"
+#include "mdns.h"
 #include <string.h>
 
 #ifndef EAI_FAIL
@@ -51,22 +53,6 @@ static int dns_getaddrinfo(const char *node,
 static int dns_freeaddrinfo(struct addrinfo *res);
 
 #define DNS_TIMEOUT_MS 5000U
-
-static mutex_t *dns_mutex;
-static volatile uint32_t dns_result_ip;
-static volatile int dns_result_ready;
-
-static void dns_mutex_init(void)
-{
-    if (!dns_mutex)
-        dns_mutex = mutex_init();
-}
-
-static void wolfip_dns_cb(uint32_t ip)
-{
-    dns_result_ip = ee32(ip);
-    dns_result_ready = 1;
-}
 
 static int parse_ipv4_literal(const char *node, uint32_t *addr)
 {
@@ -171,11 +157,102 @@ static int build_addrinfo(uint32_t addr,
     return 0;
 }
 
+#if CONFIG_TCPIP
+
+extern struct wolfIP *IPStack;
+
+static mutex_t *dns_reslv_mutex;
+static struct task *dns_waiter;
+static volatile uint32_t dns_reslv_ip;
+static volatile int dns_reslv_ready;
+static int dns_reslv_timer_id = -1;
+
+static void dns_reslv_cb(uint32_t ip)
+{
+    dns_reslv_ip = ip;
+    dns_reslv_ready = 1;
+    if (dns_reslv_timer_id >= 0) {
+        ktimer_del(dns_reslv_timer_id);
+        dns_reslv_timer_id = -1;
+    }
+    if (dns_waiter) {
+        struct task *w = dns_waiter;
+        dns_waiter = NULL;
+        task_resume(w);
+    }
+}
+
+static void dns_reslv_timeout(uint32_t ms, void *arg)
+{
+    (void)ms;
+    (void)arg;
+    dns_reslv_timer_id = -1;
+    if (!dns_reslv_ready && dns_waiter) {
+        struct task *w = dns_waiter;
+        dns_waiter = NULL;
+        task_resume(w);
+    }
+}
+
 static int resolve_hostname(const char *node, uint32_t *addr)
 {
-    // TCP/IP stack not present in this build
+    uint16_t id = 0;
+
+    if (!IPStack)
+        return -EAI_FAIL;
+
+    if (mdns_is_local_name(node)) {
+        uint32_t mip = 0;
+        if (mdns_lookup(node, &mip) == 0) {
+            *addr = mip;
+            return 0;
+        }
+        return -EAI_NONAME;
+    }
+
+    if (!dns_reslv_mutex)
+        dns_reslv_mutex = mutex_init();
+    if (!dns_reslv_mutex)
+        return -EAI_FAIL;
+
+    mutex_lock(dns_reslv_mutex);
+    dns_reslv_ready = 0;
+    dns_reslv_ip = 0;
+    dns_waiter = this_task();
+
+    if (nslookup(IPStack, node, &id, dns_reslv_cb) < 0) {
+        dns_waiter = NULL;
+        mutex_unlock(dns_reslv_mutex);
+        return -EAI_AGAIN;
+    }
+
+    dns_reslv_timer_id = ktimer_add(DNS_TIMEOUT_MS, dns_reslv_timeout, NULL);
+    task_suspend();
+    if (dns_reslv_timer_id >= 0) {
+        ktimer_del(dns_reslv_timer_id);
+        dns_reslv_timer_id = -1;
+    }
+    dns_waiter = NULL;
+
+    if (dns_reslv_ready && dns_reslv_ip) {
+        *addr = dns_reslv_ip;
+        mutex_unlock(dns_reslv_mutex);
+        return 0;
+    }
+    mutex_unlock(dns_reslv_mutex);
+    return -EAI_AGAIN;
+}
+
+#else
+
+static int resolve_hostname(const char *node, uint32_t *addr)
+{
+    (void)node;
+    (void)addr;
     return -EAI_FAIL;
 }
+
+#endif
 
 static int dns_getaddrinfo(const char *node,
                            const char *service,
