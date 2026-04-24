@@ -21,6 +21,7 @@
 #include "frosted.h"
 #include "device.h"
 #include "framebuffer.h"
+#include "fcntl.h"
 #include <stdint.h>
 #include <sys/ioctl.h>
 #include <string.h>
@@ -51,12 +52,13 @@ static int fb_open(const char *path, int flags)
     struct fnode *f = fno_search(path);
     if (!f)
         return -1;
+    if ((flags & O_ACCMODE) != O_RDONLY && this_task() != get_kernel())
+        return -EPERM;
     return device_open(path, flags);
 }
 
 static int fb_write(struct fnode *fno, const void *buf, unsigned int len)
 {
-    int len_left;
     struct fb_info *fb;
     uint32_t off;
 
@@ -67,19 +69,20 @@ static int fb_write(struct fnode *fno, const void *buf, unsigned int len)
     if (!fb)
         return -1;
 
-    //mutex_lock(fb->dev->mutex);
+    mutex_lock(fb->dev->mutex);
     off = task_fd_get_off(fno);
     if (off + len > fno->size)
         len = (off < fno->size) ? (fno->size - off) : 0;
     if (!len)
-        return 0;
+        goto out;
 
     /* write to framebuffer memory */
     memcpy((void *)((uint8_t *)fb->screen_buffer + off) , buf, len); 
     off += len;
     task_fd_set_off(fno, off);
 
-    //mutex_unlock(fb->dev->mutex);
+out:
+    mutex_unlock(fb->dev->mutex);
     return len;
 }
 
@@ -105,14 +108,14 @@ static int fb_read(struct fnode *fno, void *buf, unsigned int len)
     if (!fb)
         return -1;
 
-    // mutex_lock(fb->dev->mutex);
+    mutex_lock(fb->dev->mutex);
 
     //XXX: max len = MAX_FB_SIZE;
     memcpy(buf, (void *)((uint8_t *)fb->screen_buffer + off), len);
     off += len;
     task_fd_set_off(fno, off);
 
-    //mutex_unlock(fb->dev->mutex);
+    mutex_unlock(fb->dev->mutex);
     return len;
 }
 

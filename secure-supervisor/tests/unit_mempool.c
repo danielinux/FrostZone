@@ -199,6 +199,45 @@ START_TEST(test_mempool_mmap_best_fit_contiguous_extension)
 }
 END_TEST
 
+START_TEST(test_mempool_chown_merges_with_single_destination_segment)
+{
+    const uint16_t src_id = 8;
+    const uint16_t dst_id = 9;
+    secure_task_t *src;
+    secure_task_t *dst;
+    uint8_t *segment;
+
+    ck_assert_int_eq(register_secure_task(src_id, CAP_TASK, CONFIG_TASK_MAX_MEM), 0);
+    ck_assert_int_eq(register_secure_task(dst_id, CAP_TASK, CONFIG_TASK_MAX_MEM), 0);
+
+    src = get_secure_task(src_id);
+    dst = get_secure_task(dst_id);
+    ck_assert_ptr_nonnull(src);
+    ck_assert_ptr_nonnull(dst);
+
+    segment = mempool_test_ptr + 0x2000;
+    src->mempool[0].base = segment;
+    src->mempool[0].size = 256;
+    src->mempool_count = 1;
+    src->limits.mem_used = 256;
+
+    dst->main_segment.base = mempool_test_ptr + 0x1000;
+    dst->main_segment.size = 512;
+    dst->mempool[0].base = segment + 256;
+    dst->mempool[0].size = 128;
+    dst->mempool_count = 1;
+    dst->limits.mem_used = 640;
+
+    ck_assert_int_eq(mempool_chown(segment, dst_id, src_id), 0);
+    ck_assert_uint_eq(src->mempool_count, 0);
+    ck_assert_uint_eq(src->limits.mem_used, 0);
+    ck_assert_uint_eq(dst->mempool_count, 1);
+    ck_assert_ptr_eq(dst->mempool[0].base, segment);
+    ck_assert_uint_eq(dst->mempool[0].size, 384);
+    ck_assert_uint_eq(dst->limits.mem_used, 896);
+}
+END_TEST
+
 static Suite *
 mempool_suite(void)
 {
@@ -214,6 +253,7 @@ mempool_suite(void)
     tcase_add_test(tc, test_mempool_alloc_stack_reuses_single_slot);
     tcase_add_test(tc, test_mempool_mmap_best_fit_new_segment);
     tcase_add_test(tc, test_mempool_mmap_best_fit_contiguous_extension);
+    tcase_add_test(tc, test_mempool_chown_merges_with_single_destination_segment);
 
     suite_add_tcase(s, tc);
     return s;

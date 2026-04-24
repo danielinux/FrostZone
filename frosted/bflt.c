@@ -22,6 +22,8 @@
 #include "string.h"
 
 extern volatile int phase0_bflt_trace_tag;
+extern uint8_t __task_mempool_start;
+extern uint8_t __task_mempool_end;
 
 
 #ifndef kprintf
@@ -42,6 +44,46 @@ static inline uint16_t short_be(uint16_t le)
 
 static void load_header(struct flat_hdr * to_hdr, struct flat_hdr * from_hdr) {
     memcpy((uint8_t*)to_hdr, (uint8_t*)from_hdr, sizeof(struct flat_hdr));
+}
+
+static int sub_u32_checked(uint32_t *out, uint32_t lhs, uint32_t rhs)
+{
+    if (lhs < rhs)
+        return -1;
+
+    *out = lhs - rhs;
+    return 0;
+}
+
+static int add_u32_checked(uint32_t *out, uint32_t lhs, uint32_t rhs)
+{
+    if (lhs > (UINT32_MAX - rhs))
+        return -1;
+
+    *out = lhs + rhs;
+    return 0;
+}
+
+static int bflt_alloc_in_user_mempool(void *mem, uint32_t len)
+{
+    uintptr_t start;
+    uintptr_t end;
+    uintptr_t pool_start = (uintptr_t)&__task_mempool_start;
+    uintptr_t pool_end = (uintptr_t)&__task_mempool_end;
+
+    if ((mem == NULL) || (len == 0u))
+        return 0;
+
+    start = (uintptr_t)mem;
+    if ((start < pool_start) || (start > pool_end))
+        return 0;
+    if (start > (UINTPTR_MAX - len))
+        return 0;
+    end = start + len;
+    if ((end < pool_start) || (end > pool_end))
+        return 0;
+
+    return 1;
 }
 
 static int check_header(struct flat_hdr * header) {
@@ -651,7 +693,9 @@ int bflt_load(uint8_t* from, void **reloc_text, void **reloc_data, void **reloc_
 {
     struct flat_hdr hdr;
     void * mem = NULL;
+    uint32_t data_start, data_end, bss_end, reloc_start, reloc_bytes;
     uint32_t bss_len, stack_len, flags, alloc_len, entry_point_offset;
+    uint32_t entry_offset;
     uint8_t *relocs_src, *text_src, *data_dest;
     uint8_t *address_zero = from;
     int32_t relocs, rev;
@@ -669,28 +713,57 @@ int bflt_load(uint8_t* from, void **reloc_text, void **reloc_data, void **reloc_
     }
 
     /* Calculate all the sizes */
-    *text_len           = long_be(hdr.data_start) - sizeof(struct flat_hdr);
-    *data_len           = long_be(hdr.data_end) - long_be(hdr.data_start);
-    bss_len             = long_be(hdr.bss_end) - long_be(hdr.data_end);
+    data_start          = long_be(hdr.data_start);
+    data_end            = long_be(hdr.data_end);
+    bss_end             = long_be(hdr.bss_end);
+    reloc_start         = long_be(hdr.reloc_start);
     stack_len           = long_be(hdr.stack_size);
-    relocs              = long_be(hdr.reloc_count);
+    if (long_be(hdr.reloc_count) > (uint32_t)INT32_MAX) {
+        kprintf("bFLT: Relocation count too large\r\n");
+        goto error;
+    }
+    relocs              = (int32_t)long_be(hdr.reloc_count);
     flags               = long_be(hdr.flags);
     rev                 = long_be(hdr.rev);
+    entry_offset        = long_be(hdr.entry) & 0xFFFFFFFEu;
+
+    if ((sub_u32_checked(text_len, data_start, sizeof(struct flat_hdr)) != 0) ||
+        (sub_u32_checked(data_len, data_end, data_start) != 0) ||
+        (sub_u32_checked(&bss_len, bss_end, data_end) != 0) ||
+        (sub_u32_checked(&entry_point_offset, entry_offset, sizeof(struct flat_hdr)) != 0)) {
+        kprintf("bFLT: Invalid segment ordering\r\n");
+        goto error;
+    }
+    if ((entry_offset < sizeof(struct flat_hdr)) || (entry_point_offset >= *text_len)) {
+        kprintf("bFLT: Invalid entry point\r\n");
+        goto error;
+    }
+    if ((reloc_start < data_end) || (reloc_start > bss_end)) {
+        kprintf("bFLT: Invalid relocation table start\r\n");
+        goto error;
+    }
+    if ((uint32_t)relocs > (UINT32_MAX / sizeof(uint32_t))) {
+        kprintf("bFLT: Relocation table too large\r\n");
+        goto error;
+    }
+    reloc_bytes = (uint32_t)relocs * sizeof(uint32_t);
     /* Calculate source addresses */
     text_src            = address_zero + sizeof(struct flat_hdr);
-    relocs_src          = address_zero + long_be(hdr.reloc_start);
-    entry_point_offset  = (long_be(hdr.entry) & 0xFFFFFFFE) - sizeof(struct flat_hdr); /* offset inside .text + reset THUMB bit */
+    relocs_src          = address_zero + reloc_start;
     *stack_size         = stack_len;
 
     /*
      * calculate the extra space we need to malloc
      */
     /* relocs are located in the .bss part of the BFLT binary, so we need whichever is biggest */
-    if ((relocs * sizeof(uint32_t)) > bss_len)
-        alloc_len = relocs * sizeof(uint32_t);
+    if (reloc_bytes > bss_len)
+        alloc_len = reloc_bytes;
     else
         alloc_len = bss_len;
-    alloc_len += *data_len;
+    if (add_u32_checked(&alloc_len, alloc_len, *data_len) != 0) {
+        kprintf("bFLT: Allocation size overflow\r\n");
+        goto error;
+    }
 
 
     /*
@@ -709,8 +782,11 @@ int bflt_load(uint8_t* from, void **reloc_text, void **reloc_data, void **reloc_
         uint32_t copy_len = *data_len;
 
         if (flags & FLAT_FLAG_RAM) {
-            alloc_len += *text_len;
-            copy_len += *text_len;
+            if ((add_u32_checked(&alloc_len, alloc_len, *text_len) != 0) ||
+                (add_u32_checked(&copy_len, copy_len, *text_len) != 0)) {
+                kprintf("bFLT: RAM image size overflow\r\n");
+                goto error;
+            }
             data_offset = *text_len;
         }
 
@@ -719,6 +795,11 @@ int bflt_load(uint8_t* from, void **reloc_text, void **reloc_data, void **reloc_
         if (!mem)
         {
             kprintf("bFLT: Could not allocate enough memory for process\r\n");
+            goto error;
+        }
+        if (!bflt_alloc_in_user_mempool(mem, alloc_len)) {
+            kprintf("bFLT: Loader allocation escaped user mempool\r\n");
+            secure_munmap(mem, 0);
             goto error;
         }
 

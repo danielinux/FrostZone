@@ -2,6 +2,8 @@
 #include "string.h"
 #include "stm32h563.h"
 
+#define TRNG_MAX_REQUEST 4096U
+
 #define TRNG_BASE 0x520C0800
 #define TRNG_CR *((volatile uint32_t *)(TRNG_BASE + 0x00))
 #define TRNG_SR *((volatile uint32_t *)(TRNG_BASE + 0x04))
@@ -56,18 +58,43 @@ int trng_getrandom(unsigned char *out, unsigned len)
             ;
         rand_seed = TRNG_DR;
         rand_byte = (uint8_t *)&rand_seed;
-        for (j = 0; j < 4; j++) {
+        for (j = 0; (j < 4) && ((i + (unsigned)j) < len); j++)
             out[i + j] = rand_byte[j];
-            if (i + j >= len)
-                break;
-        }
     }
     return 0;
 }
 
+static void *ns_ram_rw_range_check(const void *ptr, unsigned len)
+{
+    uintptr_t start;
+    uintptr_t end;
+
+    if ((ptr == NULL) || (len == 0u))
+        return NULL;
+
+    start = (uintptr_t)ptr;
+    if ((start < SAU_RAM_NS_START) || (start > SAU_RAM_NS_END))
+        return NULL;
+    if (start > (UINTPTR_MAX - ((uintptr_t)len - 1u)))
+        return NULL;
+    end = start + (uintptr_t)len - 1u;
+    if ((end < SAU_RAM_NS_START) || (end > SAU_RAM_NS_END))
+        return NULL;
+
+    return (void *)ptr;
+}
 
 __attribute__((cmse_nonsecure_entry))
 int secure_getrandom(void *buf, int size)
 {
-    return trng_getrandom(buf, size);
+    unsigned char *out;
+
+    if ((size <= 0) || ((unsigned)size > TRNG_MAX_REQUEST))
+        return -1;
+
+    out = ns_ram_rw_range_check(buf, (unsigned)size);
+    if (!out)
+        return -1;
+
+    return trng_getrandom(out, (unsigned)size);
 }

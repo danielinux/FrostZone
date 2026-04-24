@@ -83,6 +83,21 @@ static uint32_t prefix_to_mask(uint8_t prefix)
     return (uint32_t)(0xFFFFFFFFu << (32 - prefix));
 }
 
+static int nl_requires_admin(uint16_t type)
+{
+    switch (type) {
+    case RTM_NEWLINK:
+    case RTM_SETLINK:
+    case RTM_NEWADDR:
+    case RTM_DELADDR:
+    case RTM_NEWROUTE:
+    case RTM_DELROUTE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 /* --- Per-socket state --------------------------------------------------- */
 
 struct nl_reply {
@@ -575,6 +590,8 @@ static int nl_dispatch(struct nl_sock *s, const uint8_t *buf, uint32_t len)
     nlh = (const struct nlmsghdr *)buf;
     if (!NLMSG_OK(nlh, (int)len))
         return -EINVAL;
+    if (nl_requires_admin(nlh->nlmsg_type) && this_task() != get_kernel())
+        return nl_emit_error(s, -EPERM, nlh);
 
     switch (nlh->nlmsg_type) {
     case RTM_GETLINK:

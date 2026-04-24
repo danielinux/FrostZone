@@ -30,28 +30,44 @@ int ksnprintf(char *buf, size_t size, const char *fmt, ...) {
     va_list args;
     size_t i = 0, j = 0;
     va_start(args, fmt);
-    while (fmt[i] && j + 1 < size) {
+
+#define KSNPRINTF_PUTCH(ch) do {                                                  \
+        if (buf && (j + 1 < size))                                                \
+            buf[j] = (ch);                                                        \
+        j++;                                                                      \
+    } while (0)
+
+    while (fmt[i]) {
         if (fmt[i] == '%' && fmt[i+1]) {
             i++;
             if (fmt[i] == 's') {
                 const char *s = va_arg(args, const char *);
-                while (*s && j + 1 < size) buf[j++] = *s++;
+                if (!s)
+                    s = "(null)";
+                while (*s)
+                    KSNPRINTF_PUTCH(*s++);
             } else if (fmt[i] == 'd') {
                 int val = va_arg(args, int);
                 char tmp[12];
                 int n = 0, v = val;
-                if (v < 0) { buf[j++] = '-'; v = -v; }
+                if (v < 0) {
+                    KSNPRINTF_PUTCH('-');
+                    v = -v;
+                }
                 do { tmp[n++] = '0' + (v % 10); v /= 10; } while (v && n < 11);
-                while (n-- && j + 1 < size) buf[j++] = tmp[n];
+                while (n--)
+                    KSNPRINTF_PUTCH(tmp[n]);
             } else {
-                buf[j++] = fmt[i];
+                KSNPRINTF_PUTCH(fmt[i]);
             }
         } else {
-            buf[j++] = fmt[i];
+            KSNPRINTF_PUTCH(fmt[i]);
         }
         i++;
     }
-    if (size) buf[j < size ? j : size-1] = 0;
+    if (buf && size)
+        buf[j < size ? j : size - 1] = 0;
+#undef KSNPRINTF_PUTCH
     va_end(args);
     return (int)j;
 }
@@ -65,17 +81,87 @@ int ksnprintf(char *buf, size_t size, const char *fmt, ...) {
 
 #define O_MODE(o) ((o & O_ACCMODE))
 #define O_BLOCKING(f) ((f->flags & O_NONBLOCK) == 0)
+#define VFS_SYMLOOP_MAX 8u
 
 POOL_DEFINE(fnode_pool, struct fnode, CONFIG_MAX_FNODES);
 POOL_DEFINE(mountpoint_pool, struct mountpoint, CONFIG_MAX_MOUNTS);
 
 struct mountpoint *MTAB = NULL;
+static mutex_t *vfs_mutex;
 
 /* ROOT entity ("/")
  *.
  */
 static struct fnode FNO_ROOT = {
 };
+
+static size_t vfs_strnlen(const char *src, size_t max_len)
+{
+    size_t len = 0;
+
+    if (!src)
+        return 0;
+
+    while ((len < max_len) && src[len])
+        len++;
+
+    return len;
+}
+
+static int vfs_copy_string(char *dst, size_t dst_size, const char *src)
+{
+    size_t len;
+
+    if (!dst || (dst_size == 0))
+        return -EINVAL;
+
+    len = vfs_strnlen(src, dst_size);
+    if (len >= dst_size) {
+        dst[0] = '\0';
+        return -ENAMETOOLONG;
+    }
+
+    memcpy(dst, src, len);
+    dst[len] = '\0';
+    return 0;
+}
+
+static int vfs_join_path(char *dst, size_t dst_size,
+                         const char *prefix, const char *suffix)
+{
+    size_t prefix_len;
+    size_t suffix_len;
+    int need_sep = 0;
+    size_t total;
+
+    if (!dst || !prefix || !suffix || (dst_size == 0))
+        return -EINVAL;
+
+    prefix_len = vfs_strnlen(prefix, dst_size);
+    suffix_len = vfs_strnlen(suffix, dst_size);
+    if ((prefix_len >= dst_size) || (suffix_len >= dst_size)) {
+        dst[0] = '\0';
+        return -ENAMETOOLONG;
+    }
+
+    if ((prefix_len > 0) && (suffix_len > 0) &&
+        (prefix[prefix_len - 1] != '/') && (suffix[0] != '/')) {
+        need_sep = 1;
+    }
+
+    total = prefix_len + (size_t)need_sep + suffix_len;
+    if (total >= dst_size) {
+        dst[0] = '\0';
+        return -ENAMETOOLONG;
+    }
+
+    memcpy(dst, prefix, prefix_len);
+    if (need_sep)
+        dst[prefix_len++] = '/';
+    memcpy(dst + prefix_len, suffix, suffix_len);
+    dst[total] = '\0';
+    return 0;
+}
 
 static void basename_r(const char *path, char *res, size_t res_size)
 {
@@ -164,19 +250,25 @@ int fno_fullpath(struct fnode *f, char *dst, int len)
 static int path_abs(char *src, char *dst, int len)
 {
     struct fnode *f = task_getcwd();
-    if (src[0] == '/')
-        strncpy(dst, src, len);
-    else {
-        if (fno_fullpath(f, dst, len) > 0) {
-            while (dst[strlen(dst) - 1] == '/')
-                dst[strlen(dst) - 1] = '\0';
+    char cwd[MAX_FILE];
+    int ret;
 
-            strncat(dst, "/", len);
-            strncat(dst, src, len);
-            return 0;
-        }
+    if (!src || !dst || (len <= 0))
+        return -EINVAL;
+
+    if (src[0] == '/')
+        return vfs_copy_string(dst, len, src);
+
+    ret = fno_fullpath(f, cwd, sizeof(cwd));
+    if (ret <= 0)
+        return vfs_copy_string(dst, len, src);
+
+    while ((ret > 1) && (cwd[ret - 1] == '/')) {
+        cwd[ret - 1] = '\0';
+        ret--;
     }
-    return 0;
+
+    return vfs_join_path(dst, len, cwd, src);
 }
 
 static struct fnode *fno_create_file(char *path)
@@ -205,12 +297,14 @@ static struct fnode *fno_link(char *src, char *dst)
 {
     struct fnode *file;
     struct fnode *link;
-    int file_name_len;
+    size_t file_name_len;
     char p_src[MAX_FILE];
     char p_dst[MAX_FILE];
 
-    path_abs(src, p_src, MAX_FILE);
-    path_abs(dst, p_dst, MAX_FILE);
+    if ((path_abs(src, p_src, MAX_FILE) < 0) ||
+        (path_abs(dst, p_dst, MAX_FILE) < 0)) {
+        return NULL;
+    }
 
     file = fno_search(p_src);
     if (!file)
@@ -220,7 +314,7 @@ static struct fnode *fno_link(char *src, char *dst)
     if (!link)
         return NULL;
 
-    file_name_len = strlen(p_src);
+    file_name_len = vfs_strnlen(p_src, sizeof(p_src));
 
     link->flags |= FL_LINK;
     if (file_name_len >= MAX_FILE) {
@@ -242,16 +336,16 @@ int vfs_symlink(char *file, char *link)
 static void mkdir_links(struct fnode *fno)
 {
     char path[MAX_FILE], selfl[MAX_FILE], parentl[MAX_FILE], path_basename[MAX_FILE];
-    fno_fullpath(fno, path, MAX_FILE -4);
-    strcpy(selfl, path);
-    strcpy(parentl, path);
-    strcat(selfl, "/.");
-    strcat(parentl, "/..");
-    if (fno) {
-        fno_link(path, selfl);
-        basename_r(path, path_basename, sizeof(path_basename));
-        fno_link(path_basename, parentl);
-    }
+
+    if (!fno)
+        return;
+
+    fno_fullpath(fno, path, MAX_FILE - 4);
+    ksnprintf(selfl, sizeof(selfl), "%s/.", path);
+    ksnprintf(parentl, sizeof(parentl), "%s/..", path);
+    fno_link(path, selfl);
+    basename_r(path, path_basename, sizeof(path_basename));
+    fno_link(path_basename, parentl);
 }
 
 static struct fnode *fno_create_dir(char *path, uint32_t mode)
@@ -319,7 +413,8 @@ static int path_check(const char *path, const char *dirname)
 }
 
 
-static struct fnode *_fno_search(const char *path, struct fnode *dir, int follow)
+static struct fnode *_fno_search_at(const char *path, struct fnode *dir,
+                                    int follow, unsigned int symlink_depth)
 {
     struct fnode *cur;
     char link[MAX_FILE];
@@ -333,14 +428,17 @@ static struct fnode *_fno_search(const char *path, struct fnode *dir, int follow
     if (check == 0) {
         if (!dir->next)
             return NULL;
-        return _fno_search(path, dir->next, follow);
+        return _fno_search_at(path, dir->next, follow, symlink_depth);
     }
 
     /* Item is found! */
     if (check == 2) {
         /* If it's a symlink, restart check */
         if (follow && ((dir->flags & FL_LINK) == FL_LINK)) {
-            return _fno_search(dir->linkname, &FNO_ROOT, 1);
+            if (symlink_depth >= VFS_SYMLOOP_MAX)
+                return NULL;
+            return _fno_search_at(dir->linkname, &FNO_ROOT, 1,
+                                  symlink_depth + 1u);
         }
         return dir;
     }
@@ -349,16 +447,16 @@ static struct fnode *_fno_search(const char *path, struct fnode *dir, int follow
     if( (dir->flags & FL_LINK ) == FL_LINK ){
         /* passing through a symlink */
         const char *walk = path_walk(path);
-        int needed = ksnprintf(NULL, 0, "%s/%s", dir->linkname, walk ? walk : "");
-        if (needed >= MAX_FILE) {
-            return (struct fnode *)-ENAMETOOLONG;
-        }
-        ksnprintf(link, MAX_FILE, "%s/%s", dir->linkname, walk ? walk : "");
-        return _fno_search(link, &FNO_ROOT, follow);
+        if (symlink_depth >= VFS_SYMLOOP_MAX)
+            return NULL;
+        if (vfs_join_path(link, sizeof(link), dir->linkname, walk ? walk : "") < 0)
+            return NULL;
+        return _fno_search_at(link, &FNO_ROOT, follow, symlink_depth + 1u);
     }
     {
         const char *rest = path_walk(path);
-        struct fnode *result = _fno_search(rest, dir->children, follow);
+        struct fnode *result = _fno_search_at(rest, dir->children, follow,
+                                              symlink_depth);
         if (!result && rest && dir->owner && dir->owner->ops.lookup) {
             /* Extract next path component name */
             char name[CONFIG_MAX_FNAME];
@@ -370,15 +468,24 @@ static struct fnode *_fno_search(const char *path, struct fnode *dir, int follow
             name[i] = '\0';
             result = dir->owner->ops.lookup(dir, name);
             if (result && follow && ((result->flags & FL_LINK) == FL_LINK)) {
-                return _fno_search(result->linkname, &FNO_ROOT, 1);
+                if (symlink_depth >= VFS_SYMLOOP_MAX)
+                    return NULL;
+                return _fno_search_at(result->linkname, &FNO_ROOT, 1,
+                                      symlink_depth + 1u);
             }
             if (result && rest[i] == '/') {
                 /* More path to walk */
-                result = _fno_search(path_walk(rest), result->children, follow);
+                result = _fno_search_at(path_walk(rest), result->children,
+                                        follow, symlink_depth);
             }
         }
         return result;
     }
+}
+
+static struct fnode *_fno_search(const char *path, struct fnode *dir, int follow)
+{
+    return _fno_search_at(path, dir, follow, 0u);
 }
 
 struct fnode *fno_search(const char *_path)
@@ -389,7 +496,7 @@ struct fnode *fno_search(const char *_path)
     if (!_path)
         return NULL;
 
-    len = strlen(_path);
+    len = (int)vfs_strnlen(_path, MAX_FILE);
     if (!len || len >= MAX_FILE)
         return NULL;
 
@@ -1107,9 +1214,15 @@ int vfs_mount(char *source, char *target, char *module, uint32_t flags, void *ar
     if (ret == 0) {
         struct mountpoint *mp = pool_alloc(&mountpoint_pool);
         if (mp) {
+            mutex_lock(vfs_mutex);
             mp->target = fno_search(target);
-            mp->next = MTAB;
-            MTAB = mp;
+            if (mp->target) {
+                mp->next = MTAB;
+                MTAB = mp;
+            } else {
+                pool_free(&mountpoint_pool, mp);
+            }
+            mutex_unlock(vfs_mutex);
         }
         return 0;
     }
@@ -1120,30 +1233,33 @@ int vfs_umount(char *target, uint32_t flags)
 {
     struct fnode *f;
     int ret;
-    struct mountpoint *mp = MTAB, *prev = NULL;
+    struct mountpoint *mp;
+    struct mountpoint **link = &MTAB;
     if (!target)
         return -ENOENT;
-    f = fno_search(target);
-    if (!f || !f->owner || !f->owner->umount)
-        return -ENOMEDIUM;
-    ret = f->owner->umount(target, flags);
-    if (ret < 0)
-        return ret;
 
-    while (mp) {
+    mutex_lock(vfs_mutex);
+    f = fno_search(target);
+    if (!f || !f->owner || !f->owner->umount) {
+        mutex_unlock(vfs_mutex);
+        return -ENOMEDIUM;
+    }
+    ret = f->owner->umount(target, flags);
+    if (ret < 0) {
+        mutex_unlock(vfs_mutex);
+        return ret;
+    }
+
+    while (*link) {
+        mp = *link;
         if (mp->target == f) {
-            if (!prev) {
-                MTAB = mp->next;
-                break;
-            } else {
-                prev->next = mp->next;
-            }
+            *link = mp->next;
             pool_free(&mountpoint_pool, mp);
             break;
         }
-        prev = mp;
-        mp = mp->next;
+        link = &mp->next;
     }
+    mutex_unlock(vfs_mutex);
     return 0;
 }
 
@@ -1183,6 +1299,7 @@ void vfs_init(void)
     extern void device_pool_init(void);
     pool_init(&fnode_pool);
     pool_init(&mountpoint_pool);
+    vfs_mutex = mutex_init();
     device_pool_init();
 
     /* Initialize "/" */

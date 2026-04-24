@@ -537,15 +537,64 @@ int sysfs_tasks_read(struct sysfs_fnode *sfs, void *buf, int len)
 
 #define NPOOLS 5
 
-static int sysfs_mem_append_line(char *dst, int off, const char *label, uint32_t value)
+static int sysfs_mem_append_line(char *dst, int dst_len, int off,
+        const char *label, uint32_t value)
 {
-    strcpy(dst + off, label);
-    off += strlen(label);
+    char value_buf[11];
+    int label_len;
+    int value_len;
+    int remaining;
+
+    if (!dst || !label || off < 0 || dst_len <= 0 || off >= dst_len)
+        return -1;
+
+    label_len = strlen(label);
+    value_len = ul_to_str(value, value_buf);
+    remaining = dst_len - off;
+    if (remaining <= (label_len + 1 + value_len + 2))
+        return -1;
+
+    memcpy(dst + off, label, label_len);
+    off += label_len;
     dst[off++] = '\t';
-    off += ul_to_str(value, dst + off);
+    memcpy(dst + off, value_buf, value_len);
+    off += value_len;
     dst[off++] = '\r';
     dst[off++] = '\n';
     return off;
+}
+
+static int sysfs_append_truncated(char *dst, int dst_len, int off,
+        const char *src, int tail_reserve)
+{
+    int remaining;
+    int max_copy;
+    int src_len;
+
+    if (!dst || !src || off < 0 || dst_len <= 0 || off >= dst_len)
+        return -1;
+
+    remaining = dst_len - off;
+    if (remaining <= tail_reserve)
+        return -1;
+
+    max_copy = remaining - tail_reserve;
+    src_len = 0;
+    while (src[src_len] && src_len <= max_copy)
+        src_len++;
+    if (src_len <= max_copy) {
+        memcpy(dst + off, src, src_len);
+        return off + src_len;
+    }
+
+    if (max_copy <= 3) {
+        memset(dst + off, '.', max_copy);
+        return off + max_copy;
+    }
+
+    memcpy(dst + off, src, max_copy - 3);
+    memcpy(dst + off + max_copy - 3, "...", 3);
+    return off + max_copy;
 }
 
 int sysfs_mem_read(struct sysfs_fnode *sfs, void *buf, int len)
@@ -576,11 +625,26 @@ int sysfs_mem_read(struct sysfs_fnode *sfs, void *buf, int len)
         off += strlen(legend);
         strcpy(mem_txt + off, divider);
         off += strlen(divider);
-        off = sysfs_mem_append_line(mem_txt, off, "processes", stats.task_reserved);
-        off = sysfs_mem_append_line(mem_txt, off, "kernel   ", stats.kernel_reserved);
-        off = sysfs_mem_append_line(mem_txt, off, "heap_free", stats.free);
-        off = sysfs_mem_append_line(mem_txt, off, "largest  ", stats.largest_free);
-        off = sysfs_mem_append_line(mem_txt, off, "chunks   ", stats.n_free_chunks);
+        off = sysfs_mem_append_line(mem_txt, MAX_SYSFS_BUFFER, off,
+                "processes", stats.task_reserved);
+        if (off < 0)
+            goto mem_overflow;
+        off = sysfs_mem_append_line(mem_txt, MAX_SYSFS_BUFFER, off,
+                "kernel   ", stats.kernel_reserved);
+        if (off < 0)
+            goto mem_overflow;
+        off = sysfs_mem_append_line(mem_txt, MAX_SYSFS_BUFFER, off,
+                "heap_free", stats.free);
+        if (off < 0)
+            goto mem_overflow;
+        off = sysfs_mem_append_line(mem_txt, MAX_SYSFS_BUFFER, off,
+                "largest  ", stats.largest_free);
+        if (off < 0)
+            goto mem_overflow;
+        off = sysfs_mem_append_line(mem_txt, MAX_SYSFS_BUFFER, off,
+                "chunks   ", stats.n_free_chunks);
+        if (off < 0)
+            goto mem_overflow;
         mem_txt[off++] = '\0';
     }
 
@@ -597,6 +661,11 @@ int sysfs_mem_read(struct sysfs_fnode *sfs, void *buf, int len)
     cur_off += len;
     task_fd_set_off(fno, cur_off);
     return len;
+
+mem_overflow:
+    kfree(mem_txt);
+    mutex_unlock(sysfs_mutex);
+    return -1;
 }
 
 int sysfs_modules_read(struct sysfs_fnode *sfs, void *buf, int len)
@@ -673,8 +742,10 @@ int sysfs_mtab_read(struct sysfs_fnode *sfs, void *buf, int len)
             *(mem_txt + (off++)) = '\t';
 
             if (m->target->owner) {
-                strcpy(mem_txt + off, m->target->owner->name);
-                off += strlen(m->target->owner->name);
+                off = sysfs_append_truncated(mem_txt, MAX_SYSFS_BUFFER, off,
+                        m->target->owner->name, 9);
+                if (off < 0)
+                    goto mtab_overflow;
             }
             *(mem_txt + (off++)) = '\t';
             *(mem_txt + (off++)) = '\t';
@@ -712,6 +783,11 @@ int sysfs_mtab_read(struct sysfs_fnode *sfs, void *buf, int len)
     cur_off += len;
     task_fd_set_off(fno,cur_off);
     return len;
+
+mtab_overflow:
+    kfree(mem_txt);
+    mutex_unlock(sysfs_mutex);
+    return -1;
 }
 
 /**
@@ -914,22 +990,49 @@ static int procfs_mem_read(struct sysfs_fnode *sfs, void *buf, int len)
             strcpy(mem_txt, "no info\r\n");
             off = 9;
         } else {
-            off = sysfs_mem_append_line(mem_txt, off, "xip_base ", mi.xip_base);
-            off = sysfs_mem_append_line(mem_txt, off, "xip_size ", mi.xip_size);
-            off = sysfs_mem_append_line(mem_txt, off, "ram_base ", mi.ram_base);
-            off = sysfs_mem_append_line(mem_txt, off, "ram_size ", mi.ram_size);
-            off = sysfs_mem_append_line(mem_txt, off, "stack_base", mi.stack_base);
-            off = sysfs_mem_append_line(mem_txt, off, "stack_size", mi.stack_size);
+            off = sysfs_mem_append_line(mem_txt, MAX_SYSFS_BUFFER, off,
+                    "xip_base ", mi.xip_base);
+            if (off < 0)
+                goto proc_mem_overflow;
+            off = sysfs_mem_append_line(mem_txt, MAX_SYSFS_BUFFER, off,
+                    "xip_size ", mi.xip_size);
+            if (off < 0)
+                goto proc_mem_overflow;
+            off = sysfs_mem_append_line(mem_txt, MAX_SYSFS_BUFFER, off,
+                    "ram_base ", mi.ram_base);
+            if (off < 0)
+                goto proc_mem_overflow;
+            off = sysfs_mem_append_line(mem_txt, MAX_SYSFS_BUFFER, off,
+                    "ram_size ", mi.ram_size);
+            if (off < 0)
+                goto proc_mem_overflow;
+            off = sysfs_mem_append_line(mem_txt, MAX_SYSFS_BUFFER, off,
+                    "stack_base", mi.stack_base);
+            if (off < 0)
+                goto proc_mem_overflow;
+            off = sysfs_mem_append_line(mem_txt, MAX_SYSFS_BUFFER, off,
+                    "stack_size", mi.stack_size);
+            if (off < 0)
+                goto proc_mem_overflow;
             {
                 uint32_t h;
                 uint32_t regions = mi.n_heap_regions;
                 uint32_t max_r = sizeof(mi.heap) / sizeof(mi.heap[0]);
                 if (regions > max_r)
                     regions = max_r;
-                off = sysfs_mem_append_line(mem_txt, off, "heap_segs", regions);
+                off = sysfs_mem_append_line(mem_txt, MAX_SYSFS_BUFFER, off,
+                        "heap_segs", regions);
+                if (off < 0)
+                    goto proc_mem_overflow;
                 for (h = 0; h < regions; h++) {
-                    off = sysfs_mem_append_line(mem_txt, off, "heap_base", mi.heap[h].base);
-                    off = sysfs_mem_append_line(mem_txt, off, "heap_size", mi.heap[h].size);
+                    off = sysfs_mem_append_line(mem_txt, MAX_SYSFS_BUFFER, off,
+                            "heap_base", mi.heap[h].base);
+                    if (off < 0)
+                        goto proc_mem_overflow;
+                    off = sysfs_mem_append_line(mem_txt, MAX_SYSFS_BUFFER, off,
+                            "heap_size", mi.heap[h].size);
+                    if (off < 0)
+                        goto proc_mem_overflow;
                 }
             }
         }
@@ -948,6 +1051,11 @@ static int procfs_mem_read(struct sysfs_fnode *sfs, void *buf, int len)
     cur_off += len;
     task_fd_set_off(fno, cur_off);
     return len;
+
+proc_mem_overflow:
+    kfree(mem_txt);
+    mutex_unlock(sysfs_mutex);
+    return -1;
 }
 
 /* Called from scheduler when a new task is created. */

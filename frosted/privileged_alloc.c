@@ -92,6 +92,11 @@ static int add_new_page(uint32_t page_size)
 
 void *kalloc(uint32_t size)
 {
+    if ((size == 0) ||
+        (size > (UINT32_MAX - sizeof(uint32_t) - (ALIGNMENT - 1u)))) {
+        return 0;
+    }
+
     uint32_t total = ALIGN_UP(size + sizeof(uint32_t), ALIGNMENT);
     while (1) {
         uint32_t irq_state = irq_save();
@@ -110,9 +115,16 @@ void *kalloc(uint32_t size)
 
 void *kcalloc(uint32_t nmemb, uint32_t size)
 {
-    void *mem = kalloc(size * nmemb);
+    uint32_t total;
+    void *mem;
+
+    if (nmemb && (size > (UINT32_MAX / nmemb)))
+        return 0;
+
+    total = size * nmemb;
+    mem = kalloc(total);
     if (mem) {
-        memset(mem, 0, size * nmemb);
+        memset(mem, 0, total);
     }
     return mem;
 }

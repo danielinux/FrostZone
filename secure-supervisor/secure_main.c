@@ -96,6 +96,8 @@ static void sau_init(void)
 #endif
 
     SAU_CTRL = SAU_INIT_CTRL_ENABLE;
+    TZ_DSB();
+    TZ_ISB();
 
     /* Enable SecureFault, MemFault, BusFault and UsageFault in Secure mode */
     SCB_SHCSR |= SCB_SHCSR_SECUREFAULT_EN;

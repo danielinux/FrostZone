@@ -159,15 +159,24 @@ static void stm32_uart_irq_handler(struct stm32_uart_port *port)
 
 void usart2_irq_handler(void);
 
+static struct stm32_uart_port *stm32_uart_port_from_base(uint32_t base)
+{
+    for (uint8_t i = 0; i < MAX_UART_PORTS; i++) {
+        if ((uintptr_t)uart_ports[i].regs == (uintptr_t)base)
+            return &uart_ports[i];
+    }
+    return NULL;
+}
+
 // IRQ handlers for USART peripherals follow camelCase naming as per coding style.
 void usart2_irq_handler(void)
 {
-    stm32_uart_irq_handler(&uart_ports[0]);
+    stm32_uart_irq_handler(stm32_uart_port_from_base(USART2_BASE));
 }
 
 void usart3_irq_handler(void)
 {
-    stm32_uart_irq_handler(&uart_ports[0]);
+    stm32_uart_irq_handler(stm32_uart_port_from_base(USART3_BASE));
 }
 
 static void stm32_uart_enable_clock(uint32_t base)

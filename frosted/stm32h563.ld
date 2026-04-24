@@ -13,6 +13,9 @@ MEMORY
 
 SECTIONS
 {
+    PROVIDE(__task_mempool_start = ORIGIN(MEMPOOL));
+    PROVIDE(__task_mempool_end = ORIGIN(MEMPOOL) + LENGTH(MEMPOOL));
+
     .vectors : {
         PROVIDE(_flash_vectors = .);
         KEEP(*(.vectors))

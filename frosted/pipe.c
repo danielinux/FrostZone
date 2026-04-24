@@ -149,10 +149,13 @@ static int pipe_close(struct fnode *f)
     mutex_lock(pipe_mutex);
 
     if (f == pp->fno_r) {
+        struct task *waiting_w = pp->task_w;
+
+        pp->task_w = NULL;
         pp->fno_r = NULL;
         fno_unlink(f);
-        if ((pp->task_w != t) && (pp->task_w != NULL)) {
-            task_resume(pp->task_w);
+        if ((waiting_w != t) && (waiting_w != NULL)) {
+            task_resume(waiting_w);
         }
     }
     if (f == pp->fno_w) {

@@ -52,10 +52,14 @@ struct devpts {
     struct devpty *master;
     struct cirbuf *miso, *mosi;
     int sid;
+    uint8_t refs;
+    uint8_t master_closed;
+    uint8_t slave_closed;
 };
 
 int ptmx_open(const char *path, int flags);
 int pty_open(const char *path, int flags);
+int pts_open(const char *path, int flags);
 static int pty_read(struct fnode *fno, void *buf, unsigned int len);
 static int pty_poll(struct fnode *fno, uint16_t events, uint16_t *revents);
 static int pty_write(struct fnode *fno, const void *buf, unsigned int len);
@@ -66,6 +70,36 @@ static int pts_poll(struct fnode *fno, uint16_t events, uint16_t *revents);
 static int pts_write(struct fnode *fno, const void *buf, unsigned int len);
 static void pts_tty_attach(struct fnode *fno, int pid);
 static int pts_close(struct fnode *fno);
+
+static int pty_release_locked(struct devpty *pty, struct devpts *pts,
+        int closing_master)
+{
+    if (!pts)
+        return 0;
+
+    if (closing_master) {
+        if (pts->master_closed)
+            return 0;
+        pts->master_closed = 1;
+    } else {
+        if (pts->slave_closed)
+            return 0;
+        pts->slave_closed = 1;
+    }
+
+    if (pty && pty->task) {
+        task_resume(pty->task);
+        pty->task = NULL;
+    }
+    if (pts->task) {
+        task_resume(pts->task);
+        pts->task = NULL;
+    }
+
+    if (pts->refs > 0)
+        pts->refs--;
+    return pts->refs == 0;
+}
 
 static struct module mod_ptmx = {
     .family = FAMILY_DEV,
@@ -88,11 +122,12 @@ static struct module mod_devpty = {
 static struct module mod_devpts = {
     .family = FAMILY_DEV,
     .name = "pts",
-    .ops.open = device_open,
+    .ops.open = pts_open,
     .ops.read = pts_read,
     .ops.poll = pts_poll,
     .ops.write = pts_write,
-    .ops.tty_attach = pts_tty_attach
+    .ops.tty_attach = pts_tty_attach,
+    .ops.close = pts_close
 };
 
 static int pts_create(void)
@@ -130,6 +165,9 @@ static int pts_create(void)
     pts->task = NULL;
     pty->sid = -1;
     pts->sid = -1;
+    pts->refs = 2;
+    pts->master_closed = 0;
+    pts->slave_closed = 0;
     pty->creator_pid = this_task_getpid();
     return task_filedesc_add(pty->fno);
 }
@@ -160,7 +198,6 @@ int pty_open(const char *path, int flags)
 int ptmx_open(const char *path, int flags)
 {
     struct fnode *f = fno_search(path);
-    struct fnode *master, *slave;
     if (f != PTMX.dev->fno)
         return -EINVAL;
     return pts_create();
@@ -178,9 +215,9 @@ static int pty_read(struct fnode *fno, void *buf, unsigned int len)
         pts = pty->slave;
     if (pts) {
         mutex_lock(pts->dev->mutex);
-        if (pts->master != pty)
+        if (pts->master != pty || pts->slave_closed) {
             ret = -EPIPE;
-        if (cirbuf_bytesinuse(pts->miso) > 0) {
+        } else if (cirbuf_bytesinuse(pts->miso) > 0) {
             ret = cirbuf_readbytes(pts->miso, buf, len);
             if ((ret > 0) && pts->task)
                 task_resume(pts->task);
@@ -204,9 +241,9 @@ static int pty_write(struct fnode *fno, const void *buf, unsigned int len)
         pts = pty->slave;
     if (pts) {
         mutex_lock(pts->dev->mutex);
-        if (pts->master != pty)
+        if (pts->master != pty || pts->slave_closed) {
             ret = -EPIPE;
-        if (cirbuf_bytesfree(pts->mosi) > 0) {
+        } else if (cirbuf_bytesfree(pts->mosi) > 0) {
             ret = cirbuf_writebytes(pts->mosi, buf, len);
             if ((ret > 0) && pts->task)
                 task_resume(pts->task);
@@ -236,15 +273,17 @@ static int pty_poll(struct fnode *fno, uint16_t events, uint16_t *revents)
         return -EPIPE;
 
     mutex_lock(pts->dev->mutex);
-    if (pts->master != pty)
+    if (pts->master != pty || pts->slave_closed) {
         ret = -EPIPE;
-    if ((events & POLLOUT) && (cirbuf_bytesfree(pts->mosi) > 0)) {
-        *revents |= POLLOUT;
-        ret = 1;
-    }
-    if ((events & POLLIN) && (cirbuf_bytesinuse(pts->miso) > 0)) {
-        *revents |= POLLIN;
-        ret = 1;
+    } else {
+        if ((events & POLLOUT) && (cirbuf_bytesfree(pts->mosi) > 0)) {
+            *revents |= POLLOUT;
+            ret = 1;
+        }
+        if ((events & POLLIN) && (cirbuf_bytesinuse(pts->miso) > 0)) {
+            *revents |= POLLIN;
+            ret = 1;
+        }
     }
     if (ret == 0) {
         pty->task = this_task();
@@ -256,8 +295,6 @@ static int pty_poll(struct fnode *fno, uint16_t events, uint16_t *revents)
 static void pty_tty_attach(struct fnode *fno, int pid)
 {
     struct devpty *pty = NULL;
-    struct devpts *pts = NULL;
-    int ret = 0;
     pty = (struct devpty *)FNO_MOD_PRIV(fno, &mod_devpty);
     if (pty->sid != pid) {
         pty->sid = pid;
@@ -268,7 +305,7 @@ static int pty_close(struct fnode *fno)
 {
     struct devpty *pty = NULL;
     struct devpts *pts = NULL;
-    int ret = 0;
+    int destroy = 0;
     pty = (struct devpty *)FNO_MOD_PRIV(fno, &mod_devpty);
     if (!pty)
         return -1;
@@ -276,14 +313,16 @@ static int pty_close(struct fnode *fno)
     if (!pts)
         return -1;
 
-    if (this_task_getpid() == pty->creator_pid) {
-        mutex_lock(pts->dev->mutex);
-        fno_unlink(pts->dev->fno);
-        pty->fno->priv = NULL;
-        pts->dev->fno->priv = NULL;
+    mutex_lock(pts->dev->mutex);
+    destroy = pty_release_locked(pty, pts, 1);
+    mutex_unlock(pts->dev->mutex);
+
+    if (destroy) {
+        if (pts->dev && pts->dev->fno)
+            fno_unlink(pts->dev->fno);
+        if (pty->fno)
+            fno_detach(pty->fno);
         kfree(pty);
-        pts->master = NULL;
-        mutex_unlock(pts->dev->mutex);
         kfree(pts);
     }
     return 0;
@@ -293,10 +332,16 @@ static int pty_close(struct fnode *fno)
 int pts_open(const char *path, int flags)
 {
     struct fnode *f = fno_search(path);
-    struct fnode *master, *slave;
-    if (f != PTMX.dev->fno)
+    struct devpts *pts;
+
+    if (!f)
+        return -ENOENT;
+    pts = (struct devpts *)FNO_MOD_PRIV(f, &mod_devpts);
+    if (!pts)
         return -EINVAL;
-    return pts_create();
+    if (pts->master_closed || pts->slave_closed)
+        return -ENXIO;
+    return task_filedesc_add(f);
 }
 
 static int pts_read(struct fnode *fno, void *buf, unsigned int len)
@@ -308,10 +353,10 @@ static int pts_read(struct fnode *fno, void *buf, unsigned int len)
         return 0;
     pts = (struct devpts *)FNO_MOD_PRIV(fno, &mod_devpts);
     if (!pts)
-        goto out;
+        return -EINVAL;
     mutex_lock(pts->dev->mutex);
     pty = pts->master;
-    if (!pty) {
+    if (!pty || pts->master_closed) {
         ret = -EPIPE;
         goto out;
     }
@@ -336,10 +381,10 @@ static int pts_write(struct fnode *fno, const void *buf, unsigned int len)
     int ret = -EINVAL;
     pts = (struct devpts *)FNO_MOD_PRIV(fno, &mod_devpts);
     if (!pts)
-        goto out;
+        return -EINVAL;
     mutex_lock(pts->dev->mutex);
     pty = pts->master;
-    if (!pty) {
+    if (!pty || pts->master_closed) {
         ret = -EPIPE;
         goto out;
     }
@@ -364,10 +409,10 @@ static int pts_poll(struct fnode *fno, uint16_t events, uint16_t *revents)
     int ret = -EINVAL;
     pts = (struct devpts *)FNO_MOD_PRIV(fno, &mod_devpts);
     if (!pts)
-        goto out;
+        return -EINVAL;
     mutex_lock(pts->dev->mutex);
     pty = pts->master;
-    if (!pty) {
+    if (!pty || pts->master_closed) {
         ret = -EPIPE;
         goto out;
     }
@@ -393,18 +438,43 @@ out:
 static void pts_tty_attach(struct fnode *fno, int pid)
 {
     struct devpts *pts = NULL;
-    int ret = 0;
     pts = (struct devpts *)FNO_MOD_PRIV(fno, &mod_devpts);
     if (pts->sid != pid) {
         pts->sid = pid;
     }
 }
 
+static int pts_close(struct fnode *fno)
+{
+    struct devpts *pts;
+    struct devpty *pty;
+    int destroy = 0;
+
+    pts = (struct devpts *)FNO_MOD_PRIV(fno, &mod_devpts);
+    if (!pts)
+        return -1;
+
+    mutex_lock(pts->dev->mutex);
+    pty = pts->master;
+    destroy = pty_release_locked(pty, pts, 0);
+    mutex_unlock(pts->dev->mutex);
+
+    if (destroy) {
+        if (pts->dev && pts->dev->fno)
+            fno_unlink(pts->dev->fno);
+        if (pty && pty->fno)
+            fno_detach(pty->fno);
+        if (pty)
+            kfree(pty);
+        kfree(pts);
+    }
+    return 0;
+}
+
 #ifdef CONFIG_PTY_UNIX
 int sys_ptsname_hdlr(int fd, char *buf, size_t buflen)
 {
     struct devpty *pty = NULL;
-    struct devpts *pts = NULL;
     struct fnode *fno;
     size_t pathlen;
 
@@ -435,4 +505,3 @@ int sys_ptsname_hdlr(int fd, char *buf, size_t buflen)
     return 0;
 }
 #endif
-

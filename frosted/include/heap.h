@@ -19,16 +19,24 @@ static uint32_t _heap_idx_count = 0;                                            
 static inline int heap_insert(struct heap_##type *heap, type *el)                       \
 {                                                                                       \
     int i;                                                                              \
+    uint32_t old_size;                                                                  \
+    struct heap_element_##type *old_top;                                                \
+    struct heap_element_##type *new_top;                                                \
     struct heap_element_##type etmp;                                                    \
     memcpy(&etmp.data, el, sizeof(type));                                               \
     if (++heap->n >= heap->size) {                                                      \
-        heap->top = krealloc(heap->top,                                                 \
+        old_size = heap->size;                                                          \
+        old_top = heap->top;                                                            \
+        new_top = krealloc(heap->top,                                                   \
                 (heap->n + 1) * sizeof(struct heap_element_##type));                    \
-        if (!heap->top) {                                                               \
+        if (!new_top) {                                                                 \
             heap->n--;                                                                  \
+            heap->size = old_size;                                                      \
+            heap->top = old_top;                                                        \
             return -1;                                                                  \
         }                                                                               \
-        heap->size++;                                                                   \
+        heap->top = new_top;                                                            \
+        heap->size = old_size + 1;                                                      \
     }                                                                                   \
     etmp.id = heap->last_id++;                                                          \
     if ((heap->last_id & 0x80000000U) != 0)                                             \
@@ -122,4 +130,3 @@ static inline void heap_destroy(heap_##type *h)                                 
     kfree(h->top);                                                                      \
     kfree(h);                                                                           \
 }
-

@@ -84,7 +84,7 @@ int sys_clock_gettime_hdlr(clockid_t clkid, struct timeval_kernel *now)
         now->tv_usec = (jiffies % 1000) * 1000;
     } else if (clkid == CLOCK_REALTIME) {
         now->tv_sec = rt_offset + (jiffies / 1000);
-        now->tv_usec = ((jiffies % 1000) * 1000) * 1000;
+        now->tv_usec = (jiffies % 1000) * 1000;
     }
 
     return 0;

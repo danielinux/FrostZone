@@ -29,6 +29,9 @@
                                          SCB_SHCSR_USGFAULT_EN | \
                                          SCB_SHCSR_SECUREFAULT_EN)
 
+#define TZ_DSB() __asm volatile ("dsb" : : : "memory")
+#define TZ_ISB() __asm volatile ("isb" : : : "memory")
+
 static inline void sau_init_region(uint32_t region, uint32_t start_addr,
         uint32_t end_addr, int secure)
 {
@@ -39,6 +42,8 @@ static inline void sau_init_region(uint32_t region, uint32_t start_addr,
     SAU_RBAR = start_addr & SAU_ADDR_MASK;
     SAU_RLAR = (end_addr & SAU_ADDR_MASK)
         | secure_flag | SAU_REG_ENABLE;
+    TZ_DSB();
+    TZ_ISB();
 }
 
 extern void mpu_init(void);

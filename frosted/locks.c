@@ -97,6 +97,7 @@ static int __attribute__((naked)) _sem_post(void *s) {
         "_sem_post:\n"
         "   LDREX   r1, [r0]\n"
         "   ADDS    r1, #1\n"
+        "   BVS     _sem_post_overflow\n"
         "   STREX   r2, r1, [r0]\n"
         "   CMP     r2, #0\n"
         "   BNE     _sem_post\n"
@@ -104,6 +105,10 @@ static int __attribute__((naked)) _sem_post(void *s) {
         "   DMB\n"
         "   BGE     _sem_signal_up\n"
         "   MOVS    r0, #0\n"
+        "   BX      lr\n"
+        "_sem_post_overflow:\n"
+        "   CLREX\n"
+        "   MVN     r0, #74\n"
         "   BX      lr\n"
         "_sem_signal_up:\n"
         "   MOVS    r0, #1\n"
@@ -118,15 +123,20 @@ static void _add_listener(sem_t *s)
     int i;
     struct task *t = this_task();
 
+    irq_off();
+
     if (s->last >= 0) {
-        if (t == s->listener[s->last])
+        if (t == s->listener[s->last]) {
+            irq_on();
             return;
+        }
     }
 
     for (i = s->last + 1; i < s->listeners; i++) {
         if (s->listener[i] == NULL) {
             s->listener[i] = t;
             s->last = i;
+            irq_on();
             return;
         }
     }
@@ -134,21 +144,27 @@ static void _add_listener(sem_t *s)
         if (s->listener[i] == NULL) {
             s->listener[i] = t;
             s->last = i;
+            irq_on();
             return;
         }
     }
+    irq_on();
 }
 
 static void _del_listener(sem_t *s)
 {
     int i;
     struct task *t = this_task();
+
+    irq_off();
     for (i = 0; i < s->listeners; i++) {
         if (s->listener[i] == t) {
             s->listener[i] = NULL;
+            irq_on();
             return;
         }
     }
+    irq_on();
 }
 
 static int sem_spinwait(sem_t *s)
@@ -200,10 +216,16 @@ int sem_wait(sem_t *s, struct timespec *timeout)
 
 int sem_post(sem_t *s)
 {
+    int ret;
+
     if (!s)
         return -EINVAL;
-    if (_sem_post(s) > 0) {
+    ret = _sem_post(s);
+    if (ret < 0)
+        return ret;
+    if (ret > 0) {
         int i;
+        irq_off();
         for(i = s->last+1; i < s->listeners; i++) {
             struct task *t = s->listener[i];
             if (t) {
@@ -218,6 +240,7 @@ int sem_post(sem_t *s)
                 s->listener[i] = NULL;
             }
         }
+        irq_on();
     }
     return 0;
 }

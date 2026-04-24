@@ -96,6 +96,9 @@ static int memfs_seek(struct fnode *fno, int off, int whence)
 {
     struct memfs_fnode *mfno;
     int new_off;
+    uint32_t old_size;
+    uint32_t grow_len;
+    uint8_t *new_content;
     mfno = FNO_MOD_PRIV(fno, &mod_memfs);
     if (!mfno)
         return -1;
@@ -117,8 +120,13 @@ static int memfs_seek(struct fnode *fno, int off, int whence)
         new_off = 0;
 
     if (new_off > fno->size) {
-        mfno->content = krealloc(mfno->content, new_off);
-        memset(mfno->content + fno->size, 0, new_off - fno->size);
+        old_size = fno->size;
+        grow_len = (uint32_t)new_off - old_size;
+        new_content = krealloc(mfno->content, new_off);
+        if (!new_content && new_off > 0)
+            return -ENOMEM;
+        mfno->content = new_content;
+        memset(mfno->content + old_size, 0, grow_len);
         fno->size = new_off;
     }
     task_fd_set_off(fno, new_off);

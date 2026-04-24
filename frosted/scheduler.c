@@ -1705,6 +1705,10 @@ int sys_vfork_hdlr(void)
     uint32_t vpid;
     struct filedesc_table *ft = _cur_task->tb.filedesc_table;
 
+    if (_cur_task->tb.pid == 0) {
+        return -EPERM;
+    }
+
     if (_cur_task->tb.tid != 1) {
         /* Prohibit vfork() from a thread */
         return -ENOSYS;
@@ -3637,7 +3641,7 @@ int __naked sv_call_handler(void)
     }
 
 #ifdef CONFIG_SYSCALL_TRACE
-    Strace[StraceTop].n = n;
+    Strace[StraceTop].n = n_syscall;
     Strace[StraceTop].pid = _cur_task->tb.pid;
     Strace[StraceTop].sp = (uint32_t)_top_stack;
     StraceTop++;

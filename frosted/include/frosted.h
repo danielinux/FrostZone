@@ -195,7 +195,7 @@ void mutex_destroy(mutex_t *s);
 int Timer_on(unsigned int n);
 
 /* Tasklets */
-void tasklet_add(void (*exe)(void*), void *arg);
+int tasklet_add(void (*exe)(void*), void *arg);
 void check_tasklets(void);
 
 /* Kthreads */

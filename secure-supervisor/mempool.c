@@ -23,6 +23,7 @@
 #include <stddef.h>
 #include <string.h>
 #include "limits.h"
+#include "stm32h563.h"
 #include "task.h"
 #include "taskmem.h"
 
@@ -53,6 +54,26 @@ static void memzero(void *ptr, size_t len) {
     while(len--) {
         *p++ = 0;
     }
+}
+
+static void *ns_ram_rw_range_check(const void *ptr, size_t len)
+{
+    uintptr_t start;
+    uintptr_t end;
+
+    if ((ptr == NULL) || (len == 0u))
+        return NULL;
+
+    start = (uintptr_t)ptr;
+    if ((start < SAU_RAM_NS_START) || (start > SAU_RAM_NS_END))
+        return NULL;
+    if (start > (UINTPTR_MAX - (len - 1u)))
+        return NULL;
+    end = start + len - 1u;
+    if ((end < SAU_RAM_NS_START) || (end > SAU_RAM_NS_END))
+        return NULL;
+
+    return (void *)ptr;
 }
 
 void mempool_init(void) {
@@ -228,7 +249,7 @@ static void *mempool_task_alloc(size_t task_size, uint16_t task_id)
             task->main_segment.size = total_size;
             /* Reduce size of this available block */
             mempool_blocks[i].base += total_size;
-            mempool_blocks[i].size = total_size;
+            mempool_blocks[i].size -= total_size;
             return (void*)(task->main_segment.base);
         }
     }
@@ -435,15 +456,16 @@ int mempool_chown(const void *ptr, uint16_t new_owner, uint16_t caller_id) {
              * Then try to merge to an existing segment.
              */
             if (dst->mempool_count > 0) {
-                for (j = 0; j < dst->mempool_count -1; j++) {
+                for (j = 0; j < dst->mempool_count; j++) {
                     if (dst->mempool[j].base + dst->mempool[j].size == tmp.base) {
                         dst->mempool[j].size += tmp.size;
                         mempool_limits_sub(src, tmp.size);
                         mempool_limits_add(dst, tmp.size);
                         goto chown_successful;
-                    } else if (dst->mempool[j+1].base == tmp.base + tmp.size) {
-                        dst->mempool[j+1].base -= tmp.size;
-                        dst->mempool[j+1].size += tmp.size;
+                    }
+                    if (tmp.base + tmp.size == dst->mempool[j].base) {
+                        dst->mempool[j].base -= tmp.size;
+                        dst->mempool[j].size += tmp.size;
                         mempool_limits_sub(src, tmp.size);
                         mempool_limits_add(dst, tmp.size);
                         goto chown_successful;
@@ -560,7 +582,11 @@ __attribute__((cmse_nonsecure_entry))
 int secure_meminfo(uint16_t task_id, void *_info)
 {
     unsigned int i;
-    struct task_meminfo *info = (struct task_meminfo *)_info;
+    struct task_meminfo *info;
+    if (!_info)
+        return -1;
+
+    info = ns_ram_rw_range_check(_info, sizeof(*info));
     if (!info)
         return -1;
 

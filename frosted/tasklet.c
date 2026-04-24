@@ -66,14 +66,14 @@ static void tasklet_log_invalid(const char *where, void (*exe)(void *), void *ar
     __asm__ volatile("bkpt #0");
 }
 
-void tasklet_add(void (*exe)(void*), void *arg)
+int tasklet_add(void (*exe)(void*), void *arg)
 {
     int i;
     bool already_in_syscall = task_in_syscall();
 
     if (!tasklet_handler_valid(exe)) {
         tasklet_log_invalid("enqueue", exe, arg);
-        return;
+        return -EINVAL;
     }
 
     if (!already_in_syscall) {
@@ -89,13 +89,12 @@ void tasklet_add(void (*exe)(void*), void *arg)
                 max_tasklets = n_tasklets;
             if (!already_in_syscall)
                 irq_on();
-            return;
+            return 0;
         }
     }
-    while (1) {
-        __asm__ volatile("bkpt #0");
-    }
-
+    if (!already_in_syscall)
+        irq_on();
+    return -EAGAIN;
 }
 
 void check_tasklets(void)

@@ -240,10 +240,9 @@ void mpu_task_on(uint16_t pid, uint16_t ppid)
                 uintptr_t mb = (uintptr_t)parent.ram_base;
                 uintptr_t ml = mb + parent.ram_size - 1u;
                 MPU->RNR = 4u;
-                // If parent.main in flash: RO+Exec; if in RAM: choose RW and set XN as needed.
-                // Here we assume flash XIP: RO, unprivileged, executable
-                MPU->RBAR = RBAR(mb, SH_NON_SHAREABLE, AP_RW_FULL, XN_NEVER);
-                MPU->RLAR = RLAR(mpu_region_limit(ml), IDX_NORMAL_WT); // use WT for XIP regions
+                /* Keep the shared parent data readable for the child, but never writable. */
+                MPU->RBAR = RBAR(mb, SH_NON_SHAREABLE, AP_RO_FULL, XN_NEVER);
+                MPU->RLAR = RLAR(mpu_region_limit(ml), IDX_NORMAL_WT);
             }
         }
     } else {
@@ -263,6 +262,11 @@ void mpu_task_on(uint16_t pid, uint16_t ppid)
             MPU->RNR = (4u + k);
             MPU->RBAR = RBAR(hb, SH_INNER_SHAREABLE, AP_RW_FULL, XN_EXECUTE);
             MPU->RLAR = RLAR(mpu_region_limit(hl), IDX_NORMAL_WBWA);
+        }
+        for (uint32_t k = cur.n_heap_regions; k < 4u; k++) {
+            MPU->RNR = (4u + k);
+            MPU->RBAR = 0u;
+            MPU->RLAR = 0u;
         }
     }
     // Enable MPU with background map

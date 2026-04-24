@@ -89,6 +89,25 @@ struct __attribute__((packed)) flashfs_file_hdr {
     uint16_t fsize;
 };
 
+static int flashfs_payload_caps(int fname_len, int *first_cap, int *cont_cap)
+{
+    int first;
+    int cont;
+
+    if (fname_len < 0 || fname_len > MAX_FNAME)
+        return -EINVAL;
+
+    first = FLASH_PAGE_SIZE -
+        ((int)sizeof(struct flashfs_file_hdr) + fname_len + 1);
+    cont = FLASH_PAGE_SIZE - (int)sizeof(struct flashfs_file_hdr);
+    if (first < 0 || cont <= 0)
+        return -EINVAL;
+
+    *first_cap = first;
+    *cont_cap = cont;
+    return 0;
+}
+
 #define CONFIG_MAX_FLASHFS_FNODES 64
 
 struct flashfs_fnode {
@@ -403,6 +422,15 @@ uint8_t *get_page_content(uint16_t page)
                 sizeof(struct flashfs_file_hdr) + hdr->fname_len;
 } 
 
+static int flashfs_name_valid(const char *fname, uint16_t name_len)
+{
+    if (name_len == 0 || name_len > MAX_FNAME)
+        return 0;
+    if (memchr(fname, '\0', name_len) != NULL)
+        return 0;
+    return fname[name_len] == '\0';
+}
+
 static int flash_commit_file_info(struct fnode *fno)
 {
     struct flashfs_fnode *mfno;
@@ -492,6 +520,8 @@ static int flashfs_read(struct fnode *fno, void *buf, unsigned int len)
     int take = 0;
     int size_in_page = 0;
     int fname_len;
+    int first_cap;
+    int cont_cap;
     if (len <= 0)
         return len;
 
@@ -500,6 +530,8 @@ static int flashfs_read(struct fnode *fno, void *buf, unsigned int len)
         return -ENOENT;
 
     fname_len = mfno->on_flash_fname_len;
+    if (flashfs_payload_caps(fname_len, &first_cap, &cont_cap) != 0)
+        return -EIO;
     off = task_fd_get_off(fno);
 
     if (fno->size <= off)
@@ -509,8 +541,6 @@ static int flashfs_read(struct fnode *fno, void *buf, unsigned int len)
         len = fno->size - off;
 
     while (take < len) {
-        int first_cap = FLASH_PAGE_SIZE - (sizeof(struct flashfs_file_hdr) + fname_len + 1);
-        int cont_cap = FLASH_PAGE_SIZE - sizeof(struct flashfs_file_hdr);
         if (off < (uint32_t)first_cap) {
             page_off = off + sizeof(struct flashfs_file_hdr) + fname_len + 1;
             size_in_page = first_cap - off;
@@ -560,6 +590,8 @@ static int flashfs_write(struct fnode *fno, const void *buf, unsigned int len)
     int page_off;
     int size_in_page = 0;
     int fname_len;
+    int first_cap;
+    int cont_cap;
     char relpath[MAX_FNAME];
     static uint8_t page_cache[FLASH_PAGE_SIZE];
 
@@ -571,6 +603,8 @@ static int flashfs_write(struct fnode *fno, const void *buf, unsigned int len)
         return -ENOENT;
 
     fname_len = mfno->on_flash_fname_len;
+    if (flashfs_payload_caps(fname_len, &first_cap, &cont_cap) != 0)
+        return -EIO;
     off = task_fd_get_off(fno);
 
     if (fno->size < (off + len)) {
@@ -611,8 +645,6 @@ static int flashfs_write(struct fnode *fno, const void *buf, unsigned int len)
 actual_write:
     mutex_lock(flashfs_lock);
     while (written < len) {
-        int first_cap = FLASH_PAGE_SIZE - (sizeof(struct flashfs_file_hdr) + fname_len + 1);
-        int cont_cap = FLASH_PAGE_SIZE - sizeof(struct flashfs_file_hdr);
         if (off < (uint32_t)first_cap) {
             if (flashfs_read_page(mfno->jedec, mfno->startpage, page_cache) < 0) {
                 mutex_unlock(flashfs_lock);
@@ -880,23 +912,22 @@ static int flashfs_read_entry(const struct jedec_spi_flash *jedec, uint32_t page
 
     is_dir = (raw_len & F_DIR_FLAG) != 0;
     name_len = (uint16_t)(raw_len & ~F_DIR_FLAG);
-    if (name_len == 0 || name_len > MAX_FNAME)
-        return 0;
 
 #ifdef CONFIG_JEDEC_SPI_FLASH
     if (jedec) {
-        if (page_cache[sizeof(*hdr) + name_len] != 0)
+        const char *fname = (const char *)(page_cache + sizeof(*hdr));
+        if (!flashfs_name_valid(fname, name_len))
             return 0;
         memcpy(out_hdr, hdr, sizeof(*hdr));
         out_hdr->fname_len = name_len;
-        memcpy(out_fname, page_cache + sizeof(*hdr), name_len);
+        memcpy(out_fname, fname, name_len);
         out_fname[name_len] = '\0';
         return is_dir ? FLASHFS_ENTRY_DIR : FLASHFS_ENTRY_FILE;
     }
 #endif
     {
         const char *fname = (const char *)hdr + sizeof(*hdr);
-        if (fname[name_len] != 0)
+        if (!flashfs_name_valid(fname, name_len))
             return 0;
         memcpy(out_hdr, hdr, sizeof(*hdr));
         out_hdr->fname_len = name_len;
