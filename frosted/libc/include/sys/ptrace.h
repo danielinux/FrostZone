@@ -27,8 +27,9 @@ enum __ptrace_request
 
     /* */
     PTRACE_SYSCALL = 24,
+    PTRACE_GET_SYSCALL_INFO = 25,
 };
     
   
-int ptrace(enum __ptrace_request request, pid_t pid, void *data, void *addr);
+int ptrace(enum __ptrace_request request, pid_t pid, void *addr, void *data);
 #endif

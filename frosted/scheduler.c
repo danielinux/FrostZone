@@ -392,6 +392,128 @@ struct __attribute__((packed)) task {
     struct task_block tb;
 };
 
+/* Syscall trace record exposed to userland via PTRACE_GET_SYSCALL_INFO. */
+struct strace_event {
+    uint32_t nr;
+    uint32_t args[5];
+    int32_t retval;
+    uint32_t pc;
+};
+
+#define STRACE_MAX_PIDS 17
+#define STRACE_RING_SIZE 64
+
+struct strace_ring {
+    struct strace_event *data;
+    uint16_t size;
+    uint16_t head;
+    uint16_t tail;
+    uint32_t lost;
+};
+
+static struct strace_ring _strace_rings[STRACE_MAX_PIDS];
+static struct task *_cur_task;
+
+static struct extra_stack_frame *task_extra_frame(const struct task *t)
+{
+    return (struct extra_stack_frame *)t->tb.sp;
+}
+
+static struct nvic_stack_frame *task_nvic_frame(const struct task *t)
+{
+    return (struct nvic_stack_frame *)((uint8_t *)t->tb.sp + EXTRA_FRAME_SIZE);
+}
+
+static uint32_t *task_stack_arg_slot(const struct task *t, unsigned int arg_index)
+{
+    return (uint32_t *)((uint8_t *)t->tb.sp + EXTRA_FRAME_SIZE +
+                        NVIC_FRAME_SIZE + (8 * sizeof(uint32_t)) +
+                        (arg_index * sizeof(uint32_t)));
+}
+
+static void strace_ring_free(uint16_t pid)
+{
+    struct strace_ring *r;
+
+    if (pid >= STRACE_MAX_PIDS)
+        return;
+
+    r = &_strace_rings[pid];
+    if (r->data)
+        kfree(r->data);
+    memset(r, 0, sizeof(*r));
+}
+
+static int strace_ring_pop(uint16_t pid, struct strace_event *out)
+{
+    struct strace_ring *r;
+
+    if (!out)
+        return -EINVAL;
+    if (pid >= STRACE_MAX_PIDS)
+        return -ESRCH;
+
+    r = &_strace_rings[pid];
+    if (!r->data)
+        return 1;
+    if (r->head == r->tail)
+        return 1;
+
+    memcpy(out, &r->data[r->tail], sizeof(*out));
+    r->tail = (uint16_t)((r->tail + 1) % r->size);
+    return 0;
+}
+
+/* Unconditional trace callback. The __naked sv_call_handler cannot safely
+ * gain an inline branch+call sequence, so we always call this and let it
+ * gate internally on tracer. */
+static void strace_on_syscall(uint32_t n_syscall)
+{
+    struct task *t = _cur_task;
+    uint16_t pid;
+    struct strace_ring *r;
+    uint16_t head;
+    uint16_t next;
+    struct strace_event *ev;
+    struct nvic_stack_frame *nvic;
+
+    if (!t || !t->tb.tracer)
+        return;
+    if (n_syscall == SYS_VFORK || n_syscall == SYS_EXEC)
+        return;
+
+    pid = t->tb.pid;
+    if (pid >= STRACE_MAX_PIDS)
+        return;
+
+    r = &_strace_rings[pid];
+    if (!r->data) {
+        r->data = kcalloc(sizeof(struct strace_event), STRACE_RING_SIZE);
+        if (!r->data)
+            return;
+        r->size = STRACE_RING_SIZE;
+    }
+
+    head = r->head;
+    next = (uint16_t)((head + 1) % r->size);
+    if (next == r->tail) {
+        r->lost++;
+        return;
+    }
+
+    nvic = task_nvic_frame(t);
+    ev = &r->data[head];
+    ev->nr = n_syscall;
+    ev->args[0] = nvic->r1;
+    ev->args[1] = nvic->r2;
+    ev->args[2] = nvic->r3;
+    ev->args[3] = *task_stack_arg_slot(t, 0);
+    ev->args[4] = *task_stack_arg_slot(t, 1);
+    ev->retval = (int32_t)nvic->r0;
+    ev->pc = nvic->pc;
+    r->head = next;
+}
+
 POOL_DEFINE(task_pool, struct task, CONFIG_MAX_TASKS);
 POOL_DEFINE(ftable_pool, struct filedesc_table, CONFIG_MAX_TASKS);
 
@@ -557,6 +679,7 @@ static void task_destroy(void *arg)
          */
         secure_munmap_task(t->tb.pid);
     }
+    strace_ring_free(t->tb.pid);
     /* Free any pthread-specific key value */
     if (t->tb.specifics)
         kfree(t->tb.specifics);
@@ -581,6 +704,7 @@ static void task_destroy(void *arg)
     xipfs_task_cleanup(t->tb.pid);
     /* Remove heap allocations spawned by this pid. */
     secure_munmap_task(t->tb.pid);
+    strace_ring_free(t->tb.pid);
 #endif
     /* Remove /sys/proc/<pid> entry */
     procfs_pid_destroy(t->tb.pid);
@@ -1560,7 +1684,14 @@ int scheduler_exec(struct task_exec_info *info, void *args)
             t->tb.name[sizeof(t->tb.name) - 1] = '\0';
         }
     }
-    task_create_real(t, (void *)args, t->tb.nice);
+    {
+        /* Preserve the ptrace tracer across exec — task_create_real resets
+         * it to NULL, which would lose the effect of a prior TRACEME in the
+         * pre-exec child. Linux semantics: TRACEME persists through exec. */
+        struct task *saved_tracer = t->tb.tracer;
+        task_create_real(t, (void *)args, t->tb.nice);
+        t->tb.tracer = saved_tracer;
+    }
     asm volatile("msr " PSP ", %0" ::"r"(_cur_task->tb.sp));
     t->tb.state = TASK_RUNNING;
     mpu_task_on(_cur_task->tb.pid, 0);
@@ -2885,20 +3016,20 @@ enum __ptrace_request {
     PTRACE_ATTACH = 16,
     PTRACE_DETACH = 17,
     PTRACE_SYSCALL = 24,
+    PTRACE_GET_SYSCALL_INFO = 25,
     PTRACE_SEIZE = 0x4206
 };
 
 int ptrace_getregs(struct task *t, struct user *u)
 {
-    struct extra_stack_frame *cur_extra = t->tb.sp + NVIC_FRAME_SIZE + EXTRA_FRAME_SIZE;
-    struct nvic_stack_frame *cur_nvic = t->tb.sp + EXTRA_FRAME_SIZE;
+    struct extra_stack_frame *cur_extra = task_extra_frame(t);
+    struct nvic_stack_frame *cur_nvic = task_nvic_frame(t);
     memcpy(&u->regs[0], cur_nvic, (4 * sizeof(uint32_t))); /* r0 - r3 */
     memcpy(&u->regs[4], cur_extra, (8 * sizeof(uint32_t))); /* r4 - r11 */
     u->regs[12] = cur_nvic->r12;
     u->regs[13] = (uint32_t)(t->tb.sp);
     u->regs[14] = cur_nvic->lr;
     u->regs[15] = cur_nvic->pc;
-    u->regs[16] = cur_nvic->psr;
     u->tsize = t->tb.exec_info.text_size;
     u->dsize = t->tb.exec_info.data_size;
     u->start_code = (uint32_t)t->tb.exec_info.init;
@@ -2912,6 +3043,8 @@ int ptrace_getregs(struct task *t, struct user *u)
 int ptrace_peekuser(struct task *t, uint32_t addr)
 {
     struct user u;
+    if ((addr >= sizeof(u)) || ((addr & (sizeof(uint32_t) - 1)) != 0))
+        return -EINVAL;
     if (ptrace_getregs(t, &u) == 0)
         return *(int *)(((char *)(&u)) + addr);
     else return -1;
@@ -2919,8 +3052,8 @@ int ptrace_peekuser(struct task *t, uint32_t addr)
 
 int ptrace_pokeuser(struct task *t, uint32_t addr, uint32_t data)
 {
-    uint32_t *cur_extra = t->tb.sp + NVIC_FRAME_SIZE + EXTRA_FRAME_SIZE;
-    uint32_t *cur_nvic = t->tb.sp + EXTRA_FRAME_SIZE;
+    uint32_t *cur_extra = (uint32_t *)task_extra_frame(t);
+    uint32_t *cur_nvic = (uint32_t *)task_nvic_frame(t);
     int pos = addr / 4;
 
     if (addr > (16 * sizeof(uint32_t)))
@@ -2963,18 +3096,28 @@ int sys_ptrace_hdlr(enum __ptrace_request request, uint32_t pid, void *addr, voi
 
 {
     struct task *tracee = NULL;
-    /* Prepare tracee based on pid */
-    tracee = tasklist_get(&tasks_idling, pid);
-    if (!tracee)
-        tracee = tasklist_get(&tasks_running, pid);
-    if (!tracee) {
-        return -1;
+    /* PTRACE_TRACEME is called by the tracee itself with pid=0 (self).
+     * All other requests address an actual tracee by pid — for those,
+     * require the lookup to succeed. */
+    if (request != PTRACE_TRACEME) {
+        tracee = tasklist_get(&tasks_idling, pid);
+        if (!tracee)
+            tracee = tasklist_get(&tasks_running, pid);
+        if (!tracee)
+            return -1;
     }
 
     switch (request) {
-    case PTRACE_TRACEME:
-        _cur_task->tb.tracer = _cur_task;
+    case PTRACE_TRACEME: {
+        struct task *parent = tasklist_get(&tasks_idling,
+                                           _cur_task->tb.ppid);
+        if (!parent)
+            parent = tasklist_get(&tasks_running, _cur_task->tb.ppid);
+        if (!parent)
+            return -1;
+        _cur_task->tb.tracer = parent;
         break;
+    }
     case PTRACE_PEEKTEXT:
     case PTRACE_PEEKDATA:
         if (task_ptr_valid_for_task(tracee, addr)) {
@@ -3050,6 +3193,7 @@ int sys_ptrace_hdlr(enum __ptrace_request request, uint32_t pid, void *addr, voi
             return -1;
         if (tracee->tb.tracer != _cur_task)
             return -1;
+        strace_ring_free(tracee->tb.pid);
         tracee->tb.tracer = NULL;
         task_continue(tracee);
         return 0;
@@ -3060,6 +3204,14 @@ int sys_ptrace_hdlr(enum __ptrace_request request, uint32_t pid, void *addr, voi
             return -1;
         tracee->tb.flags |= TASK_FLAG_SYSCALL_STOP;
         return 0;
+    case PTRACE_GET_SYSCALL_INFO:
+        if (!tracee)
+            return -1;
+        if (tracee->tb.tracer != _cur_task)
+            return -1;
+        if (!data || task_ptr_valid(data))
+            return -1;
+        return strace_ring_pop(tracee->tb.pid, (struct strace_event *)data);
     }
     return -1;
 }
@@ -3520,6 +3672,8 @@ int __naked sv_call_handler(void)
 
     /* out of syscall */
     _cur_task->tb.flags &= (~TASK_FLAG_IN_SYSCALL);
+
+    strace_on_syscall(n_syscall);
 
     if (_cur_task->tb.state != TASK_RUNNING) {
         task_switch();

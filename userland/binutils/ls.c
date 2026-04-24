@@ -287,10 +287,15 @@ static int list_directory(const char *path, unsigned int flags)
 
     if (flags & LONGFLAG) {
         char total_buf[32];
+        char summary_buf[128];
+        int summary_len;
         format_size(total_buf, sizeof(total_buf), total_bytes, flags);
-        putchar('\n');
-        printf("%s : %ld files, %ld directories. Total %s%s\n", ls_abspath_buf,
-               file_count, dir_count, total_buf, (flags & HUMANFLAG) ? "" : " bytes");
+        summary_len = snprintf(summary_buf, sizeof(summary_buf),
+                               "\n%s : %ld files, %ld directories. Total %s%s\n",
+                               ls_abspath_buf, file_count, dir_count, total_buf,
+                               (flags & HUMANFLAG) ? "" : " bytes");
+        if (summary_len > 0)
+            emit_stdout(summary_buf);
     }
     return 0;
 }

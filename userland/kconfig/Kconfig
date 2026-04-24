@@ -157,6 +157,11 @@ config APP_KLOGD
     tristate "klogd"
 config APP_GDBSERVER
     bool "gdbserver"
+config APP_STRACE
+    tristate "strace (syscall tracer via ptrace)"
+    help
+      Traces syscalls executed by a child process using PTRACE_SYSCALL
+      and a kernel-side per-task event ring. Usage: strace <cmd> [args...]
 config APP_REBOOT
     tristate "reboot"
 config APP_RENICE

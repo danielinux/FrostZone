@@ -22,7 +22,7 @@
 #define GDB_REGS
 
 struct user {
-    uint32_t    regs[16]; /* r0 - r12, sp, lr, pc, psr */
+    uint32_t    regs[16]; /* r0 - r12, sp, lr, pc */
     uint32_t    tsize; /* Text size, in bytes  */
     uint32_t    dsize; /* Data size, in bytes  */
     uint32_t    ssize; /* Stack size, in bytes */
