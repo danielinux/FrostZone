@@ -39,6 +39,7 @@ struct task;
 struct fnode;
 struct semaphore;
 struct termios;
+struct msghdr;
 typedef struct semaphore sem_t;
 typedef struct semaphore mutex_t;
 
@@ -375,6 +376,9 @@ struct module {
         int (*getsockopt)(int sd, int level, int optname, void *optval, unsigned int *optlen);
         int (*getsockname)(int fd, struct sockaddr *addr, unsigned int *addrlen);
         int (*getpeername)(int fd, struct sockaddr *addr, unsigned int *addrlen);
+        /* Optional native scatter/gather; NULL => kernel linearizes and falls back to sendto/recvfrom. */
+        int (*sendmsg)(int fd, const struct msghdr *msg, int flags);
+        int (*recvmsg)(int fd, struct msghdr *msg, int flags);
 
 
         /* Terminal operations */

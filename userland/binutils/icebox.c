@@ -129,6 +129,9 @@ extern int icebox_ifconfig(int argc, char *argv[]);
 #ifdef APP_ROUTE_MODULE
 extern int icebox_route(int argc, char *argv[]);
 #endif
+#ifdef APP_IP_MODULE
+extern int icebox_ip(int argc, char *argv[]);
+#endif
 #ifdef APP_TELNETD_MODULE
 extern int icebox_telnetd(int argc, char *argv[]);
 #endif
@@ -350,6 +353,11 @@ int main(int argc, char *argv[])
 #ifdef APP_ROUTE_MODULE
     if(strcmp("route", argv[0]) == 0)
         return icebox_route(argc, argv);
+#endif
+
+#ifdef APP_IP_MODULE
+    if(strcmp("ip", argv[0]) == 0)
+        return icebox_ip(argc, argv);
 #endif
 
 #ifdef APP_TELNETD_MODULE

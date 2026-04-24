@@ -110,6 +110,8 @@ syscalls = [
     ["dlopen", 2, "sys_dlopen_hdlr"],
     ["dlsym", 2, "sys_dlsym_hdlr"],
     ["dlclose", 1, "sys_dlclose_hdlr"],
+    ["sendmsg", 3, "sys_sendmsg_hdlr"],
+    ["recvmsg", 3, "sys_recvmsg_hdlr"],
 ]
 
    #

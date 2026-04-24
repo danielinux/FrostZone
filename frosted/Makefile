@@ -282,7 +282,7 @@ SRCS += \
 endif
 
 ifeq ($(CONFIG_TCPIP),1)
-SRCS += socket_in.c wolfip.c
+SRCS += socket_in.c socket_netlink.c wolfip.c
 ifeq ($(CONFIG_MDNS),1)
 SRCS += mdns.c
 endif

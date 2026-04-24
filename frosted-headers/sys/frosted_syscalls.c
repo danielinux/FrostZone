@@ -500,3 +500,13 @@ int sys_dlclose(uint32_t arg1){
     return syscall(SYS_DLCLOSE, arg1, 0, 0, 0, 0); 
 }
 
+/* Syscall: sendmsg(3 arguments) */
+int sys_sendmsg(uint32_t arg1, uint32_t arg2, uint32_t arg3){
+    return syscall(SYS_SENDMSG, arg1, arg2, arg3, 0,  0); 
+}
+
+/* Syscall: recvmsg(3 arguments) */
+int sys_recvmsg(uint32_t arg1, uint32_t arg2, uint32_t arg3){
+    return syscall(SYS_RECVMSG, arg1, arg2, arg3, 0,  0); 
+}
+

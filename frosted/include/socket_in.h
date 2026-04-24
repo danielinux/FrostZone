@@ -150,4 +150,29 @@ void socket_in_init(void);
 static inline void socket_in_init(void) {}
 #endif
 
+/* Shared interface/route backends. Used by both the ioctl handlers in
+ * socket_in.c and by the AF_NETLINK module in socket_netlink.c — wolfIP
+ * state has exactly one owner. Prototypes kept behind CONFIG_TCPIP because
+ * that is when socket_in.c is linked. */
+#if CONFIG_TCPIP
+struct ifreq;
+struct rtentry;
+int sock_io_setflags(struct ifreq *ifr);
+int sock_io_setaddr(struct ifreq *ifr);
+int sock_io_setnetmask(struct ifreq *ifr);
+int sock_io_getflags(struct ifreq *ifr);
+int sock_io_getaddr(struct ifreq *ifr);
+int sock_io_gethwaddr(struct ifreq *ifr);
+int sock_io_getbcast(struct ifreq *ifr);
+int sock_io_getnmask(struct ifreq *ifr);
+int sock_io_addroute(struct rtentry *rte);
+int sock_io_delroute(struct rtentry *rte);
+#endif
+
+#if CONFIG_TCPIP
+void socket_netlink_init(void);
+#else
+static inline void socket_netlink_init(void) {}
+#endif
+
 #endif /* PICO_BSD_SOCKETS_H_ */

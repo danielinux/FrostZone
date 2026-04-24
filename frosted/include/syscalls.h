@@ -100,4 +100,6 @@
 #define SYS_DLOPEN 			(96)
 #define SYS_DLSYM 			(97)
 #define SYS_DLCLOSE 			(98)
-#define _SYSCALLS_NR (99) /* We have 99 syscalls! */
+#define SYS_SENDMSG 			(99)
+#define SYS_RECVMSG 			(100)
+#define _SYSCALLS_NR (101) /* We have 101 syscalls! */

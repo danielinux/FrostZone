@@ -297,6 +297,17 @@ struct sockaddr_env {
 #endif
 
 /*
+ * Scatter/gather array element.
+ */
+#ifndef _STRUCT_IOVEC_DECLARED
+#define _STRUCT_IOVEC_DECLARED
+struct iovec {
+	void		*iov_base;		/* base address */
+	size_t		 iov_len;		/* data length */
+};
+#endif
+
+/*
  * Message header for recvmsg and sendmsg calls.
  * Used value-result for recvmsg, value only for sendmsg.
  */

@@ -355,6 +355,7 @@ int frosted_init(void)
 
 #if CONFIG_TCPIP
     socket_in_init();
+    socket_netlink_init();
 #endif
 
 #ifdef UNIX

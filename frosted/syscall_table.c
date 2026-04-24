@@ -103,6 +103,8 @@ extern int sys_ualarm_hdlr(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 extern int sys_dlopen_hdlr(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 extern int sys_dlsym_hdlr(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 extern int sys_dlclose_hdlr(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+extern int sys_sendmsg_hdlr(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
+extern int sys_recvmsg_hdlr(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 
 void syscalls_init(void) {
 	sys_register_handler(0, sys_sleep_hdlr);
@@ -204,4 +206,6 @@ void syscalls_init(void) {
 	sys_register_handler(96, sys_dlopen_hdlr);
 	sys_register_handler(97, sys_dlsym_hdlr);
 	sys_register_handler(98, sys_dlclose_hdlr);
+	sys_register_handler(99, sys_sendmsg_hdlr);
+	sys_register_handler(100, sys_recvmsg_hdlr);
 }

@@ -3,12 +3,23 @@ CROSS_COMPILE ?= arm-frosted-eabi-
 CC := $(CROSS_COMPILE)gcc
 CFLAGS?=
 CFLAGS += -D_DEFAULT_SOURCE -D_BSD_SOURCE
+# PIC flags matching binutils/Makefile — without them, icebox module .o's
+# emit R_ARM_THM_MOVW_ABS relocs pointing at link-time .data addresses,
+# which elf2flt doesn't fix up. Symptom: strcmp on string literals
+# segfaults at runtime (addr = unrelocated .data offset).
+CFLAGS += -fPIC -mlong-calls -fno-common -msingle-pic-base -mno-pic-data-is-text-relative
+# Preserve prior (gcc < 14) behaviour: a few sources here use implicit
+# declarations (inet_aton, sleep); keep them as warnings, not errors.
+CFLAGS += -Wno-error=implicit-function-declaration
 APPS-$(APP_IFCONFIG)+=ifconfig
 CFLAGS-$(APP_IFCONFIG)+=-DAPP_IFCONFIG_STANDALONE
 CFLAGS-ICEBOX-$(APP_IFCONFIG)+=-DAPP_IFCONFIG_MODULE
 APPS-$(APP_ROUTE)+=route
 CFLAGS-$(APP_ROUTE)+=-DAPP_ROUTE_STANDALONE
 CFLAGS-ICEBOX-$(APP_ROUTE)+=-DAPP_ROUTE_MODULE
+APPS-$(APP_IP)+=ip
+CFLAGS-$(APP_IP)+=-DAPP_IP_STANDALONE
+CFLAGS-ICEBOX-$(APP_IP)+=-DAPP_IP_MODULE
 APPS-$(APP_TELNETD)+=telnetd
 CFLAGS-$(APP_TELNETD)+=-DAPP_TELNETD_STANDALONE
 CFLAGS-ICEBOX-$(APP_TELNETD)+=-DAPP_TELNETD_MODULE

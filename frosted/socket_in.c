@@ -530,7 +530,7 @@ static int sock_shutdown(int fd, uint16_t how)
 }
 
 
-static int sock_io_setflags(struct ifreq *ifr)
+int sock_io_setflags(struct ifreq *ifr)
 {
     unsigned int flags = ifr ? ifr->ifr_flags : 0;
     unsigned int if_idx = 0;
@@ -554,7 +554,7 @@ static int sock_io_setflags(struct ifreq *ifr)
     return 0;
 }
 
-static int sock_io_setaddr(struct ifreq *ifr)
+int sock_io_setaddr(struct ifreq *ifr)
 {
     ip4 ip, nm, gw;
     struct sockaddr_in *if_addr = ((struct sockaddr_in *) &ifr->ifr_addr);
@@ -573,7 +573,7 @@ static int sock_io_setaddr(struct ifreq *ifr)
     return 0;
 }
 
-static int sock_io_setnetmask(struct ifreq *ifr)
+int sock_io_setnetmask(struct ifreq *ifr)
 {
     ip4 ip, nm, gw;
     struct sockaddr_in *if_addr = ((struct sockaddr_in *) &ifr->ifr_addr);
@@ -592,7 +592,7 @@ static int sock_io_setnetmask(struct ifreq *ifr)
     return 0;
 }
 
-static int sock_io_getflags(struct ifreq *ifr)
+int sock_io_getflags(struct ifreq *ifr)
 {
     unsigned int if_idx = 0;
     struct wolfIP_ll_dev *lnk = wolfip_ll_from_ifr(ifr, &if_idx);
@@ -611,7 +611,7 @@ static int sock_io_getflags(struct ifreq *ifr)
 	return 0;
 }
 
-static int sock_io_getaddr(struct ifreq *ifr)
+int sock_io_getaddr(struct ifreq *ifr)
 {
     ip4 ip, nm, gw;
     struct sockaddr_in *if_addr = ((struct sockaddr_in *) &ifr->ifr_addr);
@@ -627,7 +627,7 @@ static int sock_io_getaddr(struct ifreq *ifr)
     return 0;
 }
 
-static int sock_io_gethwaddr(struct ifreq *eth)
+int sock_io_gethwaddr(struct ifreq *eth)
 {
     unsigned int if_idx = 0;
     struct wolfIP_ll_dev *lnk = wolfip_ll_from_ifr(eth, &if_idx);
@@ -644,7 +644,7 @@ static int sock_io_gethwaddr(struct ifreq *eth)
 	return 0;
 }
 
-static int sock_io_getbcast(struct ifreq *ifr)
+int sock_io_getbcast(struct ifreq *ifr)
 {
     ip4 ip, nm, gw;
     struct sockaddr_in *if_addr = ((struct sockaddr_in *) &ifr->ifr_addr);
@@ -663,7 +663,7 @@ static int sock_io_getbcast(struct ifreq *ifr)
     return 0;
 }
 
-static int sock_io_getnmask(struct ifreq *ifr)
+int sock_io_getnmask(struct ifreq *ifr)
 {
     ip4 ip, nm, gw;
     struct sockaddr_in *if_addr = ((struct sockaddr_in *) &ifr->ifr_addr);
@@ -679,7 +679,7 @@ static int sock_io_getnmask(struct ifreq *ifr)
     return 0;
 }
 
-static int sock_io_addroute(struct rtentry *rte)
+int sock_io_addroute(struct rtentry *rte)
 {
     ip4 ip, nm, gw;
     struct sockaddr_in *gw_addr = ((struct sockaddr_in *) &rte->rt_gateway);
@@ -703,7 +703,7 @@ static int sock_io_addroute(struct rtentry *rte)
     return 0;
 }
 
-static int sock_io_delroute(struct rtentry *rte)
+int sock_io_delroute(struct rtentry *rte)
 {
   return 0;
 }
@@ -714,7 +714,7 @@ static int sock_io_ethtool(struct ifreq *ifr)
 	return 0;
 }
 
-static int sock_io_getifconf(struct ifconf *ifc)
+int sock_io_getifconf(struct ifconf *ifc)
 {
     size_t total = 0;
     size_t copied = 0;

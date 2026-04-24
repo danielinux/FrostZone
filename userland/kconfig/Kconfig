@@ -213,6 +213,12 @@ config APP_IFCONFIG
     tristate "ifconfig"
 config APP_ROUTE
     tristate "route"
+config APP_IP
+    tristate "ip (iproute2-style, via AF_NETLINK)"
+    help
+      KISS reimplementation of iproute2's 'ip' utility that talks to
+      the kernel over AF_NETLINK/NETLINK_ROUTE. Covers
+      link/addr/route show/add/del/set.
 config APP_PING
     tristate "ping"
 config APP_HOST
