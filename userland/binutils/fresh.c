@@ -1395,6 +1395,13 @@ static int expand_one(const char *in, int quoted_mask, int argc,
     return 0;
 }
 
+/*
+ * exp_to_lex[i] = j means exp_words[i] was produced from lex_words[j].
+ * Populated by expand_tokens; used by comp_str_alloc_exp to reconstruct
+ * pre-expansion source text for compound command cond/body strings.
+ */
+static uint8_t exp_to_lex[EXP_MAX_TOKS];
+
 static int expand_tokens(int script_argc)
 {
     int i;
@@ -1408,13 +1415,21 @@ static int expand_tokens(int script_argc)
              * lex_buf which lives until the next lex_line(). */
             if (exp_count >= EXP_MAX_TOKS)
                 return -1;
+            exp_to_lex[exp_count] = (uint8_t)i;
             exp_words[exp_count] = lex_words[i];
             exp_types[exp_count] = lex_types[i];
             exp_count++;
             continue;
         }
-        if (expand_one(lex_words[i], lex_quoted[i], script_argc, &bp, be) < 0)
-            return -1;
+        {
+            int before = exp_count;
+            int j;
+            if (expand_one(lex_words[i], lex_quoted[i], script_argc, &bp, be) < 0)
+                return -1;
+            /* All exp tokens produced from lex token i get the same mapping. */
+            for (j = before; j < exp_count; j++)
+                exp_to_lex[j] = (uint8_t)i;
+        }
     }
     exp_words[exp_count] = NULL;
     return exp_count;
@@ -1444,7 +1459,9 @@ static int expand_tokens(int script_argc)
  * a stable, contiguous word array, so no copy.
  */
 
-#define MAX_AST_NODES   64
+/* MAX_AST_NODES bumped to 96 for P5 compound commands (if/while/for/case
+ * each consume several nodes for cond/body sub-trees). */
+#define MAX_AST_NODES   96
 #define MAX_REDIRS      16
 #define MAX_PIPE_STAGES 8
 
@@ -1453,6 +1470,11 @@ enum ast_type {
     AST_PIPE,
     AST_AND_OR,
     AST_SEQ,
+    /* P5 compound commands */
+    AST_IF,      /* if cond; then body; [elif cond; then body;]* [else body;] fi */
+    AST_WHILE,   /* while/until cond; do body; done */
+    AST_FOR,     /* for VAR in WORD*; do body; done */
+    AST_CASE,    /* case WORD in PATTERN) BODY ;; ... esac */
 };
 
 #define AST_FLAG_AND  0x01   /* AST_AND_OR: connector is && */
@@ -1483,6 +1505,188 @@ struct ast_node {
     int16_t  redir_first;  /* AST_CMD: index in ast_redirs[] */
     int16_t  redir_n;
 };
+
+/*
+ * P5 compound-command extra data.
+ *
+ * Strategy: compound commands (if/while/for/case) need to re-evaluate
+ * their conditions and bodies at execution time so that variable
+ * expansions (e.g. $x in `for x in a b c; do echo $x; done`) reflect
+ * the current environment on each iteration.  We do this by storing the
+ * *original* (pre-expansion) source text of each cond/body sub-command
+ * in a static string pool, then calling exec_logical_line() on that
+ * text each time the sub-command must run.
+ *
+ * tokens_to_str(start, end, buf, sz) reconstructs a source string from
+ * lex_words[start..end-1] (the pre-expansion token lexemes), joining
+ * words with spaces and operators with their natural representations.
+ *
+ * ast_node.argv_first is repurposed to index into the appropriate
+ * compound pool (if_nodes / while_nodes / for_nodes / case_nodes).
+ */
+
+#define AST_FLAG_UNTIL 0x10   /* AST_WHILE: invert condition (until) */
+
+#define MAX_COMP_WORDS  32    /* max words in `for` word list */
+#define MAX_CASE_PATS   8     /* max patterns in one `case` arm */
+#define MAX_CASE_ARMS   16    /* max arms in one `case` */
+
+/*
+ * Body-text string pool.  All cond/body strings are carved out of
+ * comp_str_pool.  Reset on each parse_tokens() call.
+ * 4 KB is enough for any reasonable compound command body.
+ */
+static char comp_str_pool[8192];
+static int  comp_str_used;
+
+/*
+ * Reconstruct source text from lex_words[lex_start..lex_end-1] into buf.
+ * Uses the original pre-expansion lex_words lexemes so that variable
+ * references like $x appear as "$x" rather than their expanded values.
+ * Returns 0 on success, -1 if buf too small.
+ */
+static int tokens_to_str(int lex_start, int lex_end, char *buf, int sz)
+{
+    int i, pos = 0;
+    static const char * const op_strs[] = {
+        /* ordered by tok_type enum:
+         * T_WORD=0,T_PIPE=1,T_OR=2,T_AMP=3,T_AND=4,T_SEMI=5,
+         * T_LT=6,T_GT=7,T_DGT=8,T_ERR_GT=9,T_GT_AMP=10,T_LT_AMP=11,
+         * T_LP=12,T_RP=13 */
+        NULL, "|", "||", "&", "&&", ";", "<", ">", ">>", "2>", ">&", "<&",
+        "(", ")"
+    };
+    for (i = lex_start; i < lex_end; i++) {
+        const char *s;
+        int slen;
+        if (i > lex_start) {
+            if (pos >= sz - 1) return -1;
+            buf[pos++] = ' ';
+        }
+        if (lex_types[i] == T_WORD) {
+            s = lex_words[i];  /* pre-expansion */
+        } else {
+            int t = (int)lex_types[i];
+            if (t <= 0 || t >= (int)(sizeof(op_strs)/sizeof(op_strs[0])))
+                s = "";
+            else
+                s = op_strs[t] ? op_strs[t] : "";
+        }
+        if (!s) s = "";
+        slen = (int)strlen(s);
+        if (pos + slen >= sz) return -1;
+        memcpy(buf + pos, s, slen);
+        pos += slen;
+    }
+    buf[pos] = '\0';
+    return 0;
+}
+
+/*
+ * Allocate a source-text string for exp_words[exp_start..exp_end-1].
+ * Maps back to lex_words via exp_to_lex[] and reconstructs the
+ * pre-expansion text.  Returns a pointer into comp_str_pool, or "".
+ */
+static const char *comp_str_alloc(int exp_start, int exp_end)
+{
+    char tmp[1024];
+    int len;
+    const char *ret;
+    int lex_start, lex_end;
+
+    if (exp_start >= exp_end || exp_start < 0) {
+        /* empty — return empty string sentinel */
+        if (comp_str_used >= (int)sizeof(comp_str_pool) - 1)
+            return "";
+        ret = comp_str_pool + comp_str_used;
+        comp_str_pool[comp_str_used++] = '\0';
+        return ret;
+    }
+    /* Convert exp range to lex range. */
+    lex_start = (int)exp_to_lex[exp_start];
+    lex_end   = (int)exp_to_lex[exp_end - 1] + 1;
+    /* Extend lex_end to include any additional lex tokens at same lex pos
+     * that might correspond to later exp tokens (rare but safe). */
+    if (lex_end > lex_count)
+        lex_end = lex_count;
+
+    if (tokens_to_str(lex_start, lex_end, tmp, sizeof(tmp)) < 0)
+        return "";
+    len = (int)strlen(tmp) + 1;
+    if (comp_str_used + len > (int)sizeof(comp_str_pool))
+        return "";
+    ret = comp_str_pool + comp_str_used;
+    memcpy(comp_str_pool + comp_str_used, tmp, len);
+    comp_str_used += len;
+    return ret;
+}
+
+/*
+ * Copy a plain string into comp_str_pool so it survives a re-lex.
+ * Used for for-word list values and case patterns (from exp_words[]).
+ */
+static const char *comp_str_copy(const char *s)
+{
+    int len;
+    const char *ret;
+    if (!s) s = "";
+    len = (int)strlen(s) + 1;
+    if (comp_str_used + len > (int)sizeof(comp_str_pool))
+        return s;   /* fallback: use original (may alias exp_buf) */
+    ret = comp_str_pool + comp_str_used;
+    memcpy(comp_str_pool + comp_str_used, s, len);
+    comp_str_used += len;
+    return ret;
+}
+
+/* Extra per-node data for AST_IF: chain of (cond,body) pairs. */
+struct if_node {
+    const char *cond;  /* lex source for condition, NULL for else */
+    const char *body;  /* lex source for body */
+    int16_t next;      /* next elif/else if_node index, -1 = end */
+};
+
+/* Extra per-node data for AST_FOR. */
+struct for_node {
+    const char *varname;               /* variable name (from lex_words) */
+    const char *words[MAX_COMP_WORDS]; /* loop words (from exp_words, expanded) */
+    int16_t word_n;
+    const char *body;                  /* lex source for body */
+};
+
+/* Extra per-node data for AST_WHILE / AST_UNTIL. */
+struct while_node {
+    const char *cond;   /* lex source for condition */
+    const char *body;   /* lex source for body */
+};
+
+/* One `case` arm: list of patterns + body source. */
+struct case_arm {
+    const char *pats[MAX_CASE_PATS];  /* pattern strings (from exp_words) */
+    int16_t pat_n;
+    const char *body;                  /* lex source for body */
+};
+
+/* Extra per-node data for AST_CASE. */
+struct case_node {
+    const char *word;                  /* switch word (from exp_words, expanded) */
+    struct case_arm arms[MAX_CASE_ARMS];
+    int16_t arm_n;
+};
+
+#define MAX_IF_NODES    16
+#define MAX_FOR_NODES    8
+#define MAX_WHILE_NODES  8
+#define MAX_CASE_NODES   4
+
+static struct if_node    if_nodes[MAX_IF_NODES];
+static struct for_node   for_nodes[MAX_FOR_NODES];
+static struct while_node while_nodes[MAX_WHILE_NODES];
+static struct case_node  case_nodes[MAX_CASE_NODES];
+static int if_node_count;
+static int for_node_count;
+static int while_node_count;
+static int case_node_count;
 
 static struct ast_node  ast_nodes[MAX_AST_NODES];
 static struct ast_redir ast_redirs[MAX_REDIRS];
@@ -1530,6 +1734,364 @@ static const char *peek_word(void)
     if (parse_pos >= parse_n_tokens)
         return NULL;
     return exp_words[parse_pos];
+}
+
+/* forward declaration — parse_list is defined after parse_and_or */
+static int parse_list(void);
+static int parse_simple(void);
+
+/* ---------------------------------------------------------------- */
+/* Reserved-word helpers (P5)                                        */
+/* ---------------------------------------------------------------- */
+
+static int is_rword(const char *w, const char *kw)
+{
+    return w && strcmp(w, kw) == 0;
+}
+
+/*
+ * Consume a mandatory reserved word at parse_pos.
+ * Returns 0 on success, -1 if the expected word is not there.
+ */
+static int expect_word(const char *kw)
+{
+    const char *w = peek_word();
+    if (!w || strcmp(w, kw) != 0)
+        return -1;
+    parse_pos++;
+    return 0;
+}
+
+/* Skip optional ';' / '\n' separators. */
+static void skip_semi(void)
+{
+    while (peek_type() == T_SEMI)
+        parse_pos++;
+}
+
+/* ---------------------------------------------------------------- */
+/* P5 compound-command parsers                                       */
+/* ---------------------------------------------------------------- */
+
+/*
+ * parse_sub_text — advance parse_list and return the pre-expansion source
+ * text for the consumed tokens as a string in comp_str_pool.
+ */
+static const char *parse_sub_text(void)
+{
+    int start = parse_pos;
+    (void)parse_list();
+    return comp_str_alloc(start, parse_pos);
+}
+
+/*
+ * parse_if — if cond ; then body ; [elif cond ; then body ;]* [else body ;] fi
+ *
+ * AST_IF node: .argv_first = index into if_nodes[].
+ * if_nodes[n].cond  = pre-expansion source for condition (NULL = else clause)
+ * if_nodes[n].body  = pre-expansion source for body
+ * if_nodes[n].next  = next elif/else if_node index, -1 = end
+ */
+static int parse_if(void)
+{
+    int head_if = -1, tail_if = -1;
+    int ast_idx;
+
+    if (expect_word("if") < 0)
+        return -1;
+
+    for (;;) {
+        const char *cond_str, *body_str;
+        int ni;
+
+        skip_semi();
+        cond_str = parse_sub_text();
+
+        skip_semi();
+        if (expect_word("then") < 0)
+            return -1;
+        skip_semi();
+
+        {
+            const char *w = peek_word();
+            if (w && (!strcmp(w,"elif") || !strcmp(w,"else") || !strcmp(w,"fi")))
+                body_str = "";
+            else
+                body_str = parse_sub_text();
+        }
+        skip_semi();
+
+        if (if_node_count >= MAX_IF_NODES)
+            return -1;
+        ni = if_node_count++;
+        if_nodes[ni].cond = cond_str;
+        if_nodes[ni].body = body_str ? body_str : "";
+        if_nodes[ni].next = -1;
+        if (head_if < 0) head_if = ni;
+        if (tail_if >= 0) if_nodes[tail_if].next = (int16_t)ni;
+        tail_if = ni;
+
+        {
+            const char *w = peek_word();
+            if (is_rword(w, "elif")) { parse_pos++; continue; }
+            if (is_rword(w, "else")) {
+                const char *else_body;
+                int ni2;
+                parse_pos++;
+                skip_semi();
+                {
+                    const char *w2 = peek_word();
+                    else_body = (w2 && !strcmp(w2, "fi")) ? "" : parse_sub_text();
+                }
+                skip_semi();
+                if (if_node_count >= MAX_IF_NODES) return -1;
+                ni2 = if_node_count++;
+                if_nodes[ni2].cond = NULL;
+                if_nodes[ni2].body = else_body ? else_body : "";
+                if_nodes[ni2].next = -1;
+                if_nodes[tail_if].next = (int16_t)ni2;
+                tail_if = ni2;
+                break;
+            }
+            break;
+        }
+    }
+
+    skip_semi();
+    if (expect_word("fi") < 0)
+        return -1;
+
+    ast_idx = ast_alloc_node(AST_IF);
+    if (ast_idx < 0)
+        return -1;
+    ast_nodes[ast_idx].argv_first = (int16_t)head_if;
+    return ast_idx;
+}
+
+/*
+ * parse_while — while/until cond ; do body ; done.
+ * AST_FLAG_UNTIL set for 'until'.
+ */
+static int parse_while(void)
+{
+    int is_until = 0;
+    const char *cond_str, *body_str;
+    int wn, ast_idx;
+    const char *lead = peek_word();
+
+    if (!lead)
+        return -1;
+    if (strcmp(lead, "until") == 0)
+        is_until = 1;
+    else if (strcmp(lead, "while") != 0)
+        return -1;
+    parse_pos++;
+
+    skip_semi();
+    cond_str = parse_sub_text();
+
+    skip_semi();
+    if (expect_word("do") < 0)
+        return -1;
+    skip_semi();
+
+    {
+        const char *w = peek_word();
+        body_str = (w && !strcmp(w, "done")) ? "" : parse_sub_text();
+    }
+    skip_semi();
+    if (expect_word("done") < 0)
+        return -1;
+
+    if (while_node_count >= MAX_WHILE_NODES)
+        return -1;
+    wn = while_node_count++;
+    while_nodes[wn].cond = cond_str;
+    while_nodes[wn].body = body_str ? body_str : "";
+
+    ast_idx = ast_alloc_node(AST_WHILE);
+    if (ast_idx < 0)
+        return -1;
+    ast_nodes[ast_idx].argv_first = (int16_t)wn;
+    if (is_until)
+        ast_nodes[ast_idx].flags |= AST_FLAG_UNTIL;
+    return ast_idx;
+}
+
+/*
+ * parse_for — for VAR in WORD* ; do body ; done
+ */
+static int parse_for(void)
+{
+    int fn, ast_idx;
+    const char *w;
+
+    if (expect_word("for") < 0)
+        return -1;
+
+    if (peek_type() != T_WORD)
+        return -1;
+
+    if (for_node_count >= MAX_FOR_NODES)
+        return -1;
+    fn = for_node_count++;
+    /* Variable name: copy into pool (lex_buf gets reused on each lex_line). */
+    for_nodes[fn].varname = comp_str_copy(lex_words[exp_to_lex[parse_pos]]);
+    for_nodes[fn].word_n  = 0;
+    for_nodes[fn].body    = "";
+    parse_pos++;
+
+    skip_semi();
+    if (expect_word("in") < 0)
+        return -1;
+
+    /* Collect words: store expanded values for the iteration list. */
+    while (peek_type() == T_WORD) {
+        w = peek_word();
+        if (is_rword(w, "do"))
+            break;
+        if (for_nodes[fn].word_n < MAX_COMP_WORDS)
+            for_nodes[fn].words[for_nodes[fn].word_n++] =
+                comp_str_copy(exp_words[parse_pos]);
+        parse_pos++;
+    }
+
+    skip_semi();
+    if (expect_word("do") < 0)
+        return -1;
+    skip_semi();
+
+    {
+        const char *bw = peek_word();
+        if (!bw || strcmp(bw, "done") != 0) {
+            const char *body = parse_sub_text();
+            for_nodes[fn].body = body ? body : "";
+        }
+    }
+    skip_semi();
+    if (expect_word("done") < 0)
+        return -1;
+
+    ast_idx = ast_alloc_node(AST_FOR);
+    if (ast_idx < 0)
+        return -1;
+    ast_nodes[ast_idx].argv_first = (int16_t)fn;
+    return ast_idx;
+}
+
+/*
+ * parse_case — case WORD in PATTERN [| PATTERN]* ) BODY ;; ... esac
+ */
+static int parse_case(void)
+{
+    int cn, ast_idx;
+
+    if (expect_word("case") < 0)
+        return -1;
+    if (peek_type() != T_WORD)
+        return -1;
+
+    if (case_node_count >= MAX_CASE_NODES)
+        return -1;
+    cn = case_node_count++;
+    /* Switch word: copy expanded value into stable pool. */
+    case_nodes[cn].word = comp_str_copy(exp_words[parse_pos]);
+    parse_pos++;
+    case_nodes[cn].arm_n = 0;
+
+    skip_semi();
+    if (expect_word("in") < 0)
+        return -1;
+    skip_semi();
+
+    while (peek_type() >= 0) {
+        const char *w = peek_word();
+        int ai;
+
+        if (!w || !strcmp(w, "esac"))
+            break;
+
+        if (case_nodes[cn].arm_n >= MAX_CASE_ARMS)
+            return -1;
+        ai = case_nodes[cn].arm_n++;
+        case_nodes[cn].arms[ai].pat_n = 0;
+        case_nodes[cn].arms[ai].body  = "";
+
+        /* Collect patterns separated by '|' until ')'. */
+        while (peek_type() == T_WORD) {
+            w = peek_word();
+            if (!w)
+                break;
+            if (case_nodes[cn].arms[ai].pat_n < MAX_CASE_PATS)
+                case_nodes[cn].arms[ai].pats[
+                    case_nodes[cn].arms[ai].pat_n++] =
+                    comp_str_copy(exp_words[parse_pos]);
+            parse_pos++;
+            if (peek_type() == T_PIPE) { parse_pos++; continue; }
+            break;
+        }
+
+        if (peek_type() != T_RP)
+            return -1;
+        parse_pos++;
+        skip_semi();
+
+        {
+            const char *bw = peek_word();
+            if (bw && strcmp(bw, "esac") != 0) {
+                const char *body = parse_sub_text();
+                case_nodes[cn].arms[ai].body = body ? body : "";
+            }
+        }
+
+        /* consume ';;' */
+        if (peek_type() == T_SEMI) {
+            parse_pos++;
+            if (peek_type() == T_SEMI) parse_pos++;
+        }
+        skip_semi();
+    }
+
+    if (expect_word("esac") < 0)
+        return -1;
+
+    ast_idx = ast_alloc_node(AST_CASE);
+    if (ast_idx < 0)
+        return -1;
+    ast_nodes[ast_idx].argv_first = (int16_t)cn;
+    return ast_idx;
+}
+
+/*
+ * parse_command — pick compound vs. simple based on the leading word.
+ * Inserted between parse_pipeline and parse_simple.
+ *
+ * Terminal reserved words (then, else, elif, fi, do, done, in, esac)
+ * are never valid command starters; returning -1 here causes parse_list
+ * to stop accumulation, which lets the compound parsers find them via
+ * expect_word() / skip_semi().
+ */
+static int parse_command(void)
+{
+    const char *w = peek_word();
+    if (w && peek_type() == T_WORD) {
+        /* Compound-command openers: dispatch to compound parsers. */
+        if (strcmp(w, "if")    == 0) return parse_if();
+        if (strcmp(w, "while") == 0) return parse_while();
+        if (strcmp(w, "until") == 0) return parse_while();
+        if (strcmp(w, "for")   == 0) return parse_for();
+        if (strcmp(w, "case")  == 0) return parse_case();
+        /* Terminal/body-separator words: not valid command starters. */
+        if (strcmp(w, "then")  == 0) return -1;
+        if (strcmp(w, "elif")  == 0) return -1;
+        if (strcmp(w, "else")  == 0) return -1;
+        if (strcmp(w, "fi")    == 0) return -1;
+        if (strcmp(w, "do")    == 0) return -1;
+        if (strcmp(w, "done")  == 0) return -1;
+        if (strcmp(w, "in")    == 0) return -1;
+        if (strcmp(w, "esac")  == 0) return -1;
+    }
+    return parse_simple();
 }
 
 static int parse_simple(void)
@@ -1604,14 +2166,15 @@ static int parse_simple(void)
 
 static int parse_pipeline(void)
 {
-    int left = parse_simple();
+    /* parse_command dispatches to compound parsers or parse_simple. */
+    int left = parse_command();
     if (left < 0)
         return -1;
 
     while (peek_type() == T_PIPE) {
         int right, p;
         parse_pos++;
-        right = parse_simple();
+        right = parse_command();
         if (right < 0)
             return -1;
         p = ast_alloc_node(AST_PIPE);
@@ -1684,6 +2247,11 @@ static int parse_tokens(void)
 {
     ast_node_count = 0;
     ast_redir_count = 0;
+    if_node_count = 0;
+    for_node_count = 0;
+    while_node_count = 0;
+    case_node_count = 0;
+    comp_str_used = 0;
     parse_pos = 0;
     parse_n_tokens = exp_count;
     if (parse_n_tokens == 0)
@@ -2087,6 +2655,147 @@ static int run_pipeline(int idx)
 
 static int exec_ast(int idx);
 
+/* ---------------------------------------------------------------- */
+/* P5 compound command executors                                     */
+/* ---------------------------------------------------------------- */
+
+/*
+ * Tiny glob: match pattern `pat` against string `str`.
+ * Supports '*' (any sequence) and '?' (any single char).
+ * Used by run_case for POSIX case-pattern matching.
+ */
+static int tiny_glob(const char *pat, const char *str)
+{
+    while (*pat) {
+        if (*pat == '*') {
+            /* skip consecutive stars */
+            while (*pat == '*') pat++;
+            if (!*pat) return 1;   /* trailing *: match anything */
+            while (*str) {
+                if (tiny_glob(pat, str))
+                    return 1;
+                str++;
+            }
+            return 0;
+        }
+        if (*pat == '?') {
+            if (!*str) return 0;
+            pat++; str++;
+            continue;
+        }
+        if (*pat != *str) return 0;
+        pat++; str++;
+    }
+    return *str == '\0';
+}
+
+/*
+ * run_if: evaluate the if_node chain rooted at if_nodes[head].
+ * Each if_node stores pre-expansion source strings; we re-execute them
+ * via exec_logical_line so variable references are fresh each call.
+ * A node with cond == NULL is an else clause.
+ */
+static int exec_logical_line(const char *line);  /* forward decl */
+
+static int run_if(int idx)
+{
+    int head = (int)(int16_t)ast_nodes[idx].argv_first;
+    int ni = head;
+    int rc = 0;
+
+    while (ni >= 0 && ni < if_node_count) {
+        struct if_node *n = &if_nodes[ni];
+        if (n->cond == NULL) {
+            /* else clause */
+            rc = (n->body && n->body[0]) ? exec_logical_line(n->body) : 0;
+            break;
+        }
+        {
+            int crc = exec_logical_line(n->cond);
+            if (crc == 0) {
+                rc = (n->body && n->body[0]) ? exec_logical_line(n->body) : 0;
+                break;
+            }
+        }
+        ni = (int)(int16_t)n->next;
+    }
+    return rc;
+}
+
+/*
+ * run_while: evaluate cond and body via exec_logical_line each iteration.
+ * AST_FLAG_UNTIL inverts the test.
+ */
+static int run_while(int idx)
+{
+    struct ast_node *n = &ast_nodes[idx];
+    int wn = (int)(int16_t)n->argv_first;
+    int is_until = (n->flags & AST_FLAG_UNTIL) ? 1 : 0;
+    struct while_node *wnode = &while_nodes[wn];
+    int rc = 0;
+    int iter = 0;
+    const int max_iter = 65536;
+
+    while (iter++ < max_iter) {
+        int crc = wnode->cond && wnode->cond[0]
+                  ? exec_logical_line(wnode->cond) : 0;
+        int should_run = is_until ? (crc != 0) : (crc == 0);
+        if (!should_run)
+            break;
+        rc = (wnode->body && wnode->body[0])
+             ? exec_logical_line(wnode->body) : 0;
+    }
+    return rc;
+}
+
+/*
+ * run_for: bind VAR to each word in the list, re-execute body each time.
+ */
+static int run_for(int idx)
+{
+    struct ast_node *n = &ast_nodes[idx];
+    int fn = (int)(int16_t)n->argv_first;
+    struct for_node *fnode = &for_nodes[fn];
+    int rc = 0;
+    int i;
+
+    for (i = 0; i < fnode->word_n; i++) {
+        const char *val = fnode->words[i];
+        if (!val) val = "";
+        setenv(fnode->varname, val, 1);
+        rc = (fnode->body && fnode->body[0])
+             ? exec_logical_line(fnode->body) : 0;
+    }
+    return rc;
+}
+
+/*
+ * run_case: match switch word against arm patterns using tiny_glob,
+ * execute the first matching arm's body via exec_logical_line.
+ */
+static int run_case(int idx)
+{
+    struct ast_node *n = &ast_nodes[idx];
+    int cn = (int)(int16_t)n->argv_first;
+    struct case_node *cnode = &case_nodes[cn];
+    const char *word = cnode->word;
+    int i, j;
+
+    if (!word) word = "";
+
+    for (i = 0; i < cnode->arm_n; i++) {
+        struct case_arm *arm = &cnode->arms[i];
+        for (j = 0; j < arm->pat_n; j++) {
+            const char *pat = arm->pats[j];
+            if (!pat) continue;
+            if (tiny_glob(pat, word))
+                return (arm->body && arm->body[0])
+                       ? exec_logical_line(arm->body) : 0;
+        }
+    }
+    return 0;
+}
+
 static int exec_ast(int idx)
 {
     struct ast_node *n;
@@ -2136,6 +2845,18 @@ static int exec_ast(int idx)
         (void)exec_ast(n->left);
         rc = exec_ast(n->right);
         break;
+    case AST_IF:
+        rc = run_if(idx);
+        break;
+    case AST_WHILE:
+        rc = run_while(idx);
+        break;
+    case AST_FOR:
+        rc = run_for(idx);
+        break;
+    case AST_CASE:
+        rc = run_case(idx);
+        break;
     default:
         rc = 1;
         break;
@@ -2143,15 +2864,131 @@ static int exec_ast(int idx)
     return rc;
 }
 
-static int parseLine(char *line)
+/*
+ * Multi-line accumulation for P5 compound commands (approach a).
+ *
+ * compound_delta(line) does a fast word scan to find reserved words that
+ * open (+1) or close (-1) compound commands.  The caller maintains a
+ * running depth; when depth returns to zero the accumulated buffer is
+ * ready to parse.
+ *
+ * We scan by simple whitespace tokenisation — no need to lex — because
+ * we only need to recognise a small closed set of unquoted keywords.
+ * This is intentionally cheap; the real lexer/parser runs on the full
+ * accumulated buffer.
+ */
+static int compound_delta(const char *line)
 {
-    int n;
+    /* Keywords that open (+1) or close (-1) a compound command. */
+    static const struct { const char *kw; int delta; } kwtab[] = {
+        { "if",    +1 },
+        { "while", +1 },
+        { "until", +1 },
+        { "for",   +1 },
+        { "case",  +1 },
+        { "fi",    -1 },
+        { "done",  -1 },
+        { "esac",  -1 },
+    };
+    const char *p = line;
+    int delta = 0;
+    static const int NKWS = (int)(sizeof(kwtab)/sizeof(kwtab[0]));
 
     if (!line)
         return 0;
 
-    /* Skip script shebang explicitly so it doesn't even reach the lexer. */
-    if (line[0] == '#' && line[1] == '!')
+    while (*p) {
+        /* skip whitespace */
+        while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')
+            p++;
+        if (!*p || *p == '#')
+            break;
+
+        /* skip quoted strings without scanning keywords inside */
+        if (*p == '\'' || *p == '"') {
+            char q = *p++;
+            while (*p && *p != q) {
+                if (*p == '\\' && p[1]) p++;
+                p++;
+            }
+            if (*p) p++;
+            continue;
+        }
+
+        /* read a word */
+        {
+            const char *ws = p;
+            int i;
+            while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r'
+                   && *p != ';' && *p != '|' && *p != '&'
+                   && *p != '<' && *p != '>')
+                p++;
+            {
+                size_t wlen = (size_t)(p - ws);
+                for (i = 0; i < NKWS; i++) {
+                    size_t klen = strlen(kwtab[i].kw);
+                    if (wlen == klen && memcmp(ws, kwtab[i].kw, klen) == 0) {
+                        delta += kwtab[i].delta;
+                        break;
+                    }
+                }
+            }
+        }
+
+        /* skip non-word chars (operators, semicolons) */
+        while (*p && (*p == ';' || *p == '|' || *p == '&'
+                      || *p == '<' || *p == '>'))
+            p++;
+    }
+    return delta;
+}
+
+/*
+ * Multi-line buffer: lines are accumulated here when compound_depth > 0.
+ * Each input line is appended with a ';' separator so the resulting
+ * flat string parses as a valid single-line compound command.
+ *
+ * Size: 16 KB should hold the typical if/for/while/case block in a
+ * startup script; keep it in BSS.
+ */
+#define MULTILINE_BUF_BYTES (MAXLINE * 64)
+static char  ml_buf[MULTILINE_BUF_BYTES];
+static int   ml_len;
+static int   ml_depth;
+
+static void ml_reset(void)
+{
+    ml_len = 0;
+    ml_depth = 0;
+    ml_buf[0] = '\0';
+}
+
+static int ml_append(const char *line)
+{
+    size_t llen = strlen(line);
+    /* need space for line + ';' + ' ' + NUL */
+    if (ml_len + (int)llen + 3 >= MULTILINE_BUF_BYTES)
+        return -1;
+    if (ml_len > 0) {
+        ml_buf[ml_len++] = ' ';
+        ml_buf[ml_len++] = ';';
+        ml_buf[ml_len++] = ' ';
+    }
+    memcpy(ml_buf + ml_len, line, llen);
+    ml_len += (int)llen;
+    ml_buf[ml_len] = '\0';
+    return 0;
+}
+
+/*
+ * Execute a fully accumulated logical line (possibly spanning several
+ * physical lines).
+ */
+static int exec_logical_line(const char *line)
+{
+    int n;
+
+    if (!line || !*line)
         return 0;
 
     n = lex_line(line);
@@ -2169,14 +3006,56 @@ static int parseLine(char *line)
         return 0;
     {
         int root = parse_tokens();
-        int rc;
         if (root < 0) {
             printf("fresh: syntax error\r\n");
             return -1;
         }
-        rc = exec_ast(root);
+        return exec_ast(root);
+    }
+}
+
+/*
+ * parseLine — entry point for both interactive and script modes.
+ *
+ * Multi-line strategy: track a running compound depth across calls.
+ * When a line increases the depth above zero, accumulate it in ml_buf.
+ * When depth returns to zero, flush ml_buf to exec_logical_line.
+ */
+static int parseLine(const char *line)
+{
+    int delta;
+
+    if (!line)
+        return 0;
+
+    /* Skip script shebang explicitly so it doesn't even reach the lexer. */
+    if (line[0] == '#' && line[1] == '!')
+        return 0;
+
+    delta = compound_delta(line);
+
+    if (ml_depth == 0 && delta == 0) {
+        /* Fast path: ordinary single-line command. */
+        return exec_logical_line(line);
+    }
+
+    /* Accumulate into multi-line buffer. */
+    if (ml_append(line) < 0) {
+        printf("fresh: compound command too long\r\n");
+        ml_reset();
+        return -1;
+    }
+    ml_depth += delta;
+
+    if (ml_depth <= 0) {
+        /* Compound complete: parse and execute the whole buffer. */
+        int rc = exec_logical_line(ml_buf);
+        ml_reset();
         return rc;
     }
+
+    /* Still accumulating — tell callers "not done yet" with 0. */
+    return 0;
 }
 
 /* Fresh exec */
@@ -2216,6 +3095,7 @@ static int fresh_exec(char *arg0, char **argv)
     }
     script_mem[count] = '\0';
 
+    ml_reset();
     line = script_mem;
     r = 0;
     while (line) {
@@ -2223,9 +3103,15 @@ static int fresh_exec(char *arg0, char **argv)
         eol = strchr(line, '\n');
         if (eol)
             *(eol++) = '\0';
-        printf(" + %s\r\n", line);
+        printf("%s %s\r\n", ml_depth > 0 ? " >" : " +", line);
         r = parseLine(line);
         line = eol;
+    }
+    /* Flush any unterminated compound (shouldn't happen in a valid script). */
+    if (ml_depth != 0) {
+        printf("fresh: unexpected end of script (unclosed compound command)\r\n");
+        ml_reset();
+        r = -1;
     }
     free(script_mem);
     return r;
@@ -2300,19 +3186,26 @@ int icebox_fresh(int argc, char *argv[])
     welcomeScreen();
     fprintf(stdout, "Current pid = %d\r\n", getpid());
 
+    ml_reset();
+
     while (1) {
         if (fresh_tty_trace_enabled && !fresh_prompt_trace_done) {
             fresh_prompt_trace_done = 1;
         }
-        if (no_reprint_prmpt == 0)
-            shellPrompt();
+        if (no_reprint_prmpt == 0) {
+            if (ml_depth > 0) {
+                /* Inside a compound command: show continuation prompt. */
+                write(STDOUT_FILENO, "> ", 2);
+            } else {
+                shellPrompt();
+            }
+        }
         no_reprint_prmpt = 0;
 
         // We empty the line buffer
         memset(line, '\0', MAXLINE);
 
         // We wait for user input
-        /* fgets(line, MAXLINE, stdin); */
         while (readline(line, MAXLINE) == NULL)
             ;
 
