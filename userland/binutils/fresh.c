@@ -895,92 +895,14 @@ int commandHandler(char *args[], int argc)
         orig_args[i] = args[i];
     i = 0;
 
-    // We look for the special characters and separate the command itself
-    // in a new array for the arguments
+    /* P2: variable / command substitution has already happened in the
+     * expander phase (expand_tokens); commandHandler only walks for
+     * operators. */
     while (j < argc) {
         if ((strcmp(args[j], ">") == 0) || (strcmp(args[j], ">>") == 0) ||
             (strcmp(args[j], "2>") == 0) || (strcmp(args[j], "<") == 0) ||
             (strcmp(args[j], "&") == 0)) {
             break;
-        }
-        if (!strncmp(args[j], "$", 1)) {
-            const char *name = args[j] + 1;
-            char namebuf[32];
-            const char *value = NULL;
-            char tmp[16];
-
-            /* ${NAME} curly form: copy the inner name so the rest of
-             * the dispatch chain can treat it as a bare name. Anything
-             * after the closing brace is dropped (no parameter
-             * expansion modifiers in P1). */
-            if (name[0] == '{') {
-                const char *end = strchr(name + 1, '}');
-                size_t inner_len = end ? (size_t)(end - (name + 1)) : 0;
-                if (!end || inner_len == 0 || inner_len >= sizeof(namebuf)) {
-                    value = empty_value;
-                    name = "";
-                } else {
-                    memcpy(namebuf, name + 1, inner_len);
-                    namebuf[inner_len] = '\0';
-                    name = namebuf;
-                }
-            }
-
-            if (value) {
-                /* already resolved (malformed ${...}) — fall through */
-            } else if (name[0] == '\0') {
-                value = "$";
-            } else if (name[0] == '$' && name[1] == '\0') {
-                snprintf(tmp, sizeof(tmp), "%d", getpid());
-                value = tmp;
-            } else if (name[0] == '?' && name[1] == '\0') {
-                const char *env = getenv("?");
-                value = env ? env : "0";
-            } else if (name[0] == '#' && name[1] == '\0') {
-                if (shell_paramc > 0)
-                    snprintf(tmp, sizeof(tmp), "%d", shell_paramc);
-                else
-                    snprintf(tmp, sizeof(tmp), "%d", argc - 1);
-                value = tmp;
-            } else if (isdigit((unsigned char)name[0])) {
-                char *endptr = NULL;
-                long idx = strtol(name, &endptr, 10);
-                if (endptr && *endptr == '\0') {
-                    if ((shell_paramc > 0) || shell_param0) {
-                        if (idx == 0)
-                            value = shell_param0 ? shell_param0 : "fresh";
-                        else if (idx > 0 && idx <= shell_paramc &&
-                                 shell_params[idx - 1])
-                            value = shell_params[idx - 1];
-                        else
-                            value = empty_value;
-                    } else if (idx >= 0 && idx < argc && orig_args[idx]) {
-                        value = orig_args[idx];
-                    } else {
-                        value = empty_value;
-                    }
-                } else {
-                    value = empty_value;
-                }
-            } else if (isalpha((unsigned char)name[0]) || name[0] == '_') {
-                const char *env = getenv(name);
-                value = env ? env : empty_value;
-            } else {
-                value = empty_value;
-            }
-
-            if (!value)
-                value = empty_value;
-
-            if (*value == '\0') {
-                args[j] = (char *)empty_value;
-            } else {
-                char *ptr = malloc(strlen(value) + 1);
-                if (ptr) {
-                    strcpy(ptr, value);
-                    args[j] = ptr;
-                }
-            }
         }
         args_aux[j] = args[j];
         j++;
@@ -1556,6 +1478,82 @@ static int lex_line(const char *line)
     while (*p) {
         char c = *p;
 
+        /* Command substitution: $(...) and `...` are slurped into the
+         * current word verbatim. The expander phase will run them.
+         * Crude quote-aware paren counter for $(...). */
+        if (c == '$' && p[1] == '(') {
+            int depth = 1;
+            if (!word_start) {
+                if (bp >= be) return -1;
+                word_start = bp;
+                word_quoted = 0;
+            }
+            if (bp >= be - 2) return -1;
+            *bp++ = '$';
+            *bp++ = '(';
+            p += 2;
+            while (*p && depth > 0) {
+                char ch = *p;
+                if (ch == '\'') {
+                    if (bp >= be - 1) return -1; *bp++ = ch; p++;
+                    while (*p && *p != '\'') {
+                        if (bp >= be - 1) return -1; *bp++ = *p++;
+                    }
+                    if (!*p) return -1;
+                    if (bp >= be - 1) return -1; *bp++ = *p++;
+                    continue;
+                }
+                if (ch == '"') {
+                    if (bp >= be - 1) return -1; *bp++ = ch; p++;
+                    while (*p && *p != '"') {
+                        if (*p == '\\' && p[1]) {
+                            if (bp >= be - 2) return -1;
+                            *bp++ = '\\'; *bp++ = p[1]; p += 2; continue;
+                        }
+                        if (bp >= be - 1) return -1; *bp++ = *p++;
+                    }
+                    if (!*p) return -1;
+                    if (bp >= be - 1) return -1; *bp++ = *p++;
+                    continue;
+                }
+                if (ch == '(') depth++;
+                else if (ch == ')') {
+                    depth--;
+                    if (depth == 0) {
+                        if (bp >= be - 1) return -1;
+                        *bp++ = ')'; p++;
+                        break;
+                    }
+                }
+                if (bp >= be - 1) return -1;
+                *bp++ = *p++;
+            }
+            if (depth != 0)
+                return -1;
+            continue;
+        }
+        if (c == '`') {
+            if (!word_start) {
+                if (bp >= be) return -1;
+                word_start = bp;
+                word_quoted = 0;
+            }
+            if (bp >= be - 1) return -1;
+            *bp++ = '`'; p++;
+            while (*p && *p != '`') {
+                if (*p == '\\' && p[1]) {
+                    if (bp >= be - 2) return -1;
+                    *bp++ = '\\'; *bp++ = p[1]; p += 2; continue;
+                }
+                if (bp >= be - 1) return -1;
+                *bp++ = *p++;
+            }
+            if (!*p) return -1;
+            if (bp >= be - 1) return -1;
+            *bp++ = '`'; p++;
+            continue;
+        }
+
         if (!word_start) {
             /* Between tokens: skip whitespace, recognise operators */
             if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
@@ -1695,6 +1693,345 @@ static int lex_line(const char *line)
     return lex_count;
 }
 
+/*
+ * Expander (P2 of the fresh refactor)
+ *
+ * Runs after the lexer, before commandHandler. Per word:
+ * - Replaces $VAR / ${VAR} / $? / $$ / $# / $0..$9.
+ * - Runs $(...) and `...` substitutions in a sub-fresh and substitutes
+ *   the captured stdout (with trailing newlines stripped).
+ * - Word-splits substituted output on whitespace when the input word
+ *   was unquoted; emits as a single word (possibly empty) when quoted.
+ *
+ * Operator tokens (T_PIPE, T_GT, ...) pass through untouched.
+ */
+
+#define EXP_BUF_BYTES   (LEX_BUF_BYTES * 4)
+#define EXP_MAX_TOKS    LEX_MAX_TOKS
+#define CMDSUB_BUF      512
+
+static char     exp_buf[EXP_BUF_BYTES];
+static char    *exp_words[EXP_MAX_TOKS + 1];
+static uint8_t  exp_types[EXP_MAX_TOKS];
+static int      exp_count;
+
+static const char *resolve_var(const char *name, int argc)
+{
+    static char scratch[16];
+    (void)argc;
+
+    if (name[0] == '\0')
+        return "$";
+    if (name[0] == '$' && name[1] == '\0') {
+        snprintf(scratch, sizeof(scratch), "%d", getpid());
+        return scratch;
+    }
+    if (name[0] == '?' && name[1] == '\0') {
+        const char *e = getenv("?");
+        return e ? e : "0";
+    }
+    if (name[0] == '#' && name[1] == '\0') {
+        snprintf(scratch, sizeof(scratch), "%d", shell_paramc);
+        return scratch;
+    }
+    if (isdigit((unsigned char)name[0])) {
+        char *endptr = NULL;
+        long idx = strtol(name, &endptr, 10);
+        if (endptr && *endptr != '\0')
+            return empty_value;
+        if (idx == 0)
+            return shell_param0 ? shell_param0 : "fresh";
+        if (idx > 0 && idx <= shell_paramc && shell_params[idx - 1])
+            return shell_params[idx - 1];
+        return empty_value;
+    }
+    if (isalpha((unsigned char)name[0]) || name[0] == '_') {
+        const char *e = getenv(name);
+        return e ? e : empty_value;
+    }
+    return empty_value;
+}
+
+/*
+ * Run `cmd` in a sub-fresh (vfork + exec /bin/fresh -c), capture up to
+ * bufsz-1 bytes of stdout, NUL-terminate, strip trailing newlines.
+ * Returns the captured length (>=0), or -1 on error.
+ */
+static int run_cmdsub(const char *cmd, char *out, int bufsz)
+{
+    int fds[2];
+    pid_t pid;
+    int n_total = 0;
+    int st;
+
+    if (!cmd || !out || bufsz < 2)
+        return -1;
+    if (pipe(fds) < 0)
+        return -1;
+
+    pid = vfork();
+    if (pid < 0) {
+        close(fds[0]);
+        close(fds[1]);
+        return -1;
+    }
+    if (pid == 0) {
+        char *child_argv[4];
+        close(fds[0]);
+        dup2(fds[1], STDOUT_FILENO);
+        if (fds[1] != STDOUT_FILENO)
+            close(fds[1]);
+        child_argv[0] = "fresh";
+        child_argv[1] = "-c";
+        child_argv[2] = (char *)cmd;
+        child_argv[3] = NULL;
+        execvp("/bin/fresh", child_argv);
+        _exit(127);
+    }
+    close(fds[1]);
+    while (n_total < bufsz - 1) {
+        int r = read(fds[0], out + n_total, bufsz - 1 - n_total);
+        if (r > 0)
+            n_total += r;
+        else if (r == 0)
+            break;
+        else if (errno == EINTR)
+            continue;
+        else
+            break;
+    }
+    close(fds[0]);
+    while (waitpid(pid, &st, 0) < 0) {
+        if (errno != EINTR)
+            break;
+    }
+    while (n_total > 0 && out[n_total - 1] == '\n')
+        n_total--;
+    out[n_total] = '\0';
+    return n_total;
+}
+
+/* Append a string to the current expansion word, splitting on whitespace
+ * when not_quoted is true (each whitespace ends one output word). */
+static int exp_append_value(const char *value, int not_quoted,
+                            char **bp, char *be,
+                            char **word_start_io, int *word_used_io)
+{
+    while (*value) {
+        if (not_quoted && (*value == ' ' || *value == '\t' || *value == '\n')) {
+            if (*word_used_io) {
+                if (*bp >= be) return -1;
+                **bp = '\0'; (*bp)++;
+                if (exp_count >= EXP_MAX_TOKS) return -1;
+                exp_words[exp_count] = *word_start_io;
+                exp_types[exp_count] = T_WORD;
+                exp_count++;
+                *word_start_io = *bp;
+                *word_used_io = 0;
+            }
+            value++;
+            continue;
+        }
+        if (*bp >= be - 1) return -1;
+        **bp = *value;
+        (*bp)++;
+        value++;
+        *word_used_io = 1;
+    }
+    return 0;
+}
+
+static int expand_one(const char *in, int quoted_mask, int argc,
+                      char **bp, char *be)
+{
+    char *word_start = *bp;
+    int word_used = 0;
+    int not_quoted = (quoted_mask == 0);
+    const char *p = in;
+
+    /* A purely-quoted empty input must still emit one (empty) word. */
+    if (quoted_mask != 0)
+        word_used = 1;
+
+    while (*p) {
+        char c = *p;
+
+        if (c == '$' && p[1] == '(') {
+            const char *start = p + 2;
+            const char *end = start;
+            int depth = 1;
+            char inner[256];
+            char captured[CMDSUB_BUF];
+            size_t inner_len;
+            int caplen;
+
+            while (*end && depth > 0) {
+                if (*end == '\'') {
+                    end++;
+                    while (*end && *end != '\'') end++;
+                    if (*end) end++;
+                    continue;
+                }
+                if (*end == '"') {
+                    end++;
+                    while (*end && *end != '"') {
+                        if (*end == '\\' && end[1]) end += 2;
+                        else end++;
+                    }
+                    if (*end) end++;
+                    continue;
+                }
+                if (*end == '(') depth++;
+                else if (*end == ')') { depth--; if (depth == 0) break; }
+                end++;
+            }
+            if (depth != 0) {
+                /* unmatched — fall through, emit literal */
+                if (*bp >= be - 1) return -1;
+                **bp = '$'; (*bp)++; word_used = 1;
+                p++;
+                continue;
+            }
+            inner_len = (size_t)(end - start);
+            if (inner_len >= sizeof(inner))
+                return -1;
+            memcpy(inner, start, inner_len);
+            inner[inner_len] = '\0';
+
+            caplen = run_cmdsub(inner, captured, sizeof(captured));
+            if (caplen < 0)
+                caplen = 0;
+            if (exp_append_value(captured, not_quoted, bp, be,
+                                 &word_start, &word_used) < 0)
+                return -1;
+            p = end + 1;
+            continue;
+        }
+
+        if (c == '`') {
+            const char *start = p + 1;
+            const char *end = strchr(start, '`');
+            char inner[256];
+            char captured[CMDSUB_BUF];
+            size_t inner_len;
+            int caplen;
+
+            if (!end) {
+                if (*bp >= be - 1) return -1;
+                **bp = '`'; (*bp)++; word_used = 1;
+                p++;
+                continue;
+            }
+            inner_len = (size_t)(end - start);
+            if (inner_len >= sizeof(inner))
+                return -1;
+            memcpy(inner, start, inner_len);
+            inner[inner_len] = '\0';
+            caplen = run_cmdsub(inner, captured, sizeof(captured));
+            if (caplen < 0)
+                caplen = 0;
+            if (exp_append_value(captured, not_quoted, bp, be,
+                                 &word_start, &word_used) < 0)
+                return -1;
+            p = end + 1;
+            continue;
+        }
+
+        if (c == '$') {
+            char namebuf[32];
+            const char *name_start = p + 1;
+            const char *name_end;
+            const char *value;
+            int curly = 0;
+
+            if (*name_start == '{') {
+                curly = 1;
+                name_start++;
+                name_end = strchr(name_start, '}');
+                if (!name_end) {
+                    if (*bp >= be - 1) return -1;
+                    **bp = '$'; (*bp)++; word_used = 1;
+                    p++;
+                    continue;
+                }
+            } else if (*name_start == '\0') {
+                if (*bp >= be - 1) return -1;
+                **bp = '$'; (*bp)++; word_used = 1;
+                p++;
+                continue;
+            } else if (*name_start == '$' || *name_start == '?' ||
+                       *name_start == '#') {
+                name_end = name_start + 1;
+            } else if (isdigit((unsigned char)*name_start)) {
+                name_end = name_start + 1;
+            } else if (isalpha((unsigned char)*name_start) ||
+                       *name_start == '_') {
+                const char *q = name_start;
+                while (isalnum((unsigned char)*q) || *q == '_') q++;
+                name_end = q;
+            } else {
+                if (*bp >= be - 1) return -1;
+                **bp = '$'; (*bp)++; word_used = 1;
+                p++;
+                continue;
+            }
+            {
+                size_t nl = (size_t)(name_end - name_start);
+                if (nl >= sizeof(namebuf))
+                    nl = sizeof(namebuf) - 1;
+                memcpy(namebuf, name_start, nl);
+                namebuf[nl] = '\0';
+            }
+            value = resolve_var(namebuf, argc);
+            if (exp_append_value(value, not_quoted, bp, be,
+                                 &word_start, &word_used) < 0)
+                return -1;
+            p = curly ? (name_end + 1) : name_end;
+            continue;
+        }
+
+        /* Literal character */
+        if (*bp >= be - 1) return -1;
+        **bp = c; (*bp)++; word_used = 1;
+        p++;
+    }
+
+    if (word_used) {
+        if (*bp >= be) return -1;
+        **bp = '\0'; (*bp)++;
+        if (exp_count >= EXP_MAX_TOKS) return -1;
+        exp_words[exp_count] = word_start;
+        exp_types[exp_count] = T_WORD;
+        exp_count++;
+    }
+    return 0;
+}
+
+static int expand_tokens(int script_argc)
+{
+    int i;
+    char *bp = exp_buf;
+    char *be = exp_buf + sizeof(exp_buf);
+
+    exp_count = 0;
+    for (i = 0; i < lex_count; i++) {
+        if (lex_types[i] != T_WORD) {
+            /* Operator tokens: pass through unchanged, lexeme stays in
+             * lex_buf which lives until the next lex_line(). */
+            if (exp_count >= EXP_MAX_TOKS)
+                return -1;
+            exp_words[exp_count] = lex_words[i];
+            exp_types[exp_count] = lex_types[i];
+            exp_count++;
+            continue;
+        }
+        if (expand_one(lex_words[i], lex_quoted[i], script_argc, &bp, be) < 0)
+            return -1;
+    }
+    exp_words[exp_count] = NULL;
+    return exp_count;
+}
+
 static int parseLine(char *line)
 {
     int n;
@@ -1713,7 +2050,13 @@ static int parseLine(char *line)
     }
     if (n == 0)
         return 0;
-    return commandHandler(lex_words, n);
+    if (expand_tokens(n) < 0) {
+        printf("fresh: expansion overflow\r\n");
+        return -1;
+    }
+    if (exp_count == 0)
+        return 0;
+    return commandHandler(exp_words, exp_count);
 }
 
 /* Fresh exec */
@@ -1787,6 +2130,30 @@ int icebox_fresh(int argc, char *argv[])
 
     sigaction(SIGINT, &sigint_a, NULL);
     sigaction(SIGCHLD, &sigcld_a, NULL);
+
+    /* `-c CMD` runs CMD as a single fresh line and exits with its
+     * status. Used by command substitution ($() / backticks) — the
+     * sub-fresh inherits stdout via the captured pipe. */
+    if ((argc >= 3) && (strcmp(argv[1], "-c") == 0)) {
+        int rc = 0;
+        int n;
+        shell_init(NULL);
+        update_pwd_env();
+        n = lex_line(argv[2]);
+        if (n < 0) {
+            rc = 2;
+        } else if (n > 0) {
+            if (expand_tokens(n) < 0) {
+                rc = 2;
+            } else if (exp_count > 0) {
+                rc = commandHandler(exp_words, exp_count);
+            }
+        }
+        fflush(stdout);
+        fflush(stderr);
+        _exit(rc);
+    }
+
     /* Check for "-t" arg */
     if ((argc > 2) && (strcmp(argv[1], "-t") == 0)) {
         shell_init(argv[2]);
