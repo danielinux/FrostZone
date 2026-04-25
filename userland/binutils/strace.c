@@ -228,14 +228,15 @@ int icebox_strace(int argc, char *argv[])
         return 1;
     }
 
-    /* Drain events until the child exits. sched_yield between reads so the
-     * tracee gets CPU. No fixed iteration limit: a long-blocking syscall
-     * (accept, read on stdin, waitpid) would trigger a false "stuck" kill.
-     * Instead, use kill(pid,0) to detect when the process is truly gone. */
+    /* Drain events until the child exits. sched_yield between reads so
+     * the tracee gets CPU. No idle timeout, no kill(pid, 0) liveness
+     * check: Frosted's sys_kill_hdlr does not special-case sig 0
+     * (SIG_DFL falls through to task_terminate), so the previous
+     * "liveness" probe was actually killing every traced child on the
+     * first poll iteration. Trust SIGCHLD (which sets child_exited)
+     * to terminate the loop. */
     while (!child_exited) {
         drain_events(pid);
-        if (kill(pid, 0) < 0 && errno == ESRCH)
-            break;   /* process has vanished; SIGCHLD may have been missed */
         sys_sched_yield();
     }
     drain_events(pid);
