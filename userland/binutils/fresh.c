@@ -448,23 +448,29 @@ static void welcomeScreen(void)
     printf("\r\n\r\n");
 }
 
-/* SIGCHLD: drain every reapable zombie. WNOHANG-loop matches POSIX
- * shells — a single SIGCHLD can cover multiple exits when the kernel
- * coalesces them, which our previous one-shot reap leaked.
+/* SIGCHLD handler: deliberately empty.
  *
- * Frosted's toolchain doesn't define sig_atomic_t; volatile int is
- * the closest equivalent and matches the previous declarations. */
-static volatile int child_pid = 0;
-static volatile int child_status = 0;
-
+ * Reaping in the handler races the explicit waitpid(pid, &st, 0) in
+ * run_simple — the handler's WNOHANG sweep can claim the foreground
+ * child before run_simple's wait gets there, leaving the kernel with
+ * a TASK_OVER node that the parent's next waitpid suspends on with
+ * no event to wake it (frosted/scheduler.c:sys_waitpid_hdlr).
+ *
+ * Foreground children are reaped by run_simple itself. Background
+ * children are reaped lazily by reap_zombies() at the prompt and on
+ * shell exit. */
 static void signalHandler_child(int p)
 {
-    int st;
-    pid_t r;
     (void)p;
-    while ((r = waitpid(-1, &st, WNOHANG)) > 0) {
-        child_pid = r;
-        child_status = st;
+}
+
+/* Reap any backgrounded zombies without blocking. Called from the
+ * interactive prompt loop and right before the shell exits. */
+static void reap_zombies(void)
+{
+    int st;
+    while (waitpid(-1, &st, WNOHANG) > 0) {
+        /* discard status — bg jobs don't update $? */
     }
 }
 
@@ -3486,6 +3492,8 @@ int icebox_fresh(int argc, char *argv[])
     ml_reset();
 
     while (1) {
+        /* Cleanup any backgrounded jobs before showing the prompt. */
+        reap_zombies();
         if (fresh_tty_trace_enabled && !fresh_prompt_trace_done) {
             fresh_prompt_trace_done = 1;
         }
