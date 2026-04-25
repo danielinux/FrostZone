@@ -556,587 +556,6 @@ static int resolve_cmd(const char *cmd, char *buf, int bufsz)
     return 0;
 }
 
-static int launchProg(char **args, int background)
-{
-    int err = -1;
-    struct stat st;
-    char bin_arg0[60];
-    char interpreter[30] = "/bin/fresh";
-    enum x_type xt;
-    int pid;
-
-    if (resolve_cmd(args[0], bin_arg0, sizeof(bin_arg0)) < 0) {
-        printf("stat: Command not found.\r\n");
-        return 1;
-    }
-    child_pid = 0;
-    pid = vfork();
-
-    if (pid == -1) {
-        printf("Child process could not be created\r\n");
-        return 1;
-    }
-    if (pid == 0) {
-        if (background != 0)
-            setsid();
-
-        /* Test file type */
-        xt = get_x_type(bin_arg0);
-        switch (xt) {
-        case X_bFLT:
-            // If we launch non-existing commands we end the process
-            execvp(bin_arg0, args);
-            exit(255);
-
-        case X_PY:
-            strcpy(interpreter,"/bin/python");
-            /* fall through */
-        case X_SH: {
-            char *aux[LIMIT] = {NULL};
-            int i;
-            aux[0] = interpreter;
-            aux[1] = bin_arg0;
-
-            i = 1;
-            while (args[i] != NULL) {
-                aux[i + 1] = args[i++];
-            }
-            err = execvp(interpreter, aux);
-            exit(err);
-        }
-
-        case X_ELF:
-            printf("Unable to execute ELF: format not (yet) supported.\r\n");
-            exit(254);
-
-        case X_UNK:
-            printf("Cannot execute: unknown file type.\r\n");
-            exit(254);
-
-        case X_ERR:
-            printf("Command not found");
-            exit(255);
-        }
-        exit(255); /* Never reached */
-    }
-
-    // The following will be executed by the parent
-
-    // If the process is not requested to be in background, we wait for
-    // the child to finish.
-    if (background == 0) {
-        char exit_status_str[16];
-
-        while (child_pid != pid) {
-            sleep(120); /* Will be interrupted by sigchld. */
-        }
-        sprintf(exit_status_str, "%d", child_status);
-        setenv("?", exit_status_str, 1);
-        return WEXITSTATUS(child_status);
-    } else {
-        // In order to create a background process, the current process
-        // should just skip the call to wait. The SIGCHILD handler
-        // signalHandler_child will take care of the returning values
-        // of the childs.
-        printf("Process created with PID: %d\r\n", pid);
-        return 0;
-    }
-}
-
-/**
-* Set up I/O redirections in the current process (parent).
-* Returns 0 on success, -1 on failure.
-* Saves original fds in saved_in/saved_out/saved_err for later restore.
-*/
-static int redir_setup(char *inputFile, char *outputFile, int option,
-                       int *saved_in, int *saved_out, int *saved_err)
-{
-    int fd;
-    *saved_in = *saved_out = *saved_err = -1;
-
-    if (option == 0) {
-        /* > stdout */
-        fd = open(outputFile, O_CREAT | O_TRUNC | O_WRONLY, 0600);
-        if (fd < 0) { perror(outputFile); return -1; }
-        *saved_out = dup(STDOUT_FILENO);
-        dup2(fd, STDOUT_FILENO);
-        close(fd);
-    } else if (option == 1) {
-        /* < stdin + > stdout */
-        fd = open(inputFile, O_RDONLY, 0600);
-        if (fd < 0) { perror(inputFile); return -1; }
-        *saved_in = dup(STDIN_FILENO);
-        dup2(fd, STDIN_FILENO);
-        close(fd);
-        fd = open(outputFile, O_CREAT | O_TRUNC | O_WRONLY, 0600);
-        if (fd < 0) {
-            perror(outputFile);
-            dup2(*saved_in, STDIN_FILENO);
-            close(*saved_in);
-            *saved_in = -1;
-            return -1;
-        }
-        *saved_out = dup(STDOUT_FILENO);
-        dup2(fd, STDOUT_FILENO);
-        close(fd);
-    } else if (option == 2) {
-        /* >> append */
-        fd = open(outputFile, O_CREAT | O_APPEND | O_WRONLY, 0600);
-        if (fd < 0) { perror(outputFile); return -1; }
-        *saved_out = dup(STDOUT_FILENO);
-        dup2(fd, STDOUT_FILENO);
-        close(fd);
-    } else if (option == 3) {
-        /* 2> stderr */
-        fd = open(outputFile, O_CREAT | O_TRUNC | O_WRONLY, 0600);
-        if (fd < 0) { perror(outputFile); return -1; }
-        *saved_err = dup(STDERR_FILENO);
-        dup2(fd, STDERR_FILENO);
-        close(fd);
-    }
-    return 0;
-}
-
-static void redir_restore(int saved_in, int saved_out, int saved_err)
-{
-    if (saved_in >= 0) {
-        dup2(saved_in, STDIN_FILENO);
-        close(saved_in);
-    }
-    if (saved_out >= 0) {
-        dup2(saved_out, STDOUT_FILENO);
-        close(saved_out);
-    }
-    if (saved_err >= 0) {
-        dup2(saved_err, STDERR_FILENO);
-        close(saved_err);
-    }
-}
-
-/**
- * Run a pipeline `cmd1 | cmd2 | ...`
- *
- * Standard pattern: create every pipe up front, fork each stage with its
- * stdin/stdout bound to the adjacent pipes, close *all* pipe fds in the
- * parent, then wait for each child. Doing it this way avoids the
- * fork-serially-then-wait deadlock the previous version hit whenever a
- * stage's output did not fit into the 64-byte pipe buffer (PIPE_BUFSIZE
- * in frosted/pipe.c).
- */
-static int pipeHandler(char *args[])
-{
-    char **commands[LIMIT];
-    pid_t pids[LIMIT];
-    int pipes[LIMIT][2];
-    int cmd_count = 0;
-    char **start = args;
-    int last_status = 0;
-    int i, j;
-    int saved_stdin, saved_stdout;
-
-    if (!args || !args[0])
-        return -1;
-
-    for (i = 0; args[i] != NULL; i++) {
-        if (strcmp(args[i], "|") == 0) {
-            args[i] = NULL;
-            if (!start || !*start) {
-                printf("fresh: invalid use of pipe\n");
-                return -1;
-            }
-            if (cmd_count >= LIMIT) {
-                printf("fresh: too many piped commands\n");
-                return -1;
-            }
-            commands[cmd_count++] = start;
-            start = &args[i + 1];
-        }
-    }
-    if (start && *start) {
-        if (cmd_count >= LIMIT) {
-            printf("fresh: too many piped commands\n");
-            return -1;
-        }
-        commands[cmd_count++] = start;
-    }
-
-    if (cmd_count < 2) {
-        printf("fresh: pipe requires at least two commands\n");
-        return -1;
-    }
-
-    /* Create every pipe before forking any stage. */
-    for (i = 0; i < cmd_count - 1; i++) {
-        if (pipe(pipes[i]) < 0) {
-            perror("pipe");
-            for (j = 0; j < i; j++) {
-                close(pipes[j][0]);
-                close(pipes[j][1]);
-            }
-            return -1;
-        }
-    }
-
-    saved_stdin  = dup(STDIN_FILENO);
-    saved_stdout = dup(STDOUT_FILENO);
-
-    for (i = 0; i < cmd_count; i++) {
-        char resolved[60];
-        pid_t pid;
-        int in_fd, out_fd;
-
-        if (resolve_cmd(commands[i][0], resolved, sizeof(resolved)) < 0) {
-            printf("fresh: %s: command not found\r\n", commands[i][0]);
-            pids[i] = -1;
-            continue;
-        }
-
-        in_fd  = (i == 0)               ? saved_stdin  : pipes[i - 1][0];
-        out_fd = (i == cmd_count - 1)   ? saved_stdout : pipes[i][1];
-
-        /* Bind this stage's stdin/stdout in the parent before vfork; the
-         * child inherits them. Restore the parent's terminal fds after
-         * vfork returns so subsequent stages (and the prompt) are sane. */
-        dup2(in_fd,  STDIN_FILENO);
-        dup2(out_fd, STDOUT_FILENO);
-
-        child_pid = 0;
-        pid = vfork();
-        if (pid < 0) {
-            perror("vfork");
-            pids[i] = -1;
-            dup2(saved_stdin,  STDIN_FILENO);
-            dup2(saved_stdout, STDOUT_FILENO);
-            continue;
-        }
-        if (pid == 0) {
-            /* Child: exec the target. No fd cleanup needed in the child
-             * because Frosted close-on-exec closes everything except the
-             * 3 inherited standard fds. */
-            execvp(resolved, commands[i]);
-            _exit(127);
-        }
-        pids[i] = pid;
-
-        dup2(saved_stdin,  STDIN_FILENO);
-        dup2(saved_stdout, STDOUT_FILENO);
-    }
-
-    /* Parent must close every pipe fd so readers see EOF once upstream
-     * producers exit. Without this the last stage blocks forever waiting
-     * for data that will never arrive. */
-    for (i = 0; i < cmd_count - 1; i++) {
-        close(pipes[i][0]);
-        close(pipes[i][1]);
-    }
-    close(saved_stdin);
-    close(saved_stdout);
-
-    /* Reap every stage. The handler's SIGCHLD-based child_pid is noisy
-     * across multiple concurrent children, so use waitpid directly. */
-    for (i = 0; i < cmd_count; i++) {
-        int status;
-        if (pids[i] < 0)
-            continue;
-        while (waitpid(pids[i], &status, 0) < 0) {
-            /* retry on interruption */
-        }
-        last_status = status;
-    }
-
-    if (WIFEXITED(last_status))
-        return WEXITSTATUS(last_status);
-    if (WIFSIGNALED(last_status))
-        return 128 + WTERMSIG(last_status);
-    return last_status;
-}
-
-/**
-* Method used to handle the commands entered via the standard input
-*/
-int commandHandler(char *args[], int argc)
-{
-    int i = 0;
-    int j = 0;
-
-    int fileDescriptor;
-    int standardOut;
-
-    int aux = -1;
-    int background = 0;
-
-    char *args_aux[LIMIT] = {NULL};
-    char *orig_args[LIMIT] = {NULL};
-
-    for (i = 0; i < argc && i < LIMIT; i++)
-        orig_args[i] = args[i];
-    i = 0;
-
-    /* P2: variable / command substitution has already happened in the
-     * expander phase (expand_tokens); commandHandler only walks for
-     * operators. */
-    while (j < argc) {
-        if ((strcmp(args[j], ">") == 0) || (strcmp(args[j], ">>") == 0) ||
-            (strcmp(args[j], "2>") == 0) || (strcmp(args[j], "<") == 0) ||
-            (strcmp(args[j], "&") == 0)) {
-            break;
-        }
-        args_aux[j] = args[j];
-        j++;
-    }
-
-    /* Add variables to our environment */
-    if (argc == 1) {
-        char *command = args[0];
-        char *token = strchr(command, '=');
-        if (token) {
-            size_t keylen = token - command;
-            char *key = malloc((keylen + 1) * sizeof (char));
-            int rc;
-            if (!key)
-                return -ENOMEM;
-            strncpy(key, command, keylen);
-            *(key + keylen) = 0x0;
-            token++;
-            rc = setenv(key, token, 1);
-            free(key);
-            if (rc) {
-                return -errno;
-            }
-            return 0;
-        }
-    }
-
-    // 'exit' command quits the shell
-    if (strcmp(args[0], "exit") == 0)
-        _exit(0);
-    // 'pwd' command prints the current directory
-    else if (strcmp(args[0], "pwd") == 0) {
-        if (args[j] != NULL) {
-            // If we want file output
-            if ((strcmp(args[j], ">") == 0) && (args[j + 1] != NULL)) {
-                fileDescriptor =
-                    open(args[j + 1], O_CREAT | O_TRUNC | O_WRONLY, 0600);
-                // We replace de standard output with the appropriate file
-                standardOut =
-                    dup(STDOUT_FILENO); // first we make a copy of stdout
-                                        // because we'll want it back
-                dup2(fileDescriptor, STDOUT_FILENO);
-                close(fileDescriptor);
-                printf("%s\r\n", getcwd(currentDirectory, 128));
-                dup2(standardOut, STDOUT_FILENO);
-            }
-        } else {
-            printf("%s\r\n", getcwd(currentDirectory, 128));
-        }
-    }
-    // 'cd' command to change directory
-    else if (strcmp(args[0], "cd") == 0) {
-        if (changeDirectory(args) < 0) {
-            setenv("?", "1", 1);
-        }
-    }
-
-    // 'setenv' command to set environment variables
-    else if (strcmp(args[0], "setenv") == 0) {
-        if (argc < 3) {
-            printf("usage: setenv NAME VALUE\r\n");
-            setenv("?", "1", 1);
-        } else {
-            setenv(args[1], args[2], 1);
-        }
-    } else if (strcmp(args[0], "export") == 0) {
-        int rv = 0;
-        if (argc < 2) {
-            printf("export: missing arguments\r\n");
-            rv = -1;
-        } else {
-            for (i = 1; i < argc && rv == 0; i++) {
-                char *eq = strchr(args[i], '=');
-                const char *key = args[i];
-                const char *val = NULL;
-                if (eq) {
-                    *eq = '\0';
-                    val = eq + 1;
-                } else {
-                    if (i + 1 >= argc) {
-                        printf("export: missing value for %s\r\n", args[i]);
-                        rv = -1;
-                        break;
-                    }
-                    val = args[++i];
-                }
-                if (setenv(key, val, 1) != 0)
-                    rv = -errno;
-                if (eq)
-                    *eq = '=';
-            }
-        }
-        setenv("?", rv == 0 ? "0" : "1", 1);
-        return rv;
-    } else if (strcmp(args[0], "getenv") == 0) {
-        if (argc > 1) {
-            char *value;
-            value = getenv(args[1]);
-            if (value) {
-                printf("%s\r\n", value);
-                setenv("?", "0", 1);
-            } else {
-                printf("getenv: variable '%s' is not set\r\n", args[1]);
-                setenv("?", "1", 1);
-            }
-        } else {
-            extern char **environ;
-            for (char **env = environ; env && *env; env++)
-                printf("%s\r\n", *env);
-            setenv("?", "0", 1);
-        }
-    }
-    // 'unsetenv' command to undefine environment variables
-    else if (strcmp(args[0], "unsetenv") == 0 || strcmp(args[0], "unset") == 0) {
-        if (argc < 2) {
-            printf("unset: missing variable name\r\n");
-            setenv("?", "1", 1);
-            return -1;
-        }
-        for (i = 1; i < argc; i++)
-            unsetenv(args[i]);
-        setenv("?", "0", 1);
-    } else if (strcmp(args[0], "source") == 0 || strcmp(args[0], ".") == 0) {
-        int src_ret = builtin_source(args, argc);
-        char buf[12];
-        snprintf(buf, sizeof(buf), "%d", src_ret);
-        setenv("?", buf, 1);
-        return src_ret;
-    } else if (strcmp(args[0], "shift") == 0) {
-        long shift_count = 1;
-        char *endptr = NULL;
-        if (argc > 1) {
-            shift_count = strtol(args[1], &endptr, 10);
-            if ((endptr && *endptr != '\0') || shift_count < 0) {
-                printf("shift: invalid count\r\n");
-                setenv("?", "1", 1);
-                return -1;
-            }
-        }
-        if (shift_count > shell_paramc) {
-            printf("shift: not enough positional parameters\r\n");
-            setenv("?", "1", 1);
-            return -1;
-        }
-        for (i = 0; i < shift_count; i++) {
-            if (shell_params[i]) {
-                free(shell_params[i]);
-                shell_params[i] = NULL;
-            }
-        }
-        for (i = shift_count; i < shell_paramc; i++)
-            shell_params[i - shift_count] = shell_params[i];
-        for (i = shell_paramc - shift_count; i < shell_paramc; i++) {
-            if (i >= 0)
-                shell_params[i] = NULL;
-        }
-        shell_paramc -= shift_count;
-        setenv("?", "0", 1);
-        return 0;
-    } else {
-        // If none of the preceding commands were used, we invoke the
-        // specified program. We have to detect if I/O redirection,
-        // piped execution or background execution were solicited
-        while (args[i] != NULL && background == 0) {
-            // If background execution was solicited (last argument '&')
-            // we exit the loop
-            if (strcmp(args[i], "&") == 0) {
-                background = 1;
-                args_aux[i] = NULL;
-                // If '|' is detected, piping was solicited, and we call
-                // the appropriate method that will handle the different
-                // executions
-            } else if (strcmp(args[i], "|") == 0) {
-                int pipe_status = pipeHandler(args);
-                char buf[12];
-                snprintf(buf, sizeof(buf), "%d", pipe_status);
-                setenv("?", buf, 1);
-                return pipe_status;
-                // If '<' is detected, we have Input and Output redirection.
-                // First we check if the structure given is the correct one,
-                // and if that is the case we call the appropriate method
-            } else if (strcmp(args[i], "<") == 0) {
-                int sv_in, sv_out, sv_err, rv;
-                aux = i + 1;
-                if (args[aux] == NULL) {
-                    printf("Not enough input arguments\r\n");
-                    return -1;
-                }
-                if (args[aux + 1] == NULL) {
-                    if (redir_setup(args[i + 1], NULL, 1, &sv_in, &sv_out, &sv_err) < 0)
-                        return -1;
-                    rv = launchProg(args_aux, 0);
-                    redir_restore(sv_in, sv_out, sv_err);
-                    return rv;
-                }
-                if (strcmp(args[aux + 1], ">") != 0) {
-                    printf("Usage: Expected '>' and found %s\r\n",
-                           args[aux + 1]);
-                    return -2;
-                }
-                if (args[aux + 2] == NULL) {
-                    printf("Not enough input arguments\r\n");
-                    return -1;
-                }
-                if (redir_setup(args[i + 1], args[i + 3], 1, &sv_in, &sv_out, &sv_err) < 0)
-                    return -1;
-                rv = launchProg(args_aux, 0);
-                redir_restore(sv_in, sv_out, sv_err);
-                return rv;
-            }
-            // '>>' append redirection
-            else if (strcmp(args[i], ">>") == 0) {
-                int sv_in, sv_out, sv_err, rv;
-                if (args[i + 1] == NULL) {
-                    printf("Not enough input arguments\r\n");
-                    return -1;
-                }
-                if (redir_setup(NULL, args[i + 1], 2, &sv_in, &sv_out, &sv_err) < 0)
-                    return -1;
-                rv = launchProg(args_aux, 0);
-                redir_restore(sv_in, sv_out, sv_err);
-                return rv;
-            }
-            // '2>' stderr redirection
-            else if (strcmp(args[i], "2>") == 0) {
-                int sv_in, sv_out, sv_err, rv;
-                if (args[i + 1] == NULL) {
-                    printf("Not enough input arguments\r\n");
-                    return -1;
-                }
-                if (redir_setup(NULL, args[i + 1], 3, &sv_in, &sv_out, &sv_err) < 0)
-                    return -1;
-                rv = launchProg(args_aux, 0);
-                redir_restore(sv_in, sv_out, sv_err);
-                return rv;
-            }
-            // '>' output redirection
-            else if (strcmp(args[i], ">") == 0) {
-                int sv_in, sv_out, sv_err, rv;
-                if (args[i + 1] == NULL) {
-                    printf("Not enough input arguments\r\n");
-                    return -1;
-                }
-                if (redir_setup(NULL, args[i + 1], 0, &sv_in, &sv_out, &sv_err) < 0)
-                    return -1;
-                rv = launchProg(args_aux, 0);
-                redir_restore(sv_in, sv_out, sv_err);
-                return rv;
-            }
-            i++;
-        }
-        // We launch the program with our method, indicating if we
-        // want background execution or not
-        return launchProg(args_aux, background);
-    }
-}
-
 char *readline_tty(char *input, int size)
 {
     for (;;) {
@@ -2001,6 +1420,729 @@ static int expand_tokens(int script_argc)
     return exp_count;
 }
 
+/*
+ * Parser + executor (P3 of the fresh refactor)
+ *
+ * Token stream (exp_words[] / exp_types[] from the expander) → AST →
+ * exec_ast(). One commit replaces the legacy launchProg / pipeHandler
+ * / commandHandler triumvirate with five small functions:
+ *   parse_simple / parse_pipeline / parse_and_or / parse_list  (parser)
+ *   try_builtin                                                 (builtins)
+ *   run_simple                                                  (cmd leaf)
+ *   run_pipeline                                                (pipe node)
+ *   exec_ast                                                    (dispatch)
+ *
+ * Grammar (Bourne subset, recursive descent):
+ *   list      := and_or ((';' | '&') and_or)*  [trailing ';' or '&']
+ *   and_or    := pipeline (('&&' | '||') pipeline)*
+ *   pipeline  := simple ('|' simple)*
+ *   simple    := ['!'] WORD+ REDIR* | REDIR+
+ *   REDIR     := '<' WORD | '>' WORD | '>>' WORD | '2>' WORD
+ *
+ * Static memory: ast_nodes (64), ast_redirs (16). All argv slots are
+ * indices into exp_words[] — the lexer and expander already gave us
+ * a stable, contiguous word array, so no copy.
+ */
+
+#define MAX_AST_NODES   64
+#define MAX_REDIRS      16
+#define MAX_PIPE_STAGES 8
+
+enum ast_type {
+    AST_CMD,
+    AST_PIPE,
+    AST_AND_OR,
+    AST_SEQ,
+};
+
+#define AST_FLAG_AND  0x01   /* AST_AND_OR: connector is && */
+#define AST_FLAG_OR   0x02   /* AST_AND_OR: connector is || */
+#define AST_FLAG_BG   0x04   /* run subtree async, return 0 */
+#define AST_FLAG_NEG  0x08   /* invert exit status (leading '!') */
+
+enum redir_op {
+    R_IN,        /* <  word */
+    R_OUT,       /* >  word */
+    R_APPEND,    /* >> word */
+    R_ERR,       /* 2> word */
+};
+
+struct ast_redir {
+    uint8_t op;
+    uint8_t fd;            /* fd to redirect (0/1/2) */
+    int16_t word_idx;      /* exp_words[] index for filename */
+};
+
+struct ast_node {
+    uint8_t  type;
+    uint8_t  flags;
+    int16_t  left;
+    int16_t  right;
+    int16_t  argv_first;   /* AST_CMD: index in exp_words[] */
+    int16_t  argv_n;
+    int16_t  redir_first;  /* AST_CMD: index in ast_redirs[] */
+    int16_t  redir_n;
+};
+
+static struct ast_node  ast_nodes[MAX_AST_NODES];
+static struct ast_redir ast_redirs[MAX_REDIRS];
+static int ast_node_count;
+static int ast_redir_count;
+static int parse_pos;
+static int parse_n_tokens;
+
+static int ast_alloc_node(uint8_t type)
+{
+    int idx;
+    if (ast_node_count >= MAX_AST_NODES)
+        return -1;
+    idx = ast_node_count++;
+    memset(&ast_nodes[idx], 0, sizeof(struct ast_node));
+    ast_nodes[idx].type = type;
+    ast_nodes[idx].left = -1;
+    ast_nodes[idx].right = -1;
+    ast_nodes[idx].argv_first = -1;
+    ast_nodes[idx].redir_first = -1;
+    return idx;
+}
+
+static int ast_alloc_redir(uint8_t op, uint8_t fd, int16_t word_idx)
+{
+    int idx;
+    if (ast_redir_count >= MAX_REDIRS)
+        return -1;
+    idx = ast_redir_count++;
+    ast_redirs[idx].op = op;
+    ast_redirs[idx].fd = fd;
+    ast_redirs[idx].word_idx = word_idx;
+    return idx;
+}
+
+static int peek_type(void)
+{
+    if (parse_pos >= parse_n_tokens)
+        return -1;
+    return exp_types[parse_pos];
+}
+
+static const char *peek_word(void)
+{
+    if (parse_pos >= parse_n_tokens)
+        return NULL;
+    return exp_words[parse_pos];
+}
+
+static int parse_simple(void)
+{
+    int idx;
+    int neg = 0;
+
+    if (peek_type() == T_WORD && peek_word() &&
+        strcmp(peek_word(), "!") == 0) {
+        neg = 1;
+        parse_pos++;
+    }
+
+    {
+        int t = peek_type();
+        if (t != T_WORD && t != T_LT && t != T_GT &&
+            t != T_DGT && t != T_ERR_GT)
+            return -1;
+    }
+
+    idx = ast_alloc_node(AST_CMD);
+    if (idx < 0)
+        return -1;
+    if (neg)
+        ast_nodes[idx].flags |= AST_FLAG_NEG;
+
+    while (parse_pos < parse_n_tokens) {
+        int t = exp_types[parse_pos];
+
+        if (t == T_WORD) {
+            if (ast_nodes[idx].argv_first < 0)
+                ast_nodes[idx].argv_first = (int16_t)parse_pos;
+            ast_nodes[idx].argv_n++;
+            parse_pos++;
+            continue;
+        }
+        if (t == T_LT || t == T_GT || t == T_DGT || t == T_ERR_GT) {
+            uint8_t op = R_IN;
+            uint8_t fd = 0;
+            int16_t target;
+            int r;
+
+            switch (t) {
+            case T_LT:     op = R_IN;     fd = 0; break;
+            case T_GT:     op = R_OUT;    fd = 1; break;
+            case T_DGT:    op = R_APPEND; fd = 1; break;
+            case T_ERR_GT: op = R_ERR;    fd = 2; break;
+            default:       return -1;
+            }
+            parse_pos++;
+            if (parse_pos >= parse_n_tokens ||
+                exp_types[parse_pos] != T_WORD)
+                return -1;
+            target = (int16_t)parse_pos;
+            parse_pos++;
+
+            r = ast_alloc_redir(op, fd, target);
+            if (r < 0)
+                return -1;
+            if (ast_nodes[idx].redir_first < 0)
+                ast_nodes[idx].redir_first = (int16_t)r;
+            ast_nodes[idx].redir_n++;
+            continue;
+        }
+        break;
+    }
+
+    if (ast_nodes[idx].argv_n == 0)
+        return -1;
+    return idx;
+}
+
+static int parse_pipeline(void)
+{
+    int left = parse_simple();
+    if (left < 0)
+        return -1;
+
+    while (peek_type() == T_PIPE) {
+        int right, p;
+        parse_pos++;
+        right = parse_simple();
+        if (right < 0)
+            return -1;
+        p = ast_alloc_node(AST_PIPE);
+        if (p < 0)
+            return -1;
+        ast_nodes[p].left = (int16_t)left;
+        ast_nodes[p].right = (int16_t)right;
+        left = p;
+    }
+    return left;
+}
+
+static int parse_and_or(void)
+{
+    int left = parse_pipeline();
+    if (left < 0)
+        return -1;
+
+    while (peek_type() == T_AND || peek_type() == T_OR) {
+        int op = peek_type();
+        int right, p;
+        parse_pos++;
+        right = parse_pipeline();
+        if (right < 0)
+            return -1;
+        p = ast_alloc_node(AST_AND_OR);
+        if (p < 0)
+            return -1;
+        ast_nodes[p].left = (int16_t)left;
+        ast_nodes[p].right = (int16_t)right;
+        ast_nodes[p].flags |= (op == T_AND) ? AST_FLAG_AND : AST_FLAG_OR;
+        left = p;
+    }
+    return left;
+}
+
+static int parse_list(void)
+{
+    int left = parse_and_or();
+    if (left < 0)
+        return -1;
+
+    if (peek_type() == T_AMP) {
+        ast_nodes[left].flags |= AST_FLAG_BG;
+        parse_pos++;
+    }
+
+    while (peek_type() == T_SEMI || peek_type() == T_AMP) {
+        int right, s;
+        if (peek_type() == T_SEMI) parse_pos++;
+        if (parse_pos >= parse_n_tokens) break;
+        right = parse_and_or();
+        if (right < 0)
+            return left;
+        if (peek_type() == T_AMP) {
+            ast_nodes[right].flags |= AST_FLAG_BG;
+            parse_pos++;
+        }
+        s = ast_alloc_node(AST_SEQ);
+        if (s < 0)
+            return -1;
+        ast_nodes[s].left = (int16_t)left;
+        ast_nodes[s].right = (int16_t)right;
+        left = s;
+    }
+    return left;
+}
+
+static int parse_tokens(void)
+{
+    ast_node_count = 0;
+    ast_redir_count = 0;
+    parse_pos = 0;
+    parse_n_tokens = exp_count;
+    if (parse_n_tokens == 0)
+        return -1;
+    return parse_list();
+}
+
+/* ---------------------------------------------------------------- */
+/* Builtins                                                          */
+/* ---------------------------------------------------------------- */
+
+#define NOT_A_BUILTIN  (-2)
+
+static int try_builtin(char **argv, int argc)
+{
+    int i;
+
+    if (argc == 0)
+        return NOT_A_BUILTIN;
+
+    /* Lone `KEY=VALUE` token sets an env var. */
+    if (argc == 1) {
+        char *eq = strchr(argv[0], '=');
+        if (eq && eq != argv[0]) {
+            *eq = '\0';
+            setenv(argv[0], eq + 1, 1);
+            *eq = '=';
+            return 0;
+        }
+    }
+
+    if (strcmp(argv[0], "exit") == 0)
+        _exit(argc > 1 ? atoi(argv[1]) : 0);
+
+    if (strcmp(argv[0], "true") == 0 || strcmp(argv[0], ":") == 0)
+        return 0;
+    if (strcmp(argv[0], "false") == 0)
+        return 1;
+
+    if (strcmp(argv[0], "cd") == 0)
+        return changeDirectory(argv) < 0 ? 1 : 0;
+
+    if (strcmp(argv[0], "pwd") == 0) {
+        printf("%s\r\n", getcwd(currentDirectory, sizeof(currentDirectory)));
+        return 0;
+    }
+
+    if (strcmp(argv[0], "setenv") == 0) {
+        if (argc < 3) {
+            printf("usage: setenv NAME VALUE\r\n");
+            return 1;
+        }
+        return setenv(argv[1], argv[2], 1) == 0 ? 0 : 1;
+    }
+
+    if (strcmp(argv[0], "export") == 0) {
+        if (argc < 2) {
+            printf("export: missing arguments\r\n");
+            return 1;
+        }
+        for (i = 1; i < argc; i++) {
+            char *eq = strchr(argv[i], '=');
+            if (eq) {
+                *eq = '\0';
+                setenv(argv[i], eq + 1, 1);
+                *eq = '=';
+            } else if (i + 1 < argc) {
+                setenv(argv[i], argv[++i], 1);
+            } else {
+                printf("export: missing value for %s\r\n", argv[i]);
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    if (strcmp(argv[0], "getenv") == 0) {
+        if (argc > 1) {
+            const char *v = getenv(argv[1]);
+            if (v) {
+                printf("%s\r\n", v);
+                return 0;
+            }
+            printf("getenv: variable '%s' is not set\r\n", argv[1]);
+            return 1;
+        }
+        {
+            char **e;
+            for (e = environ; e && *e; e++)
+                printf("%s\r\n", *e);
+        }
+        return 0;
+    }
+
+    if (strcmp(argv[0], "unset") == 0 || strcmp(argv[0], "unsetenv") == 0) {
+        if (argc < 2) {
+            printf("unset: missing variable name\r\n");
+            return 1;
+        }
+        for (i = 1; i < argc; i++)
+            unsetenv(argv[i]);
+        return 0;
+    }
+
+    if (strcmp(argv[0], "source") == 0 || strcmp(argv[0], ".") == 0)
+        return builtin_source(argv, argc);
+
+    if (strcmp(argv[0], "shift") == 0) {
+        long count = (argc > 1) ? strtol(argv[1], NULL, 10) : 1;
+        if (count < 0 || count > shell_paramc) {
+            printf("shift: invalid count\r\n");
+            return 1;
+        }
+        for (i = 0; i < count; i++) {
+            if (shell_params[i]) {
+                free(shell_params[i]);
+                shell_params[i] = NULL;
+            }
+        }
+        for (i = count; i < shell_paramc; i++)
+            shell_params[i - count] = shell_params[i];
+        for (i = shell_paramc - count; i < shell_paramc; i++)
+            if (i >= 0)
+                shell_params[i] = NULL;
+        shell_paramc -= count;
+        return 0;
+    }
+
+    return NOT_A_BUILTIN;
+}
+
+/* ---------------------------------------------------------------- */
+/* Executor                                                          */
+/* ---------------------------------------------------------------- */
+
+/* Open a redir target and dup over the destination fd. Saves the
+ * original via `save_fds[fd]` (if save_fds != NULL and slot not yet
+ * saved) so the caller can restore on return. */
+static int apply_redir(const struct ast_redir *r, int *save_fds)
+{
+    int fd;
+    int flags;
+    const char *path = exp_words[r->word_idx];
+
+    switch (r->op) {
+    case R_IN:     flags = O_RDONLY;                          break;
+    case R_OUT:    flags = O_WRONLY | O_CREAT | O_TRUNC;      break;
+    case R_APPEND: flags = O_WRONLY | O_CREAT | O_APPEND;     break;
+    case R_ERR:    flags = O_WRONLY | O_CREAT | O_TRUNC;      break;
+    default:       return -1;
+    }
+    fd = open(path, flags, 0600);
+    if (fd < 0) {
+        perror(path);
+        return -1;
+    }
+    if (save_fds && r->fd < 3 && save_fds[r->fd] < 0)
+        save_fds[r->fd] = dup(r->fd);
+    if (dup2(fd, r->fd) < 0) {
+        close(fd);
+        return -1;
+    }
+    close(fd);
+    return 0;
+}
+
+static void restore_fds(int *save_fds)
+{
+    int i;
+    for (i = 0; i < 3; i++) {
+        if (save_fds[i] >= 0) {
+            dup2(save_fds[i], i);
+            close(save_fds[i]);
+            save_fds[i] = -1;
+        }
+    }
+}
+
+/*
+ * Run an AST_CMD: apply redirs, dispatch builtin, else vfork+exec.
+ * Returns 0..255 exit status. Sets the `?` env var. Honours
+ * AST_FLAG_NEG on the node.
+ */
+static int run_simple(int idx)
+{
+    struct ast_node *n = &ast_nodes[idx];
+    char *argv[LEX_MAX_TOKS + 1];
+    int argc = 0;
+    int save_fds[3] = { -1, -1, -1 };
+    int rc = 1;
+    int i;
+
+    if (n->argv_n <= 0)
+        return 0;
+    for (i = 0; i < n->argv_n && argc < LEX_MAX_TOKS; i++)
+        argv[argc++] = exp_words[n->argv_first + i];
+    argv[argc] = NULL;
+
+    for (i = 0; i < n->redir_n; i++) {
+        if (apply_redir(&ast_redirs[n->redir_first + i], save_fds) < 0)
+            goto out;
+    }
+
+    rc = try_builtin(argv, argc);
+    if (rc != NOT_A_BUILTIN)
+        goto out;
+
+    {
+        char resolved[256];
+        char interp[32] = "/bin/fresh";
+        enum x_type xt;
+        pid_t pid;
+        int st = 0;
+
+        if (resolve_cmd(argv[0], resolved, sizeof(resolved)) < 0) {
+            printf("fresh: %s: command not found\r\n", argv[0]);
+            rc = 127;
+            goto out;
+        }
+        xt = get_x_type(resolved);
+
+        pid = vfork();
+        if (pid < 0) {
+            perror("vfork");
+            rc = 1;
+            goto out;
+        }
+        if (pid == 0) {
+            switch (xt) {
+            case X_bFLT:
+                execvp(resolved, argv);
+                _exit(127);
+            case X_PY:
+                strcpy(interp, "/bin/python");
+                /* fall through */
+            case X_SH: {
+                char *aux[LEX_MAX_TOKS + 2];
+                int j = 0;
+                aux[j++] = interp;
+                aux[j++] = resolved;
+                for (i = 1; i < argc && j < LEX_MAX_TOKS + 1; i++)
+                    aux[j++] = argv[i];
+                aux[j] = NULL;
+                execvp(interp, aux);
+                _exit(127);
+            }
+            case X_ELF:
+                _exit(126);
+            default:
+                _exit(127);
+            }
+        }
+        while (waitpid(pid, &st, 0) < 0) {
+            if (errno != EINTR)
+                break;
+        }
+        if (WIFEXITED(st))         rc = WEXITSTATUS(st);
+        else if (WIFSIGNALED(st))  rc = 128 + WTERMSIG(st);
+        else                       rc = 1;
+    }
+
+out:
+    restore_fds(save_fds);
+    {
+        char buf[12];
+        snprintf(buf, sizeof(buf), "%d", rc);
+        setenv("?", buf, 1);
+    }
+    if (n->flags & AST_FLAG_NEG)
+        rc = (rc == 0) ? 1 : 0;
+    return rc;
+}
+
+static int collect_pipeline(int idx, int *stages, int max)
+{
+    if (idx < 0 || max < 1)
+        return -1;
+    if (ast_nodes[idx].type != AST_PIPE) {
+        stages[0] = idx;
+        return 1;
+    }
+    {
+        int n = collect_pipeline(ast_nodes[idx].left, stages, max);
+        if (n < 0 || n >= max)
+            return -1;
+        stages[n] = ast_nodes[idx].right;
+        return n + 1;
+    }
+}
+
+/*
+ * Run a pipeline. Same shape as the legacy pipeHandler: open every
+ * pipe up front, fork each stage with stdin/stdout bound to adjacent
+ * pipes (per-stage redirs override in the child), close every pipe
+ * fd in the parent so consumers see EOF, then waitpid each.
+ */
+static int run_pipeline(int idx)
+{
+    int stages[MAX_PIPE_STAGES];
+    int n = collect_pipeline(idx, stages, MAX_PIPE_STAGES);
+    int pipes[MAX_PIPE_STAGES - 1][2];
+    pid_t pids[MAX_PIPE_STAGES];
+    int last_status = 0;
+    int saved_in, saved_out;
+    int i, j;
+
+    if (n < 1)
+        return 1;
+    if (n == 1)
+        return run_simple(stages[0]);
+
+    for (i = 0; i < n - 1; i++) {
+        if (pipe(pipes[i]) < 0) {
+            for (j = 0; j < i; j++) {
+                close(pipes[j][0]);
+                close(pipes[j][1]);
+            }
+            return 1;
+        }
+    }
+    saved_in  = dup(STDIN_FILENO);
+    saved_out = dup(STDOUT_FILENO);
+
+    for (i = 0; i < n; i++) {
+        struct ast_node *cn = &ast_nodes[stages[i]];
+        char *argv[LEX_MAX_TOKS + 1];
+        int argc = 0;
+        char resolved[256];
+        int in_fd  = (i == 0)     ? saved_in  : pipes[i - 1][0];
+        int out_fd = (i == n - 1) ? saved_out : pipes[i][1];
+        pid_t pid;
+
+        if (cn->type != AST_CMD) {
+            pids[i] = -1;
+            continue;
+        }
+        for (j = 0; j < cn->argv_n && argc < LEX_MAX_TOKS; j++)
+            argv[argc++] = exp_words[cn->argv_first + j];
+        argv[argc] = NULL;
+        if (argc == 0) {
+            pids[i] = -1;
+            continue;
+        }
+
+        dup2(in_fd, STDIN_FILENO);
+        dup2(out_fd, STDOUT_FILENO);
+
+        if (resolve_cmd(argv[0], resolved, sizeof(resolved)) < 0) {
+            printf("fresh: %s: command not found\r\n", argv[0]);
+            pids[i] = -1;
+            dup2(saved_in, STDIN_FILENO);
+            dup2(saved_out, STDOUT_FILENO);
+            continue;
+        }
+
+        pid = vfork();
+        if (pid < 0) {
+            perror("vfork");
+            pids[i] = -1;
+            dup2(saved_in, STDIN_FILENO);
+            dup2(saved_out, STDOUT_FILENO);
+            continue;
+        }
+        if (pid == 0) {
+            int sv[3] = { -1, -1, -1 };
+            for (j = 0; j < cn->redir_n; j++) {
+                if (apply_redir(&ast_redirs[cn->redir_first + j], sv) < 0)
+                    _exit(1);
+            }
+            execvp(resolved, argv);
+            _exit(127);
+        }
+        pids[i] = pid;
+        dup2(saved_in, STDIN_FILENO);
+        dup2(saved_out, STDOUT_FILENO);
+    }
+
+    for (i = 0; i < n - 1; i++) {
+        close(pipes[i][0]);
+        close(pipes[i][1]);
+    }
+    close(saved_in);
+    close(saved_out);
+
+    for (i = 0; i < n; i++) {
+        int st;
+        if (pids[i] < 0)
+            continue;
+        while (waitpid(pids[i], &st, 0) < 0) {
+            if (errno != EINTR)
+                break;
+        }
+        last_status = st;
+    }
+    if (WIFEXITED(last_status))
+        return WEXITSTATUS(last_status);
+    if (WIFSIGNALED(last_status))
+        return 128 + WTERMSIG(last_status);
+    return 1;
+}
+
+static int exec_ast(int idx);
+
+static int exec_ast(int idx)
+{
+    struct ast_node *n;
+    int rc = 0;
+
+    if (idx < 0)
+        return 0;
+    n = &ast_nodes[idx];
+
+    /* Background: vfork the whole subtree, return 0 immediately. */
+    if (n->flags & AST_FLAG_BG) {
+        pid_t pid;
+        ast_nodes[idx].flags &= ~AST_FLAG_BG;
+        pid = vfork();
+        if (pid < 0) {
+            perror("vfork");
+            ast_nodes[idx].flags |= AST_FLAG_BG;
+            return 1;
+        }
+        if (pid == 0) {
+            (void)exec_ast(idx);
+            _exit(0);
+        }
+        ast_nodes[idx].flags |= AST_FLAG_BG;
+        printf("[%d]\r\n", (int)pid);
+        return 0;
+    }
+
+    switch (n->type) {
+    case AST_CMD:
+        rc = run_simple(idx);
+        break;
+    case AST_PIPE:
+        rc = run_pipeline(idx);
+        break;
+    case AST_AND_OR: {
+        int lrc = exec_ast(n->left);
+        if ((n->flags & AST_FLAG_AND) && lrc != 0)
+            rc = lrc;
+        else if ((n->flags & AST_FLAG_OR) && lrc == 0)
+            rc = lrc;
+        else
+            rc = exec_ast(n->right);
+        break;
+    }
+    case AST_SEQ:
+        (void)exec_ast(n->left);
+        rc = exec_ast(n->right);
+        break;
+    default:
+        rc = 1;
+        break;
+    }
+    return rc;
+}
+
 static int parseLine(char *line)
 {
     int n;
@@ -2025,7 +2167,16 @@ static int parseLine(char *line)
     }
     if (exp_count == 0)
         return 0;
-    return commandHandler(exp_words, exp_count);
+    {
+        int root = parse_tokens();
+        int rc;
+        if (root < 0) {
+            printf("fresh: syntax error\r\n");
+            return -1;
+        }
+        rc = exec_ast(root);
+        return rc;
+    }
 }
 
 /* Fresh exec */
@@ -2115,7 +2266,8 @@ int icebox_fresh(int argc, char *argv[])
             if (expand_tokens(n) < 0) {
                 rc = 2;
             } else if (exp_count > 0) {
-                rc = commandHandler(exp_words, exp_count);
+                int root = parse_tokens();
+                rc = (root < 0) ? 2 : exec_ast(root);
             }
         }
         fflush(stdout);
