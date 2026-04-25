@@ -41,6 +41,13 @@ static struct termios GBSH_TMODES;
 extern char **environ;
 static const char empty_value[] = "";
 
+/* P6 flags and state */
+static int set_e_flag = 0;          /* set -e: exit on error            */
+static int set_x_flag = 0;          /* set -x: trace commands to stderr */
+static int script_depth = 0;        /* nesting depth of sourced scripts */
+static int script_return_requested = 0;
+static int script_return_status = 0;
+
 int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
 
 int no_reprint_prmpt;
@@ -368,7 +375,14 @@ static int builtin_source(char **args, int argc)
     if (count > 0)
         shell_params_assign(newargv, count);
 
+    script_depth++;
     ret = fresh_exec(args[1], &args[1]);
+    script_depth--;
+    if (script_return_requested) {
+        ret = script_return_status;
+        script_return_requested = 0;
+        script_return_status = 0;
+    }
     shell_params_restore_snapshot(&snap);
     shell_params_snapshot_clear(&snap);
 
@@ -473,17 +487,52 @@ static void signalHandler_int(int p)
     (void)p;
 }
 
-/**
- * Method to change directory
+/*
+ * cd builtin. Recognises:
+ *   cd            -> $HOME (fallback "/")
+ *   cd ~          -> $HOME
+ *   cd ~/sub      -> $HOME/sub
+ *   cd -          -> $OLDPWD (and prints the new cwd, like bash)
+ *   cd PATH       -> chdir(PATH)
+ *
+ * Maintains $OLDPWD so successive `cd -` toggles between the last two
+ * directories. Closes D-17 from FRESH_REVIEW.md.
  */
 int changeDirectory(char *args[])
 {
+    static char path_buf[256];
     const char *target = args[1];
+    const char *oldpwd_save = NULL;
+    char saved_pwd[128];
+
+    /* Snapshot the current pwd so we can update OLDPWD on success. */
+    saved_pwd[0] = '\0';
+    if (getcwd(saved_pwd, sizeof(saved_pwd)) != NULL)
+        oldpwd_save = saved_pwd;
 
     if (target == NULL || target[0] == '\0') {
         target = getenv("HOME");
         if (target == NULL || target[0] == '\0')
             target = "/";
+    } else if (strcmp(target, "-") == 0) {
+        target = getenv("OLDPWD");
+        if (target == NULL || target[0] == '\0') {
+            printf("cd: OLDPWD not set\r\n");
+            return -1;
+        }
+        /* bash prints the new directory when `cd -` is used. */
+        printf("%s\r\n", target);
+    } else if (target[0] == '~') {
+        const char *home = getenv("HOME");
+        if (home == NULL || home[0] == '\0')
+            home = "/";
+        if (target[1] == '\0') {
+            target = home;
+        } else if (target[1] == '/') {
+            snprintf(path_buf, sizeof(path_buf), "%s%s", home, target + 1);
+            target = path_buf;
+        }
+        /* "~user" form not supported — Frosted has only one user. */
     }
 
     if (chdir(target) == -1) {
@@ -491,6 +540,8 @@ int changeDirectory(char *args[])
         return -1;
     }
 
+    if (oldpwd_save)
+        setenv("OLDPWD", oldpwd_save, 1);
     update_pwd_env();
     return 0;
 }
@@ -2260,6 +2311,216 @@ static int parse_tokens(void)
 }
 
 /* ---------------------------------------------------------------- */
+/* P6: test / [                                                      */
+/* ---------------------------------------------------------------- */
+
+/* Returns 0 (true), 1 (false), 2 (parse error). */
+static int eval_test(char **argv, int argc)
+{
+    struct stat st;
+    long v1, v2;
+    char *ep;
+
+    if (argc == 0)
+        return 1;
+
+    if (strcmp(argv[0], "!") == 0)
+        return eval_test(argv + 1, argc - 1) == 0 ? 1 : 0;
+
+    if (argc >= 3) {
+        if (strcmp(argv[1], "-a") == 0) {
+            int l = eval_test(argv,     1);
+            int r = eval_test(argv + 2, argc - 2);
+            if (l == 2 || r == 2) return 2;
+            return (l == 0 && r == 0) ? 0 : 1;
+        }
+        if (strcmp(argv[1], "-o") == 0) {
+            int l = eval_test(argv,     1);
+            int r = eval_test(argv + 2, argc - 2);
+            if (l == 2 || r == 2) return 2;
+            return (l == 0 || r == 0) ? 0 : 1;
+        }
+    }
+
+    if (argc == 2 && argv[0][0] == '-' && argv[0][2] == '\0') {
+        char op = argv[0][1];
+        const char *path = argv[1];
+        switch (op) {
+        case 'e': return stat(path, &st) == 0 ? 0 : 1;
+        case 'f': return (stat(path, &st) == 0 && S_ISREG(st.st_mode)) ? 0 : 1;
+        case 'd': return (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) ? 0 : 1;
+        /* Frosted has no per-task uid; treat the readable/writable/
+         * executable tests as a stat() success plus the corresponding
+         * mode bit on the file. Matches the "everyone is root" model. */
+        case 'r': return (stat(path, &st) == 0 &&
+                          (st.st_mode & (S_IRUSR | S_IRGRP | S_IROTH))) ? 0 : 1;
+        case 'w': return (stat(path, &st) == 0 &&
+                          (st.st_mode & (S_IWUSR | S_IWGRP | S_IWOTH))) ? 0 : 1;
+        case 'x': return (stat(path, &st) == 0 &&
+                          (st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH))) ? 0 : 1;
+        case 's': return (stat(path, &st) == 0 && st.st_size > 0) ? 0 : 1;
+        case 'z': return (strlen(argv[1]) == 0) ? 0 : 1;
+        case 'n': return (strlen(argv[1]) >  0) ? 0 : 1;
+        default:  break;
+        }
+    }
+
+    if (argc == 3) {
+        if (strcmp(argv[1], "=")  == 0)
+            return strcmp(argv[0], argv[2]) == 0 ? 0 : 1;
+        if (strcmp(argv[1], "!=") == 0)
+            return strcmp(argv[0], argv[2]) != 0 ? 0 : 1;
+
+        v1 = strtol(argv[0], &ep, 10);
+        if (ep && *ep != '\0') return 2;
+        v2 = strtol(argv[2], &ep, 10);
+        if (ep && *ep != '\0') return 2;
+
+        if (strcmp(argv[1], "-eq") == 0) return (v1 == v2) ? 0 : 1;
+        if (strcmp(argv[1], "-ne") == 0) return (v1 != v2) ? 0 : 1;
+        if (strcmp(argv[1], "-lt") == 0) return (v1 <  v2) ? 0 : 1;
+        if (strcmp(argv[1], "-le") == 0) return (v1 <= v2) ? 0 : 1;
+        if (strcmp(argv[1], "-gt") == 0) return (v1 >  v2) ? 0 : 1;
+        if (strcmp(argv[1], "-ge") == 0) return (v1 >= v2) ? 0 : 1;
+    }
+
+    if (argc == 1)
+        return (argv[0][0] != '\0') ? 0 : 1;
+
+    return 2;
+}
+
+static int builtin_test(char **argv, int argc, int bracket_form)
+{
+    char **expr_argv = argv + 1;
+    int    expr_argc = argc - 1;
+
+    if (bracket_form) {
+        if (expr_argc < 1 || strcmp(expr_argv[expr_argc - 1], "]") != 0) {
+            fprintf(stderr, "[: missing closing ]\n");
+            return 2;
+        }
+        expr_argc--;
+    }
+    return eval_test(expr_argv, expr_argc);
+}
+
+/* ---------------------------------------------------------------- */
+/* P6: read VAR [VAR ...]                                            */
+/* ---------------------------------------------------------------- */
+
+static int builtin_read_line(char **argv, int argc)
+{
+    static char read_buf[1024];
+    ssize_t n;
+    char *p, *tok, *saveptr = NULL;
+    int i, nread = 0;
+
+    memset(read_buf, 0, sizeof(read_buf));
+    while (nread < (int)(sizeof(read_buf) - 1)) {
+        n = read(STDIN_FILENO, read_buf + nread, 1);
+        if (n <= 0) {
+            if (nread == 0)
+                return 1;
+            break;
+        }
+        if (read_buf[nread] == '\n') {
+            read_buf[nread] = '\0';
+            break;
+        }
+        nread++;
+    }
+    read_buf[nread] = '\0';
+    if (nread > 0 && read_buf[nread - 1] == '\r')
+        read_buf[nread - 1] = '\0';
+
+    if (argc < 2)
+        return 0;
+
+    p = read_buf;
+    for (i = 1; i < argc; i++) {
+        if (i == argc - 1) {
+            while (*p == ' ' || *p == '\t') p++;
+            setenv(argv[i], p, 1);
+        } else {
+            tok = strtok_r(p, " \t", &saveptr);
+            p = NULL;
+            setenv(argv[i], tok ? tok : "", 1);
+            p = saveptr;
+        }
+    }
+    return 0;
+}
+
+/* ---------------------------------------------------------------- */
+/* P6: return [N]                                                    */
+/* ---------------------------------------------------------------- */
+
+static int builtin_return(char **argv, int argc)
+{
+    int status = 0;
+    if (argc >= 2) {
+        char *ep;
+        long v = strtol(argv[1], &ep, 10);
+        if (ep && *ep == '\0')
+            status = (int)(v & 0xff);
+    } else {
+        const char *cur = getenv("?");
+        if (cur)
+            status = atoi(cur);
+    }
+
+    if (script_depth > 0) {
+        script_return_requested = 1;
+        script_return_status    = status;
+        return status;
+    }
+    _exit(status);
+    return status;
+}
+
+/* ---------------------------------------------------------------- */
+/* P6: set [-e/+e] [-x/+x] [--] [args...]                            */
+/* ---------------------------------------------------------------- */
+
+static int builtin_set(char **argv, int argc)
+{
+    int i;
+
+    if (argc < 2)
+        return 0;
+
+    if (argv[1][0] == '-' || argv[1][0] == '+') {
+        int on, j;
+        for (i = 1; i < argc; i++) {
+            if (argv[i][0] != '-' && argv[i][0] != '+')
+                break;
+            if (strcmp(argv[i], "--") == 0) {
+                shell_params_clear();
+                i++;
+                break;
+            }
+            on = (argv[i][0] == '-') ? 1 : 0;
+            for (j = 1; argv[i][j] != '\0'; j++) {
+                switch (argv[i][j]) {
+                case 'e': set_e_flag = on; break;
+                case 'x': set_x_flag = on; break;
+                default:
+                    fprintf(stderr, "set: unknown flag: %c\n", argv[i][j]);
+                    break;
+                }
+            }
+        }
+        if (i < argc)
+            shell_params_assign(argv + i, argc - i);
+        return 0;
+    }
+
+    shell_params_assign(argv + 1, argc - 1);
+    return 0;
+}
+
+/* ---------------------------------------------------------------- */
 /* Builtins                                                          */
 /* ---------------------------------------------------------------- */
 
@@ -2359,6 +2620,17 @@ static int try_builtin(char **argv, int argc)
     if (strcmp(argv[0], "source") == 0 || strcmp(argv[0], ".") == 0)
         return builtin_source(argv, argc);
 
+    if (strcmp(argv[0], "test") == 0)
+        return builtin_test(argv, argc, 0);
+    if (strcmp(argv[0], "[") == 0)
+        return builtin_test(argv, argc, 1);
+    if (strcmp(argv[0], "read") == 0)
+        return builtin_read_line(argv, argc);
+    if (strcmp(argv[0], "return") == 0)
+        return builtin_return(argv, argc);
+    if (strcmp(argv[0], "set") == 0)
+        return builtin_set(argv, argc);
+
     if (strcmp(argv[0], "shift") == 0) {
         long count = (argc > 1) ? strtol(argv[1], NULL, 10) : 1;
         if (count < 0 || count > shell_paramc) {
@@ -2450,6 +2722,15 @@ static int run_simple(int idx)
         argv[argc++] = exp_words[n->argv_first + i];
     argv[argc] = NULL;
 
+    /* set -x: echo the command to stderr before running. */
+    if (set_x_flag) {
+        int xi;
+        fprintf(stderr, "+");
+        for (xi = 0; xi < argc; xi++)
+            fprintf(stderr, " %s", argv[xi]);
+        fprintf(stderr, "\n");
+    }
+
     for (i = 0; i < n->redir_n; i++) {
         if (apply_redir(&ast_redirs[n->redir_first + i], save_fds) < 0)
             goto out;
@@ -2522,6 +2803,20 @@ out:
     }
     if (n->flags & AST_FLAG_NEG)
         rc = (rc == 0) ? 1 : 0;
+
+    /* set -e: a non-zero status either returns from a sourced script
+     * (script_depth > 0) or exits the shell. Skip when the failing
+     * command is the LHS of an && / || / ! decision (parser handles
+     * those inside AND_OR / NEG nodes); only the post-NEG result is
+     * what gets escalated here. */
+    if (rc != 0 && set_e_flag) {
+        if (script_depth > 0) {
+            script_return_requested = 1;
+            script_return_status = rc;
+        } else {
+            _exit(rc);
+        }
+    }
     return rc;
 }
 
@@ -3099,6 +3394,8 @@ static int fresh_exec(char *arg0, char **argv)
     line = script_mem;
     r = 0;
     while (line) {
+        if (script_return_requested)
+            break;
         line_no++;
         eol = strchr(line, '\n');
         if (eol)
