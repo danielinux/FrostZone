@@ -159,11 +159,11 @@ void usb_tasklet(void *arg) {
         cdc_task();
         last_poll = jiffies;
     }
-    if (jiffies > last_poll + 500) {
-        uint32_t disconn_time = jiffies;
+    if (jiffies_reached(last_poll + 500U)) {
+        uint32_t reconnect_time = (uint32_t)jiffies + 20U;
         tud_task();
         tud_disconnect();
-        while (jiffies < disconn_time + 20) {
+        while (!jiffies_reached(reconnect_time)) {
             schedule();
         }
         tud_connect();
@@ -358,7 +358,7 @@ void frosted_usbdev_init(void)
 #if defined(TARGET_rp2350)
     uint32_t now = jiffies;
     reset_block(RESETS_RESET_USBCTRL_BITS);
-    while (jiffies < now + 10)
+    while (!jiffies_reached(now + 10U))
         schedule();
     unreset_block_wait(RESETS_RESET_USBCTRL_BITS);
     rp2040_usb_init();
@@ -504,7 +504,7 @@ static int ttyusb_write(struct fnode *fno, const void *buf, unsigned int len)
 static int ttyusb_read(struct fnode *fno, void *buf, unsigned int len)
 {
     int out;
-    volatile int len_available;
+    size_t len_available;
     char *ptr = (char *)buf;
     struct dev_ttyusb *ttyusb;
 
@@ -517,7 +517,7 @@ static int ttyusb_read(struct fnode *fno, void *buf, unsigned int len)
 
     mutex_lock(ttyusb->dev->mutex);
     len_available =  cirbuf_bytesinuse(ttyusb->inbuf);
-    if (len_available <= 0) {
+    if (len_available == 0) {
         ttyusb->dev->task = this_task();
         task_suspend();
         out = SYS_CALL_AGAIN;
@@ -525,7 +525,7 @@ static int ttyusb_read(struct fnode *fno, void *buf, unsigned int len)
     }
 
     if (len_available < len)
-        len = len_available;
+        len = (unsigned int)len_available;
 
     for(out = 0; out < len; out++) {
         /* read data */

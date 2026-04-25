@@ -218,6 +218,31 @@ static struct frosted_inet_socket *sockfd_inet(int fd)
 
 #define SOCK_BLOCKING(s) (((s->node->flags & O_NONBLOCK) == 0))
 
+static int ipv4_wire_packet_valid(const void *buf, unsigned int len)
+{
+    const uint8_t *pkt = buf;
+    unsigned int ihl;
+    unsigned int total_len;
+
+    if (!pkt || len < 20U)
+        return 0;
+    if ((pkt[0] >> 4) != 4U)
+        return 0;
+
+    ihl = (unsigned int)(pkt[0] & 0x0FU) * 4U;
+    if ((ihl < 20U) || (ihl > len))
+        return 0;
+
+    total_len = ((unsigned int)pkt[2] << 8) | pkt[3];
+    if ((total_len < ihl) || (total_len > len))
+        return 0;
+
+    if (pkt[9] == 0U)
+        return 0;
+
+    return 1;
+}
+
 static int sock_poll(struct fnode *f, uint16_t events, uint16_t *revents)
 {
     struct frosted_inet_socket *s;
@@ -346,6 +371,11 @@ static int sock_recvfrom(int fd, void *buf, unsigned int len, int flags, struct 
             break;
     }
     ret = s->bytes;
+    if ((ret > 0) && IS_SOCKET_RAW(s->sock_fd) &&
+        !ipv4_wire_packet_valid(buf, (unsigned int)ret)) {
+        memset(buf, 0, (unsigned int)ret);
+        ret = -EBADMSG;
+    }
     s->bytes = 0;
     s->events  &= (~CB_EVENT_READABLE);
     s->revents &= (~CB_EVENT_READABLE);
@@ -461,6 +491,7 @@ static int sock_accept(int fd, struct sockaddr *addr, unsigned int *addrlen)
             wolfIP_sock_close(IPStack, sock_fd);
             return -ENOMEM;
         }
+        memset(s, 0, sizeof(*s));
         s->sock_fd = sock_fd;
         s->node = kcalloc(sizeof(struct fnode), 1);
         if (!s->node)

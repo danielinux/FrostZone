@@ -92,8 +92,8 @@ void SecureFault_Handler(void)
 
     offending_task = get_secure_task_by_addr(sp);
     if (!offending_task) {
-        while (1) {
-        }
+        NVIC_ISPR0 |= (1 << DOORBELL_ILLEGAL_INSTRUCTION_IRQn);
+        return;
     }
 
     NVIC_ISPR0 |= (1 << DOORBELL_ILLEGAL_INSTRUCTION_IRQn);

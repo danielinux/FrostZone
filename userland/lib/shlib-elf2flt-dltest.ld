@@ -51,7 +51,7 @@ PHDRS {
 
 SECTIONS {
 
-	.text 0x80563e0 : {
+	.text 0x8056660 : {
 		. = ALIGN(0x4) ;
 		_stext = . ;
 		*(.literal .text)

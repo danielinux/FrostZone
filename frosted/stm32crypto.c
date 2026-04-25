@@ -426,10 +426,18 @@ static int aes_ioctl(struct fnode *fno, const uint32_t cmd, void *arg)
     }
     case IOCTL_AES_SET_KEY: {
         struct aes_key_req *req = arg;
-        if (!req || (req->size != 16 && req->size != 32))
+        uint32_t key_size;
+        if (!req)
             return -EINVAL;
-        as->key_size = req->size;
-        memcpy(as->key, req->key, req->size);
+        key_size = req->size;
+        if (key_size != 16 && key_size != 32) {
+            memset(as->key, 0, sizeof(as->key));
+            as->key_size = 0;
+            as->key_set = 0;
+            return -EINVAL;
+        }
+        as->key_size = key_size;
+        memcpy(as->key, req->key, key_size);
         as->key_set = 1;
         return 0;
     }

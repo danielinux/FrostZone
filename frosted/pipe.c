@@ -175,7 +175,8 @@ static int pipe_close(struct fnode *f)
 static int pipe_read(struct fnode *f, void *buf, unsigned int len)
 {
     struct pipe_priv *pp;
-    int out, len_available;
+    int out;
+    size_t len_available;
     uint8_t *ptr = buf;
 
     if (f->owner != &mod_pipe)
@@ -189,7 +190,9 @@ static int pipe_read(struct fnode *f, void *buf, unsigned int len)
         return -EPERM;
 
     len_available =  cirbuf_bytesinuse(pp->cb);
-    if (len_available <= 0) {
+    if (len_available == 0) {
+        if ((pp->fno_w == NULL) || (pp->fno_w->usage_count <= 1))
+            return 0;
         if (FNO_BLOCKING(f)) {
             pp->task_r = this_task();
             task_suspend();
@@ -212,7 +215,8 @@ static int pipe_read(struct fnode *f, void *buf, unsigned int len)
 static int pipe_write(struct fnode *f, const void *buf, unsigned int len)
 {
     struct pipe_priv *pp;
-    int out, len_available;
+    unsigned int out, end;
+    size_t len_available;
     const uint8_t *ptr = buf;
 
     if (f->owner != &mod_pipe)
@@ -225,12 +229,20 @@ static int pipe_write(struct fnode *f, const void *buf, unsigned int len)
     if (pp->fno_w != f)
         return -EPERM;
 
-    out = pp->w_off;
+    if (pp->w_off < 0)
+        pp->w_off = 0;
+    out = (unsigned int)pp->w_off;
+    if (out >= len) {
+        pp->w_off = 0;
+        pp->task_w = NULL;
+        return (int)len;
+    }
 
-    len_available =  cirbuf_bytesfree(pp->cb);
+    len_available = cirbuf_bytesfree(pp->cb);
     if (len_available > (len - out))
-        len_available = (len - out);
-    for(; out < len_available; out++) {
+        len_available = (size_t)(len - out);
+    end = out + (unsigned int)len_available;
+    for(; out < end; out++) {
         /* write data */
         if (cirbuf_writebyte(pp->cb, *(ptr + out)) != 0)
             break;

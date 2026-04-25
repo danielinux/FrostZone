@@ -46,13 +46,18 @@ static struct module mod_devfb = {
     .ops.ioctl = fb_ioctl,
 };
 
+static int fb_privileged(void)
+{
+    struct task *t = this_task();
+    return (t == NULL) || (t == get_kernel());
+}
 
 static int fb_open(const char *path, int flags)
 {
     struct fnode *f = fno_search(path);
     if (!f)
         return -1;
-    if ((flags & O_ACCMODE) != O_RDONLY && this_task() != get_kernel())
+    if (!fb_privileged())
         return -EPERM;
     return device_open(path, flags);
 }
@@ -64,6 +69,8 @@ static int fb_write(struct fnode *fno, const void *buf, unsigned int len)
 
     if (len == 0)
         return len;
+    if (!fb_privileged())
+        return -EPERM;
 
     fb = (struct fb_info *)FNO_MOD_PRIV(fno, &mod_devfb);
     if (!fb)
@@ -96,6 +103,8 @@ static int fb_read(struct fnode *fno, void *buf, unsigned int len)
 
     if (len == 0)
         return len;
+    if (!fb_privileged())
+        return -EPERM;
 
     len_left = fno->size - off;
     if (len > len_left)
@@ -167,16 +176,22 @@ static int fb_ioctl(struct fnode * fno, const uint32_t cmd, void *arg)
     if (!fb)
         return -1;
 
-    (void)arg;
+    if (!fb_privileged())
+        return -EPERM;
+
     if (cmd == IOCTL_FB_GETCMAP) {
         return 0;
     }
     if (cmd == IOCTL_FB_PUTCMAP) {
+        if (!arg || task_ptr_range_valid(arg, 256U * sizeof(uint32_t)))
+            return -EINVAL;
+        if (!fb->fbops || !fb->fbops->fb_setcmap)
+            return -ENODEV;
         return fb->fbops->fb_setcmap((uint32_t *)arg, fb);
     }
     if (cmd == IOCTL_FB_GET_FSCREENINFO) {
-        if (!arg)
-            return -1;
+        if (!arg || task_ptr_range_valid(arg, sizeof(struct fb_fix_screeninfo)))
+            return -EINVAL;
         memcpy(arg, &fb->var, sizeof(struct fb_fix_screeninfo));
         return 0;
     }

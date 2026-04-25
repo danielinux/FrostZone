@@ -38,11 +38,15 @@ static int __attribute__((naked)) _mutex_lock(void *m) {
         "   SUBS    r1, #1\n"
         "   STREX   r2, r1, [r0]\n"
         "   CMP     r2, #0\n"
-        "   BNE     _mutex_lock\n"
+        "   BEQ     _mutex_lock_done\n"
+        "   CLREX\n"
+        "   B       _mutex_lock\n"
+        "_mutex_lock_done:\n"
         "   DMB\n"
         "   MOVS    r0, #0\n"
         "   BX      lr\n"
         "_mutex_lock_fail:\n"
+        "   CLREX\n"
         "   DMB\n"
         "   MOV     r0, #-1\n"
         "   BX      lr\n"
@@ -59,11 +63,15 @@ static int __attribute__((naked)) _mutex_unlock(void *m) {
         "   ADDS    r1, #1\n"
         "   STREX   r2, r1, [r0]\n"
         "   CMP     r2, #0\n"
-        "   BNE     _mutex_unlock\n"
+        "   BEQ     _mutex_unlock_done\n"
+        "   CLREX\n"
+        "   B       _mutex_unlock\n"
+        "_mutex_unlock_done:\n"
         "   DMB\n"
         "   MOVS    r0, #0\n"
         "   BX      lr\n"
         "_mutex_unlock_fail:\n"
+        "   CLREX\n"
         "   DMB\n"
         "   MOV     r0, #-1\n"
         "   BX      lr\n"
@@ -80,11 +88,15 @@ static int __attribute__((naked)) _sem_wait(void *s) {
         "   SUBS    r1, #1\n"
         "   STREX   r2, r1, [r0]\n"
         "   CMP     r2, #0\n"
-        "   BNE     _sem_wait\n"
+        "   BEQ     _sem_wait_done\n"
+        "   CLREX\n"
+        "   B       _sem_wait\n"
+        "_sem_wait_done:\n"
         "   DMB\n"
         "   MOVS    r0, #0\n"
         "   BX      lr\n"
         "_sem_wait_fail:\n"
+        "   CLREX\n"
         "   DMB\n"
         "   MOV     r0, #-1\n"
         "   BX      lr\n"
@@ -100,7 +112,10 @@ static int __attribute__((naked)) _sem_post(void *s) {
         "   BVS     _sem_post_overflow\n"
         "   STREX   r2, r1, [r0]\n"
         "   CMP     r2, #0\n"
-        "   BNE     _sem_post\n"
+        "   BEQ     _sem_post_done\n"
+        "   CLREX\n"
+        "   B       _sem_post\n"
+        "_sem_post_done:\n"
         "   CMP     r1, #1\n"
         "   DMB\n"
         "   BGE     _sem_signal_up\n"
@@ -122,11 +137,12 @@ static void _add_listener(sem_t *s)
 {
     int i;
     struct task *t = this_task();
+    uint16_t pid = this_task_getpid();
 
     irq_off();
 
     if (s->last >= 0) {
-        if (t == s->listener[s->last]) {
+        if ((t == s->listener[s->last]) && (pid == s->listener_pid[s->last])) {
             irq_on();
             return;
         }
@@ -135,6 +151,7 @@ static void _add_listener(sem_t *s)
     for (i = s->last + 1; i < s->listeners; i++) {
         if (s->listener[i] == NULL) {
             s->listener[i] = t;
+            s->listener_pid[i] = pid;
             s->last = i;
             irq_on();
             return;
@@ -143,6 +160,7 @@ static void _add_listener(sem_t *s)
     for (i = 0; i < s->last; i++) {
         if (s->listener[i] == NULL) {
             s->listener[i] = t;
+            s->listener_pid[i] = pid;
             s->last = i;
             irq_on();
             return;
@@ -160,6 +178,7 @@ static void _del_listener(sem_t *s)
     for (i = 0; i < s->listeners; i++) {
         if (s->listener[i] == t) {
             s->listener[i] = NULL;
+            s->listener_pid[i] = 0;
             irq_on();
             return;
         }
@@ -196,9 +215,11 @@ int sem_wait(sem_t *s, struct timespec *timeout)
         return -EINVAL;
     if(_sem_wait(s) != 0) {
         if (timeout) {
-            long time_left = (timeout->tv_sec * 1000) + (timeout->tv_nsec / 1000 / 1000) - jiffies;
+            uint32_t deadline = (uint32_t)((timeout->tv_sec * 1000) +
+                                (timeout->tv_nsec / 1000 / 1000));
+            int32_t time_left = (int32_t)(deadline - (uint32_t)jiffies);
             if ((time_left > 0) && (task_get_timer_id() < 0)) {
-                task_set_timer_id(ktimer_add(time_left, sleepy_task_wakeup, NULL));
+                task_set_timer_id(ktimer_add((uint32_t)time_left, sleepy_task_wakeup, NULL));
             } else {
                 if (time_left < 0) {
                     return -ETIMEDOUT;
@@ -228,17 +249,19 @@ int sem_post(sem_t *s)
         irq_off();
         for(i = s->last+1; i < s->listeners; i++) {
             struct task *t = s->listener[i];
-            if (t) {
+            if (t && task_is_live(t, s->listener_pid[i])) {
                 task_resume_lock(t);
-                s->listener[i] = NULL;
             }
+            s->listener[i] = NULL;
+            s->listener_pid[i] = 0;
         }
         for(i = 0; i <= s->last; i++) {
             struct task *t = s->listener[i];
-            if (t) {
+            if (t && task_is_live(t, s->listener_pid[i])) {
                 task_resume_lock(t);
-                s->listener[i] = NULL;
             }
+            s->listener[i] = NULL;
+            s->listener_pid[i] = 0;
         }
         irq_on();
     }
@@ -260,6 +283,8 @@ int sem_init(sem_t *s, int val)
     s->last = -1;
     for (i = 0; i < s->listeners; i++)
         s->listener[i] = NULL;
+    for (i = 0; i < s->listeners; i++)
+        s->listener_pid[i] = 0;
 
     return 0;
 }

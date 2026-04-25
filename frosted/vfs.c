@@ -19,6 +19,7 @@
  */
 // Minimal kernel-safe ksnprintf: supports %s and %d only
 #include "string.h"
+#include "errno.h"
 typedef __builtin_va_list va_list;
 #define va_start(v,l)   __builtin_va_start(v,l)
 #define va_end(v)       __builtin_va_end(v)
@@ -57,8 +58,11 @@ int ksnprintf(char *buf, size_t size, const char *fmt, ...) {
                 do { tmp[n++] = '0' + (v % 10); v /= 10; } while (v && n < 11);
                 while (n--)
                     KSNPRINTF_PUTCH(tmp[n]);
+            } else if (fmt[i] == '%') {
+                KSNPRINTF_PUTCH('%');
             } else {
-                KSNPRINTF_PUTCH(fmt[i]);
+                va_end(args);
+                return -EINVAL;
             }
         } else {
             KSNPRINTF_PUTCH(fmt[i]);

@@ -11,9 +11,13 @@
 #define SAU_REGION_MASK 0x000000FF
 #define SAU_ADDR_MASK 0xFFFFFFE0 /* LS 5 bit are reserved or used for flags */
 
-/* Flag for the SAU region limit register */
+/* Flags for the SAU region limit register */
 #define SAU_REG_ENABLE (1 << 0) /* Indicates that the region is enabled. */
-#define SAU_REG_SECURE (1 << 1) /* When on, the region is S or NSC */
+
+typedef enum {
+    SAU_REG_NONSECURE = 0,
+    SAU_REG_SECURE = (1 << 1), /* When on, the region is S or NSC */
+} sau_region_attr_t;
 
 #define SAU_INIT_CTRL_ENABLE (1 << 0)
 #define SAU_INIT_CTRL_ALLNS  (1 << 1)
@@ -33,15 +37,12 @@
 #define TZ_ISB() __asm volatile ("isb" : : : "memory")
 
 static inline void sau_init_region(uint32_t region, uint32_t start_addr,
-        uint32_t end_addr, int secure)
+        uint32_t end_addr, sau_region_attr_t attr)
 {
-    uint32_t secure_flag = 0;
-    if (secure)
-        secure_flag = SAU_REG_SECURE;
     SAU_RNR = region & SAU_REGION_MASK;
     SAU_RBAR = start_addr & SAU_ADDR_MASK;
     SAU_RLAR = (end_addr & SAU_ADDR_MASK)
-        | secure_flag | SAU_REG_ENABLE;
+        | ((uint32_t)attr & SAU_REG_SECURE) | SAU_REG_ENABLE;
     TZ_DSB();
     TZ_ISB();
 }

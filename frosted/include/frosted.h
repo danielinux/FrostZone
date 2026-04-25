@@ -63,6 +63,21 @@ extern volatile unsigned int jiffies;
 extern volatile unsigned int rt_offset;
 extern volatile int _syscall_retval;
 
+static inline int jiffies_before(uint32_t a, uint32_t b)
+{
+    return (int32_t)(a - b) < 0;
+}
+
+static inline int jiffies_after(uint32_t a, uint32_t b)
+{
+    return jiffies_before(b, a);
+}
+
+static inline int jiffies_reached(uint32_t deadline)
+{
+    return !jiffies_before((uint32_t)jiffies, deadline);
+}
+
 /* Mach-specific initialization */
 int machine_init(void);
 
@@ -161,6 +176,8 @@ int task_filedesc_del(int fd);
 void task_suspend(void);
 /* Validate userspace pointers passed in the syscalls. */
 int task_ptr_valid(const void *ptr);
+int task_ptr_range_valid(const void *ptr, unsigned int len);
+int task_is_live(struct task *t, uint16_t pid);
 /* Slice off one unit from the task current run time */
 int task_timeslice(void);
 struct fnode *task_getcwd(void);

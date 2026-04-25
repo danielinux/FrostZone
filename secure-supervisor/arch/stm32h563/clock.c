@@ -21,6 +21,7 @@ static void flash_set_waitstates(uint32_t waitstates)
 
 void stm32h563_clock_init(void)
 {
+    /* Reset_Handler sets MSPLIM before machine_init reaches this stack-heavy path. */
     uint32_t reg32;
     uint32_t plln, pllm, pllq, pllp, pllr, hpre, apb1pre, apb2pre, apb3pre, flash_waitstates;
 

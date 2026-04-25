@@ -32,7 +32,7 @@
 #endif
 #define MEMPOOL_SIZE        CONFIG_MEMPOOL_SIZE
 #define MAX_MEMPOOL_BLOCKS  512         /* Max blocks in tracking table */
-#define ALIGNMENT           8
+#define ALIGNMENT           32
 #define ALIGN_UP(x)         (((x) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1))
 #ifndef CONFIG_TASK_STACK_SIZE
 #define CONFIG_TASK_STACK_SIZE 8192
@@ -232,11 +232,16 @@ void mempool_unmap(void *ptr, uint16_t task_id) {
 static void *mempool_task_alloc(size_t task_size, uint16_t task_id)
 {
     int i;
-    size_t total_size = task_size + CONFIG_TASK_STACK_SIZE;
+    size_t total_size;
     secure_task_t *task = get_secure_task(task_id);
     if(!task) {
         return NULL;
     }
+    if (task_size > (((size_t)-1) - CONFIG_TASK_STACK_SIZE))
+        return NULL;
+    total_size = ALIGN_UP(task_size + CONFIG_TASK_STACK_SIZE);
+    if (total_size < task_size)
+        return NULL;
 
     if (task->main_segment.base != NULL) {
         mempool_unmap(task->main_segment.base, task_id);
@@ -351,12 +356,27 @@ void *mempool_mmap(size_t size, uint16_t task_id, uint32_t flags)
 
 void *mempool_alloc_stack(uint32_t size, uint16_t task_id) {
     secure_task_t *task = get_secure_task(task_id);
+    uint32_t max_stack = CONFIG_TASK_STACK_SIZE * 4U;
+    uint32_t aligned_size;
+
+    if ((size == 0U) || (size > max_stack))
+        return NULL;
+    aligned_size = ALIGN_UP(size);
+    if (aligned_size < size)
+        return NULL;
+    if (aligned_size > max_stack)
+        return NULL;
+    size = aligned_size;
+
     if (!task) {
         if (register_secure_task(task_id, CAP_TASK, CONFIG_TASK_MAX_MEM) < 0)
             return NULL;
         task = get_secure_task(task_id);
     }
     if (!task)
+        return NULL;
+    if ((task->limits.mem_used > task->limits.mem_max) ||
+        (size > (task->limits.mem_max - task->limits.mem_used)))
         return NULL;
     
     /* Map a new stack segment to the task */
@@ -598,8 +618,10 @@ int secure_meminfo(uint16_t task_id, void *_info)
     info->ram_base = (uintptr_t)task->main_segment.base;
     info->ram_size = task->main_segment.size;
     info->n_heap_regions = task->mempool_count;
+    if (info->n_heap_regions > 3U)
+        info->n_heap_regions = 3U;
 
-    for (i = 0; i < task->mempool_count; i++) {
+    for (i = 0; i < info->n_heap_regions; i++) {
         info->heap[i].base = (uintptr_t)task->mempool[i].base;
         info->heap[i].size = task->mempool[i].size;
     }

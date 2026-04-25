@@ -96,18 +96,18 @@ int cirbuf_readbyte(struct cirbuf *cb, uint8_t *byte)
 
 int cirbuf_readbytes(struct cirbuf *cb, void *bytes, int len)
 {
-    int buflen;
+    size_t buflen;
     int i;
     char *dst = bytes;
-    if (!cb || !bytes || cb->bufsize <= 0)
+    if (!cb || !bytes || cb->bufsize <= 0 || len < 0)
         return -1;
 
     /* check if there is data */
     buflen = cirbuf_bytesinuse(cb);
     if (buflen == 0)
         return -1;
-    if (len > buflen)
-        len = buflen;
+    if ((size_t)len > buflen)
+        len = (int)buflen;
 
     for (i = 0; i < len; i++) {
         dst[i] = *(cb->readptr++);
@@ -121,19 +121,18 @@ int cirbuf_readbytes(struct cirbuf *cb, void *bytes, int len)
 /* written len on success, 0 on fail */
 int cirbuf_writebytes(struct cirbuf *cb, const uint8_t * bytes, int len)
 {
-    uint8_t byte;
-    int freesize;
+    size_t freesize;
     int tot_len = len;
-    if (!cb || cb->bufsize <= 0)
+    if (!cb || cb->bufsize <= 0 || len < 0)
         return 0;
 
     /* check if there is space */
     freesize = cirbuf_bytesfree(cb);
     if (!freesize)
         return 0;
-    if (freesize < len) {
-        len = freesize;
-        tot_len = freesize;
+    if (freesize < (size_t)len) {
+        len = (int)freesize;
+        tot_len = (int)freesize;
     }
 
     /* Wrap needed ? */
@@ -155,29 +154,30 @@ int cirbuf_writebytes(struct cirbuf *cb, const uint8_t * bytes, int len)
     return tot_len;
 }
 
-int cirbuf_bytesfree(struct cirbuf *cb)
+size_t cirbuf_bytesfree(struct cirbuf *cb)
 {
-    int bytes;
+    size_t bytes;
     if (!cb || cb->bufsize <= 0)
-        return -1;
+        return 0;
 
-    bytes = (int)(cb->readptr - cb->writeptr - 1);
     if (cb->writeptr >= cb->readptr)
-        bytes += cb->bufsize;
+        bytes = (size_t)cb->bufsize - (size_t)(cb->writeptr - cb->readptr) - 1u;
+    else
+        bytes = (size_t)(cb->readptr - cb->writeptr) - 1u;
 
     return bytes;
 }
 
-int cirbuf_bytesinuse(struct cirbuf *cb)
+size_t cirbuf_bytesinuse(struct cirbuf *cb)
 {
-    int bytes;
+    size_t bytes;
     if (!cb || cb->bufsize <= 0)
-        return -1;
+        return 0;
 
-    bytes = (int)(cb->writeptr - cb->readptr);
-    if (cb->writeptr < cb->readptr)
-        bytes += cb->bufsize;
+    if (cb->writeptr >= cb->readptr)
+        bytes = (size_t)(cb->writeptr - cb->readptr);
+    else
+        bytes = (size_t)cb->bufsize - (size_t)(cb->readptr - cb->writeptr);
 
     return (bytes);
 }
-

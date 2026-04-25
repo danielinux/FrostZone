@@ -11,6 +11,7 @@ struct semaphore {
     int listeners;
     int last;
     struct task *listener[SEM_MAX_LISTENERS];
+    uint16_t listener_pid[SEM_MAX_LISTENERS];
 };
 
 

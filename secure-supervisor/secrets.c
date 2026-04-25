@@ -27,6 +27,7 @@
 #define SECRETS_USABLE_PAGES (SECRETS_PAGES - 1)               /* 63 */
 #define SECRETS_BMP_PAGE     (SECRETS_PAGES - 1)
 #define SECRETS_SECTOR_SIZE  FLASH_PAGE_SIZE_BYTES  /* 8 KiB */
+#define SECRETS_MAX_NAME     120U
 
 /* Reuse the same file header layout as the kernel flashfs. */
 struct secrets_file_hdr {
@@ -107,12 +108,16 @@ static int secrets_write_page(uint16_t page, const uint8_t *buf)
 static int secrets_bmp_test(uint16_t page)
 {
     const uint8_t *bmp = secrets_page_ptr(SECRETS_BMP_PAGE);
+    if (page >= SECRETS_USABLE_PAGES)
+        return 0;
     return !(bmp[page / 8] & (1 << (page & 7)));
 }
 
 static int secrets_bmp_set(uint16_t page)
 {
     uint8_t bmp[FLASH_PAGE_SIZE];
+    if (page >= SECRETS_USABLE_PAGES)
+        return -1;
     secrets_read_page(SECRETS_BMP_PAGE, bmp);
     bmp[page / 8] &= ~(1 << (page & 7));
     return secrets_write_page(SECRETS_BMP_PAGE, bmp);
@@ -121,6 +126,8 @@ static int secrets_bmp_set(uint16_t page)
 static int secrets_bmp_clear(uint16_t page)
 {
     uint8_t bmp[FLASH_PAGE_SIZE];
+    if (page >= SECRETS_USABLE_PAGES)
+        return -1;
     secrets_read_page(SECRETS_BMP_PAGE, bmp);
     bmp[page / 8] |= 1 << (page & 7);
     return secrets_write_page(SECRETS_BMP_PAGE, bmp);
@@ -223,7 +230,7 @@ int secrets_read(const char *name, uint8_t *buf, size_t buflen)
             continue;
         secrets_read_page(p, page);
         struct secrets_file_hdr *hdr = (struct secrets_file_hdr *)page;
-        if (hdr->fname_len == 0 || hdr->fname_len == 0xFFFF || hdr->fname_len > 120)
+        if (hdr->fname_len == 0 || hdr->fname_len == 0xFFFF || hdr->fname_len > SECRETS_MAX_NAME)
             continue;
         char *fname = (char *)page + sizeof(struct secrets_file_hdr);
         if (fname[hdr->fname_len] != '\0')
@@ -242,6 +249,8 @@ int secrets_read(const char *name, uint8_t *buf, size_t buflen)
 
         /* Found – copy payload */
         size_t payload_off = sizeof(struct secrets_file_hdr) + hdr->fname_len + 1;
+        if (payload_off > FLASH_PAGE_SIZE)
+            continue;
         size_t avail = FLASH_PAGE_SIZE - payload_off;
         size_t copylen = hdr->fsize;
         if (copylen > avail)
@@ -267,8 +276,10 @@ int secrets_write(const char *name, const uint8_t *data, size_t len)
 
     /* Compute name length */
     size_t nlen = 0;
-    const char *p = name;
-    while (*p++) nlen++;
+    while ((nlen <= SECRETS_MAX_NAME) && name[nlen])
+        nlen++;
+    if (nlen > SECRETS_MAX_NAME)
+        return -1;
 
     size_t payload_off = sizeof(struct secrets_file_hdr) + nlen + 1;
     if (payload_off + len > FLASH_PAGE_SIZE)
@@ -322,8 +333,10 @@ int secrets_delete(const char *name)
         return -1;
 
     size_t nlen = 0;
-    const char *p = name;
-    while (*p++) nlen++;
+    while ((nlen <= SECRETS_MAX_NAME) && name[nlen])
+        nlen++;
+    if (nlen > SECRETS_MAX_NAME)
+        return -1;
 
     for (int pg = 0; pg < (int)SECRETS_USABLE_PAGES; pg++) {
         if (!secrets_bmp_test(pg))

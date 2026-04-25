@@ -151,7 +151,7 @@ static inline int ktimer_expired(void)
 {
     struct ktimer *t;
     return ((ktimer_list) && (ktimer_list->n > 0) &&
-            (t = heap_first(ktimer_list)) && (t->expire_time < jiffies));
+            (t = heap_first(ktimer_list)) && jiffies_reached(t->expire_time));
 }
 
 
@@ -172,7 +172,7 @@ static void ktimers_check_tasklet(void *arg)
         }
 
         head = ktimer_list->top[1].data;
-        if (head.expire_time > jiffies) {
+        if (!jiffies_reached(head.expire_time)) {
             irq_on();
             break;
         }

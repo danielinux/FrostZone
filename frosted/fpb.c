@@ -55,9 +55,10 @@ struct bkpt bkpt[8];
 
 void debug_monitor_handler(void)
 {
-    int pid;
+    struct task *t = this_task();
     /* Exit debug state */
-    task_hit_breakpoint(this_task());
+    if (t)
+        task_hit_breakpoint(t);
     DBG_DHCSR = DBG_DHCSR_KEY;
 }
 
@@ -105,4 +106,3 @@ int fpb_init(void)
     FPB_CTRL = FPB_CTRL_ENABLE | FPB_CTRL_KEY | (1 << FPB_NUM_CODE2_OFF) | (2 << FPB_NUM_LIT_MASK_OFF);
     nvic_enable_irq(NVIC_DEBUGMON_IRQ);
 }
-

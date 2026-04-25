@@ -581,6 +581,7 @@ static inline void stm32_eth_release_rx_desc(struct stm32_eth_dma_desc *desc)
                  STM32_ETH_RDES3_OWN |
                  STM32_ETH_RDES3_BUF1V;
     stm32_eth_clean_dcache_range(desc, sizeof(*desc));
+    /* Keep the ownership handoff ordered even if cache helper internals change. */
     __asm volatile ("dsb sy" ::: "memory");
     ETH_DMACRXDTPR = (uint32_t)desc;
 }
@@ -664,6 +665,8 @@ static int stm32_eth_send(struct wolfIP_ll_dev *dev, void *frame, uint32_t len)
     stm32_eth_tx_last_desc3_debug = desc->des3;
     stm32_eth_tx_dma_status_debug = ETH_DMACSR;
 
+    next_idx = (tx_idx + 1U) % STM32_ETH_TX_DESC_COUNT;
+    ETH_DMACTXDTPR = (uint32_t)&tx_ring[next_idx];
     __asm volatile ("dsb sy" ::: "memory");
 
     ETH_DMACSR = ETH_DMACSR_TBU;
@@ -672,8 +675,6 @@ static int stm32_eth_send(struct wolfIP_ll_dev *dev, void *frame, uint32_t len)
     if (tx_idx == 0U)
         stm32_eth_trigger_tx();
 
-    next_idx = (tx_idx + 1U) % STM32_ETH_TX_DESC_COUNT;
-    ETH_DMACTXDTPR = (uint32_t)&tx_ring[next_idx];
     tx_idx = next_idx;
 
     debug_val = stm32_eth_mdio_read((uint32_t)stm32_eth_phy_addr, 0x0011U);

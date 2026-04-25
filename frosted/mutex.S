@@ -14,11 +14,15 @@ _mutex_lock:
    SUBS    r1, #1             // If not, decrement temporary copy
    STREX   r2, r1, [r0]       // Attempt Store-Exclusive
    CMP     r2, #0             // Check if Store-Exclusive succeeded
-   BNE     _mutex_lock        // If Store-Exclusive failed, retry from start
+   BEQ     _mutex_lock_done
+   CLREX
+   B       _mutex_lock        // If Store-Exclusive failed, retry from start
+_mutex_lock_done:
    DMB                        // Required before accessing protected resource
    MOVS    r0, #0             // Successfully locked.
    BX      lr
 _mutex_lock_fail:
+   CLREX
    DMB
    MOV     r0, #-1              // Already locked!
    BX      lr
@@ -36,12 +40,15 @@ _mutex_unlock:
    ADDS    r1, #1               // Increment temporary copy
    STREX   r2, r1, [r0]         // Attempt Store-Exclusive
    CMP     r2, #0               // Check if Store-Exclusive succeeded
-   BNE     _mutex_unlock        // Store failed - retry immediately
+   BEQ     _mutex_unlock_done
+   CLREX
+   B       _mutex_unlock        // Store failed - retry immediately
+_mutex_unlock_done:
    DMB                          // Required before releasing protected resource
    MOVS    r0, #0               // Successfully unlocked.
    BX      lr
 _mutex_unlock_fail:
+   CLREX
    DMB
    MOV     r0, #-1              // Already locked!
    BX      lr
-

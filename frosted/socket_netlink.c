@@ -299,6 +299,31 @@ static struct rtattr *first_rta(const void *hdr, uint32_t hdrsize,
     return (struct rtattr *)((const uint8_t *)hdr + off);
 }
 
+static int nl_rta_payload(const struct rtattr *rta)
+{
+    int plen;
+
+    if (!rta || rta->rta_len < RTA_LENGTH(0))
+        return -1;
+    plen = RTA_PAYLOAD(rta);
+    return (plen < 0) ? -1 : plen;
+}
+
+static struct rtattr *nl_rta_next(struct rtattr *rta, int *remaining)
+{
+    int aligned;
+
+    if (!rta || !remaining)
+        return NULL;
+    aligned = (int)RTA_ALIGN(rta->rta_len);
+    if ((aligned <= 0) || (*remaining < aligned)) {
+        *remaining = 0;
+        return NULL;
+    }
+    *remaining -= aligned;
+    return (struct rtattr *)((uint8_t *)rta + aligned);
+}
+
 static int nl_handle_set_link(struct nl_sock *s, const struct nlmsghdr *nlh)
 {
     const struct ifinfomsg *ifi;
@@ -324,14 +349,14 @@ static int nl_handle_set_link(struct nl_sock *s, const struct nlmsghdr *nlh)
     rta = first_rta(ifi, sizeof(*ifi),
                     nlh->nlmsg_len - NLMSG_HDRLEN, &rem);
     while (rta && RTA_OK(rta, rem)) {
-        if (rta->rta_type == IFLA_IFNAME && RTA_PAYLOAD(rta) > 0) {
-            int plen = RTA_PAYLOAD(rta);
+        int plen = nl_rta_payload(rta);
+        if (rta->rta_type == IFLA_IFNAME && plen > 0) {
             if (plen > IFNAMSIZ)
                 plen = IFNAMSIZ;
             memcpy(ifr.ifr_name, RTA_DATA(rta), plen);
             ifr.ifr_name[IFNAMSIZ - 1] = '\0';
         }
-        rta = RTA_NEXT(rta, rem);
+        rta = nl_rta_next(rta, &rem);
     }
 
     if (sock_io_setflags(&ifr) < 0)
@@ -419,12 +444,13 @@ static int nl_handle_new_addr(struct nl_sock *s, const struct nlmsghdr *nlh,
     rta = first_rta(ifa, sizeof(*ifa),
                     nlh->nlmsg_len - NLMSG_HDRLEN, &rem);
     while (rta && RTA_OK(rta, rem)) {
+        int plen = nl_rta_payload(rta);
         if ((rta->rta_type == IFA_LOCAL || rta->rta_type == IFA_ADDRESS) &&
-            RTA_PAYLOAD(rta) >= 4) {
+            plen >= 4) {
             memcpy(&ip_net, RTA_DATA(rta), 4);
             has_addr = 1;
         }
-        rta = RTA_NEXT(rta, rem);
+        rta = nl_rta_next(rta, &rem);
     }
     if (!has_addr && !del)
         return nl_emit_error(s, -EINVAL, nlh);
@@ -533,12 +559,13 @@ static int nl_handle_new_route(struct nl_sock *s, const struct nlmsghdr *nlh,
     rta = first_rta(rtm, sizeof(*rtm),
                     nlh->nlmsg_len - NLMSG_HDRLEN, &rem);
     while (rta && RTA_OK(rta, rem)) {
-        if (rta->rta_type == RTA_GATEWAY && RTA_PAYLOAD(rta) >= 4) {
+        int plen = nl_rta_payload(rta);
+        if (rta->rta_type == RTA_GATEWAY && plen >= 4) {
             memcpy(&gw_net, RTA_DATA(rta), 4);
             has_gw = 1;
-        } else if (rta->rta_type == RTA_DST && RTA_PAYLOAD(rta) >= 4) {
+        } else if (rta->rta_type == RTA_DST && plen >= 4) {
             memcpy(&dst_net, RTA_DATA(rta), 4);
-        } else if (rta->rta_type == RTA_OIF && RTA_PAYLOAD(rta) >= 4) {
+        } else if (rta->rta_type == RTA_OIF && plen >= 4) {
             uint32_t oif;
             struct wolfIP_ll_dev *ll;
             memcpy(&oif, RTA_DATA(rta), 4);
@@ -548,7 +575,7 @@ static int nl_handle_new_route(struct nl_sock *s, const struct nlmsghdr *nlh,
                     strncpy(ifname, ll->ifname, IFNAMSIZ);
             }
         }
-        rta = RTA_NEXT(rta, rem);
+        rta = nl_rta_next(rta, &rem);
     }
 
     memset(&rte, 0, sizeof(rte));
@@ -585,10 +612,16 @@ static int nl_handle_new_route(struct nl_sock *s, const struct nlmsghdr *nlh,
 static int nl_dispatch(struct nl_sock *s, const uint8_t *buf, uint32_t len)
 {
     const struct nlmsghdr *nlh;
+    uint32_t payload_len;
     if (len < sizeof(*nlh))
         return -EINVAL;
     nlh = (const struct nlmsghdr *)buf;
     if (!NLMSG_OK(nlh, (int)len))
+        return -EINVAL;
+    if (nlh->nlmsg_len < (uint32_t)NLMSG_HDRLEN || nlh->nlmsg_len > len)
+        return -EINVAL;
+    payload_len = nlh->nlmsg_len - (uint32_t)NLMSG_HDRLEN;
+    if (payload_len > (len - (uint32_t)NLMSG_HDRLEN))
         return -EINVAL;
     if (nl_requires_admin(nlh->nlmsg_type) && this_task() != get_kernel())
         return nl_emit_error(s, -EPERM, nlh);
@@ -808,20 +841,21 @@ static int sock_sendmsg(int fd, const struct msghdr *msg, int flags)
 {
     struct nl_sock *s = nl_from_fd(fd);
     uint8_t stage[NL_MSG_MAX];
-    int total = 0, i;
+    size_t total = 0;
+    size_t i;
 
     if (!s)
         return -EBADF;
     if (!msg || !msg->msg_iov || msg->msg_iovlen < 1)
         return -EINVAL;
     for (i = 0; i < msg->msg_iovlen; i++) {
-        int n = (int)msg->msg_iov[i].iov_len;
-        if (total + n > (int)sizeof(stage))
+        size_t n = msg->msg_iov[i].iov_len;
+        if (n > sizeof(stage) - total)
             return -EMSGSIZE;
         memcpy(stage + total, msg->msg_iov[i].iov_base, n);
         total += n;
     }
-    return sock_sendto(fd, stage, total, flags, msg->msg_name,
+    return sock_sendto(fd, stage, (unsigned int)total, flags, msg->msg_name,
                        msg->msg_namelen);
 }
 
@@ -829,7 +863,8 @@ static int sock_recvmsg(int fd, struct msghdr *msg, int flags)
 {
     struct nl_sock *s = nl_from_fd(fd);
     struct nl_reply *r;
-    int delivered = 0, i;
+    size_t delivered = 0;
+    size_t i;
     (void)flags;
 
     if (!s)
@@ -840,9 +875,9 @@ static int sock_recvmsg(int fd, struct msghdr *msg, int flags)
     if (!r)
         return -EAGAIN;
 
-    for (i = 0; i < msg->msg_iovlen && delivered < (int)r->len; i++) {
-        int take = (int)r->len - delivered;
-        int cap = (int)msg->msg_iov[i].iov_len;
+    for (i = 0; i < msg->msg_iovlen && delivered < r->len; i++) {
+        size_t take = r->len - delivered;
+        size_t cap = msg->msg_iov[i].iov_len;
         if (take > cap)
             take = cap;
         memcpy(msg->msg_iov[i].iov_base, r->data + delivered, take);
@@ -866,7 +901,7 @@ static int sock_recvmsg(int fd, struct msghdr *msg, int flags)
         s->rx_tail = NULL;
     s->queued_bytes -= r->len;
     kfree(r);
-    return delivered;
+    return (int)delivered;
 }
 
 static int sock_poll(struct fnode *fno, uint16_t events, uint16_t *revents)

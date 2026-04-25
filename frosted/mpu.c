@@ -89,6 +89,14 @@ volatile MPU_Type *volatile MPU = (MPU_Type *)MPU_BASE;
 #define RBAR(base, sh, ap, xn) ( ((uint32_t)(base) & 0xFFFFFFE0UL) | (((uint32_t)(sh) & 0x3u) << 3) | (((uint32_t)(ap) & 0x3u) << 1) | ((uint32_t)(xn) & 0x1u) )
 #define RLAR(limit, idx) ( ((uint32_t)(limit) & 0xFFFFFFE0UL) | (((uint32_t)(idx) & 0xFu) << 1) | 0x1u )
 
+#define MPU_ASSERT_BASE_ALIGNED(base) do {                                      \
+        if (((uintptr_t)(base) & 0x1fu) != 0u) {                                \
+            __asm volatile("bkpt #0");                                         \
+            while (1) {                                                         \
+            }                                                                   \
+        }                                                                       \
+    } while (0)
+
 static inline uintptr_t mpu_region_limit(uintptr_t last_byte)
 {
     return last_byte | 0x1fu;
@@ -207,6 +215,7 @@ void mpu_task_on(uint16_t pid, uint16_t ppid)
         uintptr_t sl;
 
         sb = (uintptr_t)(cur.stack_base);
+        MPU_ASSERT_BASE_ALIGNED(sb);
         sl = sb + cur.stack_size - 1;
         debug_mpu_pid = pid;
         debug_mpu_stack_base = sb;
@@ -230,6 +239,7 @@ void mpu_task_on(uint16_t pid, uint16_t ppid)
                 uintptr_t sl;
 
                 sb = (uintptr_t)parent.stack_base;
+                MPU_ASSERT_BASE_ALIGNED(sb);
                 sl = sb + parent.stack_size - 1u;
                 MPU->RNR = 3u;
                 MPU->RBAR = RBAR(sb, SH_INNER_SHAREABLE, AP_RW_FULL, XN_NEVER);
@@ -239,6 +249,7 @@ void mpu_task_on(uint16_t pid, uint16_t ppid)
             if (parent.ram_size > 0) {
                 uintptr_t mb = (uintptr_t)parent.ram_base;
                 uintptr_t ml = mb + parent.ram_size - 1u;
+                MPU_ASSERT_BASE_ALIGNED(mb);
                 MPU->RNR = 4u;
                 /* Keep the shared parent data readable for the child, but never writable. */
                 MPU->RBAR = RBAR(mb, SH_NON_SHAREABLE, AP_RO_FULL, XN_NEVER);
@@ -250,6 +261,7 @@ void mpu_task_on(uint16_t pid, uint16_t ppid)
         if (cur.ram_size > 0) {
             uintptr_t mb = (uintptr_t)cur.ram_base;
             uintptr_t ml = mb + cur.ram_size - 1u;
+            MPU_ASSERT_BASE_ALIGNED(mb);
             MPU->RNR = 3u;
             // If main lives in flash XIP: map RO+Exec; if it’s RAM, map RW+XN. We assume flash XIP here.
             MPU->RBAR = RBAR(mb, SH_NON_SHAREABLE, AP_RW_FULL, XN_NEVER);
@@ -259,6 +271,7 @@ void mpu_task_on(uint16_t pid, uint16_t ppid)
         for (uint32_t k = 0u; (k < cur.n_heap_regions) && (k < 4u); k++) {
             uintptr_t hb = cur.heap[k].base;
             uintptr_t hl = hb + cur.heap[k].size - 1u;
+            MPU_ASSERT_BASE_ALIGNED(hb);
             MPU->RNR = (4u + k);
             MPU->RBAR = RBAR(hb, SH_INNER_SHAREABLE, AP_RW_FULL, XN_EXECUTE);
             MPU->RLAR = RLAR(mpu_region_limit(hl), IDX_NORMAL_WBWA);

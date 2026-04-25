@@ -49,53 +49,32 @@ struct regstruct{
 
 static int inputline(char *input, int size)
 {
-    int len;
-    int out;
-    int i;
-    while (1 < 2) {
-        len = 0;
-        out = 1;
-        memset(input, 0, size);
-        while (len < size) {
-            const char del = 0x08;
-            int ret = read(0, input + len, 4);
-            /*if ( ret > 3 )
-                continue;*/
-            if ((ret > 0) && (input[len] >= 0x20 && input[len] <= 0x7e)) {
-                for (i = 0; i < ret; i++) {
-                    /* Echo to terminal */
-                    if (input[len + i] >= 0x20 && input[len + i] <= 0x7e)
-                        write(out, &input[len + i], 1);
+    int len = 0;
 
-                    len++;
-                }
-            } else if (input[len] == 0x0D) {
-                input[len + 1] = '\n';
-                input[len + 2] = '\0';
-                printf("\r\n");
-                return len + 2;
-            } else if (input[len] == 0x4) {
-                if (len != 0)
-                    input[len] = '\0';
+    if (!input || size <= 1)
+        return -1;
 
-                return len;
-            }
-            /* backspace */
-            else if (input[len] == 0x7F || input[len] == 0x08) {
-                if (len > 0) {
-                    write(out, &del, 1);
-                    printf(" ");
-                    write(out, &del, 1);
-                    len--;
-                }
-            }
+    memset(input, 0, size);
+    while (len < size - 1) {
+        char c;
+        int ret = read(0, &c, 1);
+
+        if (ret <= 0)
+            return (len > 0) ? len : -1;
+
+        if (c == '\004')
+            return (len > 0) ? len : -1;
+
+        if (c == '\r' || c == '\n') {
+            input[len++] = '\n';
+            input[len] = '\0';
+            return len;
         }
-        printf("\r\n");
-        if (len < 0)
-            return -1;
 
-        input[len + 1] = '\0';
+        input[len++] = c;
     }
+
+    input[len] = '\0';
     return len;
 }
 
@@ -153,6 +132,16 @@ static void strtolow(char *str)
         *p = *p >= 'A' && *p <= 'Z' ? *p + 32 : *p;
 }
 
+static int has_regex_meta(const char *str)
+{
+    const char *p;
+
+    for (p = str; p && *p; p++) {
+        if (strchr(".^$*+?()[{\\|", *p))
+            return 1;
+    }
+    return 0;
+}
 
 /*search for exact occurrence of str1 in str2*/
 static int occurrence(char *tofind, char *line, int flags)
@@ -221,7 +210,7 @@ int icebox_grep(int argc, char* args[])
     }
 
     line = (char *) malloc(sizeof(char) * BUFSIZE);
-    flags = i = b = p = match = optind = fixed = 0;
+    flags = options = i = b = p = match = optind = fixed = 0;
     while ((c = getopt(argc, (char **)args, "EGFe:f:ivcx")) != -1) {
         switch (c) {
         case 'i':
@@ -281,6 +270,16 @@ int icebox_grep(int argc, char* args[])
         optind++;
     }
 
+    if (!fixed) {
+        fixed = 1;
+        for (i = 0; i < p; i++) {
+            if (has_regex_meta(patterns[i].string)) {
+                fixed = 0;
+                break;
+            }
+        }
+    }
+
     if (!fixed)
         for (i = 0; i < p; i++)
             reti = regcomp(&patterns[i].r, patterns[i].string, flags);
@@ -312,8 +311,10 @@ int icebox_grep(int argc, char* args[])
                 if (reti == match) {
                     if (options & CFLAG)
                         c++;
-                    else
+                    else {
                         printf("%s", line);
+                        exit(0);
+                    }
 
                     break;
                 }

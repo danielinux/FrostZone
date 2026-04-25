@@ -52,47 +52,47 @@ static void sau_init(void)
 
 #if defined(TARGET_STM32H563) || defined(TARGET_STM32U585)
     /* Secure supervisor flash */
-    sau_init_region(0, SAU_FLASH_SECURE_START, SAU_FLASH_SECURE_END, 1<<1);
+    sau_init_region(0, SAU_FLASH_SECURE_START, SAU_FLASH_SECURE_END, SAU_REG_SECURE);
 
     /* NSC area: supervisor flash callables */
-    sau_init_region(1, SAU_FLASH_NSC_START, SAU_FLASH_NSC_END, 1<<1);
+    sau_init_region(1, SAU_FLASH_NSC_START, SAU_FLASH_NSC_END, SAU_REG_SECURE);
 
     /* Non-secure frosted scheduler + Userland (contiguous) */
-    sau_init_region(2, SAU_FLASH_NS_START, SAU_FLASH_NS_END, 0);
+    sau_init_region(2, SAU_FLASH_NS_START, SAU_FLASH_NS_END, SAU_REG_NONSECURE);
 
     /* Secure RAM */
-    sau_init_region(4, SAU_RAM_SECURE_START, SAU_RAM_SECURE_END, 1<<1);
+    sau_init_region(4, SAU_RAM_SECURE_START, SAU_RAM_SECURE_END, SAU_REG_SECURE);
 
     /* Non-secure RAM (mempool / kernel data) */
-    sau_init_region(5, SAU_RAM_NS_START, SAU_RAM_NS_END, 0);
+    sau_init_region(5, SAU_RAM_NS_START, SAU_RAM_NS_END, SAU_REG_NONSECURE);
 
     /* Non-secure peripheral space */
-    sau_init_region(6, SAU_PERIPH_START, SAU_PERIPH_END, 0);
+    sau_init_region(6, SAU_PERIPH_START, SAU_PERIPH_END, SAU_REG_NONSECURE);
 
 #else
     /* Secure supervisor flash */
-    sau_init_region(0, SAU_FLASH_SECURE_START, SAU_FLASH_SECURE_END, 1);
+    sau_init_region(0, SAU_FLASH_SECURE_START, SAU_FLASH_SECURE_END, SAU_REG_SECURE);
 
     /* NSC area: supervisor flash callables */
-    sau_init_region(1, SAU_FLASH_NSC_START, SAU_FLASH_NSC_END, 1);
+    sau_init_region(1, SAU_FLASH_NSC_START, SAU_FLASH_NSC_END, SAU_REG_SECURE);
 
     /* Non-secure frosted scheduler */
-    sau_init_region(2, SAU_FLASH_NS_START, SAU_FLASH_NS_END, 0);
+    sau_init_region(2, SAU_FLASH_NS_START, SAU_FLASH_NS_END, SAU_REG_NONSECURE);
 
     /* XIPfs */
-    sau_init_region(3, SAU_FLASH_XIP_START, SAU_FLASH_XIP_END, 0);
+    sau_init_region(3, SAU_FLASH_XIP_START, SAU_FLASH_XIP_END, SAU_REG_NONSECURE);
 
     /* RAM: secure area stack */
-    sau_init_region(4, SAU_RAM_SECURE_START, SAU_RAM_SECURE_END, 1);
+    sau_init_region(4, SAU_RAM_SECURE_START, SAU_RAM_SECURE_END, SAU_REG_SECURE);
 
     /* RAM: non-secure area (managed via MPU) */
-    sau_init_region(5, SAU_RAM_NS_START, SAU_RAM_NS_END, 0);
+    sau_init_region(5, SAU_RAM_NS_START, SAU_RAM_NS_END, SAU_REG_NONSECURE);
 
     /* RAM: secure area for supervisor's stack */
-    sau_init_region(6, SAU_RAM_SECURE_START, SAU_RAM_SECURE_START + 0x1FFFU, 1);
+    sau_init_region(6, SAU_RAM_SECURE_START, SAU_RAM_SECURE_START + 0x1FFFU, SAU_REG_SECURE);
 
     /* USB DRAM: NS */
-    sau_init_region(7, SAU_USB_RAM_START, SAU_USB_RAM_END, 0);
+    sau_init_region(7, SAU_USB_RAM_START, SAU_USB_RAM_END, SAU_REG_NONSECURE);
 #endif
 
     SAU_CTRL = SAU_INIT_CTRL_ENABLE;

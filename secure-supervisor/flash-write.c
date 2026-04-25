@@ -280,11 +280,16 @@ int stm32_flash_program_range(uintptr_t dst, const uint8_t *src, size_t len)
     uint32_t ns_addr = stm32_sec_to_ns(dst);
     (void)ns_addr;
 
+    if (!src && len)
+        return -1;
+
     stm32_flash_clear_errors();
     stm32_flash_wait_buffer_empty();
     while (offset < len) {
         uint32_t lo = 0xffffffffu;
         uint32_t hi = 0xffffffffu;
+        if (offset >= len)
+            return -1;
         size_t remaining = len - offset;
         size_t chunk = remaining < sizeof(lo) ? remaining : sizeof(lo);
         copy_bytes(&lo, src + offset, chunk);

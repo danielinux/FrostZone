@@ -66,6 +66,7 @@ void pool_free(struct pool *p, void *ptr)
     uint32_t index;
     uint32_t word;
     uint32_t bit;
+    uint32_t words;
 
     if (!ptr)
         return;
@@ -80,6 +81,9 @@ void pool_free(struct pool *p, void *ptr)
 
     word = index / 32u;
     bit = index % 32u;
+    words = (p->capacity + 31u) / 32u;
+    if (word >= words)
+        return;
 
     if (p->freemap[word] & (1u << bit))
         return; /* double free */

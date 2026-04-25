@@ -61,6 +61,9 @@ int trng_getrandom(unsigned char *out, unsigned len)
         for (j = 0; (j < 4) && ((i + (unsigned)j) < len); j++)
             out[i + j] = rand_byte[j];
     }
+    __asm volatile("" ::: "memory");
+    rand_seed = 0;
+    __asm volatile("" ::: "memory");
     return 0;
 }
 

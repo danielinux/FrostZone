@@ -288,6 +288,7 @@ static int jedec_spi_flash_program_range(const struct jedec_spi_flash *flash,
 {
     uint32_t written = 0;
     int ret = 0;
+    int wel_set = 0;
 
     while (written < len) {
         uint32_t page_off = (addr + written) % flash->page_size;
@@ -299,7 +300,8 @@ static int jedec_spi_flash_program_range(const struct jedec_spi_flash *flash,
 
         ret = jedec_send_write_enable((struct jedec_spi_flash *)flash);
         if (ret < 0)
-            return ret;
+            goto out;
+        wel_set = 1;
 
         cmd[0] = JEDEC_CMD_PP;
         cmd[1] = (uint8_t)((addr + written) >> 16);
@@ -309,20 +311,22 @@ static int jedec_spi_flash_program_range(const struct jedec_spi_flash *flash,
         ret = jedec_send_cmd_then_write((struct jedec_spi_flash *)flash, cmd, 4,
                 buf + written, chunk);
         if (ret < 0)
-            return ret;
+            goto out;
 
         if (jedec_uses_emulator_fallback(flash))
             ret = jedec_wait_program_verify(flash, addr + written, buf + written, chunk);
         else
             ret = jedec_poll_busy((struct jedec_spi_flash *)flash);
         if (ret < 0)
-            return ret;
+            goto out;
 
         written += chunk;
     }
 
-    jedec_send_write_disable((struct jedec_spi_flash *)flash);
-    return 0;
+out:
+    if (wel_set)
+        jedec_send_write_disable((struct jedec_spi_flash *)flash);
+    return ret;
 }
 
 /* JEDEC geometry defines */

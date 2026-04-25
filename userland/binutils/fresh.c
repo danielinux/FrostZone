@@ -34,6 +34,9 @@
 #include <errno.h>
 #include <sys/stat.h>
 #include <ctype.h>
+
+/* libgloss exposes sys_sched_yield but not the POSIX wrapper. */
+extern int sys_sched_yield(void);
 static pid_t GBSH_PID;
 static pid_t GBSH_PGID;
 static int GBSH_IS_INTERACTIVE;
@@ -2856,7 +2859,6 @@ static int run_pipeline(int idx)
     int pipes[MAX_PIPE_STAGES - 1][2];
     pid_t pids[MAX_PIPE_STAGES];
     int last_status = 0;
-    int saved_in, saved_out;
     int i, j;
 
     if (n < 1)
@@ -2873,69 +2875,90 @@ static int run_pipeline(int idx)
             return 1;
         }
     }
-    saved_in  = dup(STDIN_FILENO);
-    saved_out = dup(STDOUT_FILENO);
 
-    for (i = 0; i < n; i++) {
-        struct ast_node *cn = &ast_nodes[stages[i]];
-        char *argv[LEX_MAX_TOKS + 1];
-        int argc = 0;
-        char resolved[256];
-        int in_fd  = (i == 0)     ? saved_in  : pipes[i - 1][0];
-        int out_fd = (i == n - 1) ? saved_out : pipes[i][1];
-        pid_t pid;
+    /* Parent-side redirect dance: bind stdin/stdout for each stage in
+     * the parent before vfork, so the child inherits the bindings
+     * from the shared fd table. Restore parent's saved stdio after
+     * vfork returns. This matches the pre-refactor pipeHandler that
+     * was known-working on Frosted's vfork; the child-after-vfork
+     * variant trips an unidentified vfork-stack bug. */
+    {
+        int saved_in  = dup(STDIN_FILENO);
+        int saved_out = dup(STDOUT_FILENO);
 
-        if (cn->type != AST_CMD) {
-            pids[i] = -1;
-            continue;
-        }
-        for (j = 0; j < cn->argv_n && argc < LEX_MAX_TOKS; j++)
-            argv[argc++] = exp_words[cn->argv_first + j];
-        argv[argc] = NULL;
-        if (argc == 0) {
-            pids[i] = -1;
-            continue;
-        }
+        for (i = 0; i < n; i++) {
+            struct ast_node *cn = &ast_nodes[stages[i]];
+            char *argv[LEX_MAX_TOKS + 1];
+            int argc = 0;
+            char resolved[256];
+            int in_fd  = (i == 0)     ? saved_in  : pipes[i - 1][0];
+            int out_fd = (i == n - 1) ? saved_out : pipes[i][1];
+            pid_t pid;
 
-        dup2(in_fd, STDIN_FILENO);
-        dup2(out_fd, STDOUT_FILENO);
-
-        if (resolve_cmd(argv[0], resolved, sizeof(resolved)) < 0) {
-            printf("fresh: %s: command not found\r\n", argv[0]);
-            pids[i] = -1;
-            dup2(saved_in, STDIN_FILENO);
-            dup2(saved_out, STDOUT_FILENO);
-            continue;
-        }
-
-        pid = vfork();
-        if (pid < 0) {
-            perror("vfork");
-            pids[i] = -1;
-            dup2(saved_in, STDIN_FILENO);
-            dup2(saved_out, STDOUT_FILENO);
-            continue;
-        }
-        if (pid == 0) {
-            int sv[3] = { -1, -1, -1 };
-            for (j = 0; j < cn->redir_n; j++) {
-                if (apply_redir(&ast_redirs[cn->redir_first + j], sv) < 0)
-                    _exit(1);
+            if (cn->type != AST_CMD) {
+                pids[i] = -1;
+                continue;
             }
-            execvp(resolved, argv);
-            _exit(127);
-        }
-        pids[i] = pid;
-        dup2(saved_in, STDIN_FILENO);
-        dup2(saved_out, STDOUT_FILENO);
-    }
+            for (j = 0; j < cn->argv_n && argc < LEX_MAX_TOKS; j++)
+                argv[argc++] = exp_words[cn->argv_first + j];
+            argv[argc] = NULL;
+            if (argc == 0) {
+                pids[i] = -1;
+                continue;
+            }
 
-    for (i = 0; i < n - 1; i++) {
-        close(pipes[i][0]);
-        close(pipes[i][1]);
+            if (resolve_cmd(argv[0], resolved, sizeof(resolved)) < 0) {
+                printf("fresh: %s: command not found\r\n", argv[0]);
+                pids[i] = -1;
+                continue;
+            }
+
+            dup2(in_fd,  STDIN_FILENO);
+            dup2(out_fd, STDOUT_FILENO);
+
+            pid = vfork();
+            if (pid < 0) {
+                perror("vfork");
+                pids[i] = -1;
+                dup2(saved_in,  STDIN_FILENO);
+                dup2(saved_out, STDOUT_FILENO);
+                continue;
+            }
+            if (pid == 0) {
+                int sv[3] = { -1, -1, -1 };
+                int k;
+
+                for (k = 0; k < n - 1; k++) {
+                    close(pipes[k][0]);
+                    close(pipes[k][1]);
+                }
+                close(saved_in);
+                close(saved_out);
+                for (j = 0; j < cn->redir_n; j++) {
+                    if (apply_redir(&ast_redirs[cn->redir_first + j], sv) < 0)
+                        _exit(1);
+                }
+                execvp(resolved, argv);
+                _exit(127);
+            }
+            pids[i] = pid;
+            /* Yield BEFORE restoring parent's fds, so the child has a
+             * chance to actually exec while its inherited stdio still
+             * points to the pipe ends. Frosted's fd table is copied
+             * at vfork, but the back-to-back-vfork stack swap leaves
+             * a window where the child hasn't fully settled. */
+            sys_sched_yield();
+            dup2(saved_in,  STDIN_FILENO);
+            dup2(saved_out, STDOUT_FILENO);
+        }
+
+        for (i = 0; i < n - 1; i++) {
+            close(pipes[i][0]);
+            close(pipes[i][1]);
+        }
+        close(saved_in);
+        close(saved_out);
     }
-    close(saved_in);
-    close(saved_out);
 
     for (i = 0; i < n; i++) {
         int st;
@@ -3106,7 +3129,16 @@ static int exec_ast(int idx)
         return 0;
     n = &ast_nodes[idx];
 
-    /* Background: vfork the whole subtree, return 0 immediately. */
+    if ((n->flags & AST_FLAG_BG) && !GBSH_IS_INTERACTIVE) {
+        int bg_rc;
+
+        ast_nodes[idx].flags &= ~AST_FLAG_BG;
+        bg_rc = exec_ast(idx);
+        ast_nodes[idx].flags |= AST_FLAG_BG;
+        (void)bg_rc;
+        return 0;
+    }
+
     if (n->flags & AST_FLAG_BG) {
         pid_t pid;
         ast_nodes[idx].flags &= ~AST_FLAG_BG;
@@ -3479,6 +3511,7 @@ int icebox_fresh(int argc, char *argv[])
 
     /* Execute script */
     if (argc > idx) {
+        GBSH_IS_INTERACTIVE = 0;
         shell_params_assign(&argv[idx], argc - idx);
         ret = fresh_exec(argv[idx], &argv[idx]);
         fflush(stdout);
