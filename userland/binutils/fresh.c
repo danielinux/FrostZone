@@ -905,10 +905,30 @@ int commandHandler(char *args[], int argc)
         }
         if (!strncmp(args[j], "$", 1)) {
             const char *name = args[j] + 1;
+            char namebuf[32];
             const char *value = NULL;
             char tmp[16];
 
-            if (name[0] == '\0') {
+            /* ${NAME} curly form: copy the inner name so the rest of
+             * the dispatch chain can treat it as a bare name. Anything
+             * after the closing brace is dropped (no parameter
+             * expansion modifiers in P1). */
+            if (name[0] == '{') {
+                const char *end = strchr(name + 1, '}');
+                size_t inner_len = end ? (size_t)(end - (name + 1)) : 0;
+                if (!end || inner_len == 0 || inner_len >= sizeof(namebuf)) {
+                    value = empty_value;
+                    name = "";
+                } else {
+                    memcpy(namebuf, name + 1, inner_len);
+                    namebuf[inner_len] = '\0';
+                    name = namebuf;
+                }
+            }
+
+            if (value) {
+                /* already resolved (malformed ${...}) — fall through */
+            } else if (name[0] == '\0') {
                 value = "$";
             } else if (name[0] == '$' && name[1] == '\0') {
                 snprintf(tmp, sizeof(tmp), "%d", getpid());
@@ -1435,50 +1455,265 @@ static char *readline(char *input, int len)
         return readline_notty(input, len);
 }
 
+/*
+ * Lexer (P1 of the fresh refactor)
+ *
+ * Five-stage pipeline: read -> lex -> parse -> expand -> execute.
+ * This is the lex stage. Output is a NULL-terminated argv-style array
+ * of word strings, plus parallel type and quote-flag arrays that later
+ * stages will consume.
+ *
+ * - Static storage: word bytes live in lex_buf, pointers in lex_words.
+ *   No malloc on the hot path.
+ * - Quote rules: '...' literal, "..." with \"$`\\ escapable; outside
+ *   quotes \\<c> escapes one char.
+ * - Operators recognised: | || & && ; < > >> 2> >& <& ( ).  Each is
+ *   emitted with its lexeme so the legacy commandHandler keeps working
+ *   via strcmp; later phases can switch to type-based dispatch.
+ * - Comment '#' starts only at a word boundary outside quotes (the old
+ *   strchr-based stripping clobbered '#' inside quoted strings).
+ *
+ * Caveat: a *quoted* operator-lookalike (e.g. echo ">") is emitted as
+ * a T_WORD with lexeme ">" — same string as a real T_GT operator. The
+ * legacy commandHandler can't tell them apart; P3 will switch to a
+ * type-aware executor and remove the ambiguity.
+ */
+
+#define LEX_BUF_BYTES (MAXLINE + 64)
+#define LEX_MAX_TOKS  64
+
+enum tok_type {
+    T_WORD = 0,
+    T_PIPE,        /* |  */
+    T_OR,          /* || */
+    T_AMP,         /* &  */
+    T_AND,         /* && */
+    T_SEMI,        /* ;  */
+    T_LT,          /* <  */
+    T_GT,          /* >  */
+    T_DGT,         /* >> */
+    T_ERR_GT,      /* 2> */
+    T_GT_AMP,      /* >& */
+    T_LT_AMP,      /* <& */
+    T_LP,          /* (  */
+    T_RP,          /* )  */
+};
+
+#define LEX_QUOTED_SINGLE 0x1
+#define LEX_QUOTED_DOUBLE 0x2
+
+static char     lex_buf[LEX_BUF_BYTES];
+static char    *lex_words[LEX_MAX_TOKS + 1];   /* +1 for NULL terminator */
+static uint8_t  lex_types[LEX_MAX_TOKS];
+static uint8_t  lex_quoted[LEX_MAX_TOKS];
+static int      lex_count;
+
+static int lex_emit_op(const char *lexeme, enum tok_type type,
+                       char **bp, char *be)
+{
+    size_t need = strlen(lexeme) + 1;
+    if (lex_count >= LEX_MAX_TOKS)
+        return -1;
+    if ((size_t)(be - *bp) < need)
+        return -1;
+    lex_words[lex_count] = *bp;
+    memcpy(*bp, lexeme, need);
+    *bp += need;
+    lex_types[lex_count] = (uint8_t)type;
+    lex_quoted[lex_count] = 0;
+    lex_count++;
+    return 0;
+}
+
+static int lex_emit_word(char *start, int quoted_mask)
+{
+    if (lex_count >= LEX_MAX_TOKS)
+        return -1;
+    lex_words[lex_count] = start;
+    lex_types[lex_count] = (uint8_t)T_WORD;
+    lex_quoted[lex_count] = (uint8_t)quoted_mask;
+    lex_count++;
+    return 0;
+}
+
+/*
+ * Lex a single logical input line. Returns the number of tokens on
+ * success (>=0), or -1 on overflow / unterminated quote.
+ */
+static int lex_line(const char *line)
+{
+    char *bp = lex_buf;
+    char *be = lex_buf + sizeof(lex_buf);
+    const char *p = line;
+    char *word_start = NULL;
+    int word_quoted = 0;
+
+    lex_count = 0;
+    lex_words[0] = NULL;
+    if (!line)
+        return 0;
+
+    while (*p) {
+        char c = *p;
+
+        if (!word_start) {
+            /* Between tokens: skip whitespace, recognise operators */
+            if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+                p++;
+                continue;
+            }
+            if (c == '#')
+                break;   /* unquoted '#' starts a comment */
+
+            /* Two-char operators (longest match first). */
+            if (c == '|' && p[1] == '|') {
+                if (lex_emit_op("||", T_OR, &bp, be) < 0) return -1;
+                p += 2; continue;
+            }
+            if (c == '&' && p[1] == '&') {
+                if (lex_emit_op("&&", T_AND, &bp, be) < 0) return -1;
+                p += 2; continue;
+            }
+            if (c == '>' && p[1] == '>') {
+                if (lex_emit_op(">>", T_DGT, &bp, be) < 0) return -1;
+                p += 2; continue;
+            }
+            if (c == '>' && p[1] == '&') {
+                if (lex_emit_op(">&", T_GT_AMP, &bp, be) < 0) return -1;
+                p += 2; continue;
+            }
+            if (c == '<' && p[1] == '&') {
+                if (lex_emit_op("<&", T_LT_AMP, &bp, be) < 0) return -1;
+                p += 2; continue;
+            }
+            if (c == '2' && p[1] == '>') {
+                if (lex_emit_op("2>", T_ERR_GT, &bp, be) < 0) return -1;
+                p += 2; continue;
+            }
+
+            /* One-char operators. */
+            if (c == '|') { if (lex_emit_op("|", T_PIPE, &bp, be) < 0) return -1; p++; continue; }
+            if (c == '&') { if (lex_emit_op("&", T_AMP,  &bp, be) < 0) return -1; p++; continue; }
+            if (c == ';') { if (lex_emit_op(";", T_SEMI, &bp, be) < 0) return -1; p++; continue; }
+            if (c == '<') { if (lex_emit_op("<", T_LT,   &bp, be) < 0) return -1; p++; continue; }
+            if (c == '>') { if (lex_emit_op(">", T_GT,   &bp, be) < 0) return -1; p++; continue; }
+            if (c == '(') { if (lex_emit_op("(", T_LP,   &bp, be) < 0) return -1; p++; continue; }
+            if (c == ')') { if (lex_emit_op(")", T_RP,   &bp, be) < 0) return -1; p++; continue; }
+
+            /* Otherwise: start a word here. */
+            if (bp >= be)
+                return -1;
+            word_start = bp;
+            word_quoted = 0;
+        }
+
+        /* Inside a word */
+        c = *p;
+        if (c == '\'') {
+            /* Single quote: literal until closing ' */
+            word_quoted |= LEX_QUOTED_SINGLE;
+            p++;
+            while (*p && *p != '\'') {
+                if (bp >= be - 1) return -1;
+                *bp++ = *p++;
+            }
+            if (!*p)
+                return -1;   /* unterminated */
+            p++;
+            continue;
+        }
+        if (c == '"') {
+            word_quoted |= LEX_QUOTED_DOUBLE;
+            p++;
+            while (*p && *p != '"') {
+                if (*p == '\\' && p[1]) {
+                    char nxt = p[1];
+                    if (nxt == '"' || nxt == '\\' || nxt == '$' || nxt == '`') {
+                        if (bp >= be - 1) return -1;
+                        *bp++ = nxt;
+                        p += 2;
+                        continue;
+                    }
+                    /* otherwise the backslash stays literal */
+                    if (bp >= be - 1) return -1;
+                    *bp++ = '\\';
+                    p++;
+                    continue;
+                }
+                if (bp >= be - 1) return -1;
+                *bp++ = *p++;
+            }
+            if (!*p)
+                return -1;
+            p++;
+            continue;
+        }
+        if (c == '\\' && p[1]) {
+            /* Outside quotes: \ escapes the next char (incl. newline). */
+            if (bp >= be - 1) return -1;
+            *bp++ = p[1];
+            p += 2;
+            continue;
+        }
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+            if (bp >= be) return -1;
+            *bp++ = '\0';
+            if (lex_emit_word(word_start, word_quoted) < 0) return -1;
+            word_start = NULL;
+            word_quoted = 0;
+            p++;
+            continue;
+        }
+        /* Operator chars also end the current word; re-process them next loop. */
+        if (c == '|' || c == '&' || c == ';' || c == '<' || c == '>' ||
+            c == '(' || c == ')') {
+            if (bp >= be) return -1;
+            *bp++ = '\0';
+            if (lex_emit_word(word_start, word_quoted) < 0) return -1;
+            word_start = NULL;
+            word_quoted = 0;
+            continue;
+        }
+        if (c == '#' && !word_quoted) {
+            if (bp >= be) return -1;
+            *bp++ = '\0';
+            if (lex_emit_word(word_start, word_quoted) < 0) return -1;
+            word_start = NULL;
+            break;
+        }
+        if (bp >= be - 1) return -1;
+        *bp++ = c;
+        p++;
+    }
+
+    if (word_start) {
+        if (bp >= be) return -1;
+        *bp++ = '\0';
+        if (lex_emit_word(word_start, word_quoted) < 0) return -1;
+    }
+    lex_words[lex_count] = NULL;
+    return lex_count;
+}
+
 static int parseLine(char *line)
 {
-    char *tokens[LIMIT] = {};
-    char *end = NULL;
-    char *saveptr;
-    int numTokens;
+    int n;
 
     if (!line)
         return 0;
 
-    /* Ignore script shebang lines without treating them as comments. */
+    /* Skip script shebang explicitly so it doesn't even reach the lexer. */
     if (line[0] == '#' && line[1] == '!')
         return 0;
 
-    /* Find inline comments */
-    end = strchr(line, '#');
-    if (end)
-        *end = (char)0;
-
-    /* Find special symbols */
-    if ((tokens[0] = strtok_r(line, " \r\n\t", &saveptr)) == NULL)
-        return 0;
-
-    if (tokens[0][0] == '#')
-        return 0;
-
-    for (numTokens = 1; numTokens < LIMIT; numTokens++) {
-        tokens[numTokens] = strtok_r(NULL, " \r\n\t", &saveptr);
-        if (tokens[numTokens] == NULL)
-            break;
-
-        /* Look for comment '#' */
-        end = strchr(tokens[numTokens], '#');
-        if (end) {
-            *end = (char)0;
-            if (strlen(tokens[numTokens]) == 0)
-                numTokens--;
-            break;
-        }
+    n = lex_line(line);
+    if (n < 0) {
+        printf("fresh: parse error\r\n");
+        return -1;
     }
-    if (numTokens > 0)
-        return commandHandler(tokens, numTokens);
-    else
+    if (n == 0)
         return 0;
+    return commandHandler(lex_words, n);
 }
 
 /* Fresh exec */
