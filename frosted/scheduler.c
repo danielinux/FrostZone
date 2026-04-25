@@ -366,7 +366,7 @@ struct __attribute__((packed)) task_block {
     uint16_t ppid;
     uint16_t tid;
     uint16_t joiner_thread_tid;
-    uint16_t _padding;
+    uint16_t tracer_pid;
     struct thread_group *tgroup;
     struct task *tracer;
     int exitval;
@@ -481,6 +481,11 @@ static void strace_on_syscall(uint32_t n_syscall)
         return;
     if (n_syscall == SYS_VFORK || n_syscall == SYS_EXEC)
         return;
+    /* Skip retry pass: blocking syscalls suspend the task and return
+     * SYS_CALL_AGAIN_VAL; recording that sentinel would leak -1024 to
+     * userspace strace. The real retval is captured on the second pass. */
+    if (t->tb.state != TASK_RUNNING)
+        return;
 
     pid = t->tb.pid;
     if (pid >= STRACE_MAX_PIDS)
@@ -592,8 +597,6 @@ void task_stop(struct task *t);
 void task_continue(struct task *t);
 void task_terminate(struct task *t);
 static void task_suspend_to(int newstate);
-void task_deliver_sigchld(void *arg);
-void task_deliver_sigtrap(void *arg);
 
 static void ftable_destroy(struct task *t);
 static void idling_to_running(struct task *t)
@@ -612,6 +615,70 @@ static void running_to_idling(struct task *t)
 
 static int task_filedesc_del_from_task(struct task *t, int fd);
 
+static int task_is_live_in_list(struct task *list, struct task *target, uint16_t pid)
+{
+    struct task *t = list;
+
+    while (t) {
+        if ((t == target) && ((pid == 0) || (t->tb.pid == pid)) &&
+            (t->tb.state != TASK_OVER))
+            return 1;
+        t = t->tb.next;
+    }
+    return 0;
+}
+
+int task_is_live(struct task *t, uint16_t pid)
+{
+    if (!t)
+        return 0;
+    return task_is_live_in_list(tasks_running, t, pid) ||
+           task_is_live_in_list(tasks_idling, t, pid);
+}
+
+static void task_clear_links_to(struct task *dead)
+{
+    struct task *t;
+
+    if (!dead)
+        return;
+
+    t = tasks_running;
+    while (t) {
+        if (t->tb.tracer == dead) {
+            t->tb.tracer = NULL;
+            t->tb.tracer_pid = 0;
+        }
+        t = t->tb.next;
+    }
+
+    t = tasks_idling;
+    while (t) {
+        if (t->tb.tracer == dead) {
+            t->tb.tracer = NULL;
+            t->tb.tracer_pid = 0;
+        }
+        t = t->tb.next;
+    }
+}
+
+static void task_deliver_signal_pid(void *arg)
+{
+    uintptr_t packed = (uintptr_t)arg;
+    uint16_t pid = (uint16_t)(packed >> 8);
+    int signo = (int)(packed & 0xffu);
+
+    if (pid != 0u)
+        task_kill(pid, signo);
+}
+
+static int tasklet_add_signal(uint16_t pid, int signo)
+{
+    uintptr_t packed = ((uintptr_t)pid << 8) | ((uintptr_t)signo & 0xffu);
+
+    return tasklet_add(task_deliver_signal_pid, (void *)packed);
+}
+
 
 /* Catch-all destroy functions for processes and threads.
  *
@@ -628,6 +695,7 @@ static void task_destroy(void *arg)
 #endif
     if (!t)
         return;
+    task_clear_links_to(t);
     tasklist_del(&tasks_running, t);
     tasklist_del(&tasks_idling, t);
 #ifdef CONFIG_PTHREADS
@@ -1112,7 +1180,12 @@ static int catch_signal(struct task *t, int signo, sigset_t orig_mask)
 
     /* If process is being traced, deliver SIGTRAP to tracer */
     if (t->tb.tracer != NULL) {
-        tasklet_add(task_deliver_sigtrap, t->tb.tracer);
+        if (task_is_live(t->tb.tracer, t->tb.tracer_pid)) {
+            tasklet_add_signal(t->tb.tracer_pid, SIGTRAP);
+        } else {
+            t->tb.tracer = NULL;
+            t->tb.tracer_pid = 0;
+        }
     }
 
     /* Reset signal, if pending, as it's going to be handled. */
@@ -1543,6 +1616,7 @@ static void task_create_real(struct task *new, void *arg, unsigned int nice)
     new->tb.sigpend = 0;
     new->tb.sigmask = 0;
     new->tb.tracer = NULL;
+    new->tb.tracer_pid = 0;
     new->tb.timer_id = -1;
     new->tb.specifics = NULL;
     new->tb.n_specifics = 0;
@@ -1625,6 +1699,7 @@ int task_create(struct task_exec_info *exec_info, void *arg, unsigned int nice)
     new->tb.flags = 0;
     new->tb.cwd = fno_search("/");
     new->tb.tracer = NULL;
+    new->tb.tracer_pid = 0;
 
     ft = _cur_task->tb.filedesc_table;
 
@@ -1689,8 +1764,10 @@ int scheduler_exec(struct task_exec_info *info, void *args)
          * it to NULL, which would lose the effect of a prior TRACEME in the
          * pre-exec child. Linux semantics: TRACEME persists through exec. */
         struct task *saved_tracer = t->tb.tracer;
+        uint16_t saved_tracer_pid = t->tb.tracer_pid;
         task_create_real(t, (void *)args, t->tb.nice);
         t->tb.tracer = saved_tracer;
+        t->tb.tracer_pid = saved_tracer_pid;
     }
     asm volatile("msr " PSP ", %0" ::"r"(_cur_task->tb.sp));
     t->tb.state = TASK_RUNNING;
@@ -2001,6 +2078,7 @@ int sys_pthread_create_hdlr(pthread_t *thread, const pthread_attr_t *attr,
     new->tb.sigmask = _cur_task->tb.sigmask;
     new->tb.sighdlr = _cur_task->tb.sighdlr;
     new->tb.tracer = NULL;
+    new->tb.tracer_pid = 0;
     new->tb.timer_id = -1;
     new->tb.n_specifics = _cur_task->tb.n_specifics;
 
@@ -2086,7 +2164,7 @@ int sys_pthread_exit_hdlr(int exitval)
             if (!pt)
                 pt = tasklist_get(&tasks_running, t->tb.ppid);
             if (pt)
-                tasklet_add(task_deliver_sigchld, pt);
+                tasklet_add_signal(pt->tb.pid, SIGCHLD);
     }
     else
         _cur_task->tb.tgroup->active_threads--;
@@ -2602,9 +2680,12 @@ void task_stop(struct task *t)
 
 void task_hit_breakpoint(struct task *t)
 {
-    if (t->tb.tracer) {
+    if (t && t->tb.tracer && task_is_live(t->tb.tracer, t->tb.tracer_pid)) {
         task_stop(t);
         task_resume(t->tb.tracer);
+    } else if (t) {
+        t->tb.tracer = NULL;
+        t->tb.tracer_pid = 0;
     }
 }
 
@@ -2673,21 +2754,6 @@ static void task_resume_vfork(struct task *t)
     }
 }
 
-void task_deliver_sigchld(void *arg)
-{
-    struct task *t = (struct task *)arg;
-    if (t)
-    task_kill(t->tb.pid, SIGCHLD);
-}
-
-void task_deliver_sigtrap(void *arg)
-{
-    struct task *t = (struct task *)arg;
-    if (t)
-        task_kill(t->tb.pid, SIGTRAP);
-}
-
-
 #ifdef CONFIG_PTHREADS
 static void destroy_thread_group(struct thread_group *group, uint16_t tid)
 {
@@ -2738,7 +2804,7 @@ void task_terminate(struct task *t)
                     pt = tasklist_get(&tasks_idling, 1);
             }
             if (pt)
-                tasklet_add(task_deliver_sigchld, pt);
+                tasklet_add_signal(pt->tb.pid, SIGCHLD);
 
             task_preempt();
         }
@@ -2802,8 +2868,8 @@ int sys_sleep_hdlr(uint32_t arg1, uint32_t arg2)
 
 void kthread_sleep_ms(uint32_t ms)
 {
-    unsigned dl = jiffies + ms;
-    while(dl > jiffies) {
+    uint32_t deadline = (uint32_t)jiffies + ms;
+    while (!jiffies_reached(deadline)) {
         kthread_yield();
     }
 }
@@ -2875,7 +2941,7 @@ int sys_sched_yield_hdlr(void)
 int sys_poll_hdlr(struct pollfd *pfd, int n, int timeout_param)
 {
     int i;
-    uint32_t timeout;
+    uint32_t timeout = 0;
     int endless = 0;
     int ret = 0;
     struct fnode *f;
@@ -2892,12 +2958,14 @@ int sys_poll_hdlr(struct pollfd *pfd, int n, int timeout_param)
         return 0;
     }
 
-    if ((_cur_task->tb.flags & TASK_FLAG_TIMEOUT) == 0)
-        timeout = jiffies + timeout_param;
-    else
-        timeout = jiffies;
+    if (!endless) {
+        if ((_cur_task->tb.flags & TASK_FLAG_TIMEOUT) == 0)
+            timeout = (uint32_t)jiffies + (uint32_t)timeout_param;
+        else
+            timeout = (uint32_t)jiffies;
+    }
 
-    while (endless || (jiffies <= timeout)) {
+    while (endless || !jiffies_after((uint32_t)jiffies, timeout)) {
         for (i = 0; i < n; i++) {
             f = task_filedesc_get(pfd[i].fd);
             if (!f || !f->owner || !f->owner->ops.poll) {
@@ -2916,8 +2984,10 @@ int sys_poll_hdlr(struct pollfd *pfd, int n, int timeout_param)
         }
 
         if (!endless && (this_task()->tb.timer_id < 0)) {
+            uint32_t now = (uint32_t)jiffies;
+            uint32_t delay = jiffies_after(now, timeout) ? 0u : (timeout - now);
             this_task()->tb.timer_id =
-                ktimer_add(timeout - jiffies, sleepy_task_wakeup, this_task());
+                ktimer_add(delay, sleepy_task_wakeup, this_task());
         }
         task_suspend();
         return SYS_CALL_AGAIN;
@@ -2999,8 +3069,8 @@ child_found:
     if (t->tb.tgroup)
         t->tb.tgroup->active_threads = 0;
 #endif
-    tasklet_add(task_destroy, t);
     t->tb.state = TASK_OVER;
+    tasklet_add(task_destroy, t);
     return pid;
 }
 
@@ -3120,6 +3190,7 @@ int sys_ptrace_hdlr(enum __ptrace_request request, uint32_t pid, void *addr, voi
         if (!parent)
             return -1;
         _cur_task->tb.tracer = parent;
+        _cur_task->tb.tracer_pid = parent->tb.pid;
         break;
     }
     case PTRACE_PEEKTEXT:
@@ -3187,6 +3258,7 @@ int sys_ptrace_hdlr(enum __ptrace_request request, uint32_t pid, void *addr, voi
         if (!tracee)
             return -1;
         tracee->tb.tracer = _cur_task;
+        tracee->tb.tracer_pid = _cur_task->tb.pid;
         if (request == PTRACE_ATTACH) {
             task_stop(tracee);
         }
@@ -3199,6 +3271,7 @@ int sys_ptrace_hdlr(enum __ptrace_request request, uint32_t pid, void *addr, voi
             return -1;
         strace_ring_free(tracee->tb.pid);
         tracee->tb.tracer = NULL;
+        tracee->tb.tracer_pid = 0;
         task_continue(tracee);
         return 0;
     case PTRACE_SYSCALL:
@@ -3574,9 +3647,86 @@ static int task_ptr_valid_for_task(const void *ptr, const struct task *t)
     return -1;
 }
 
+static int task_range_contains(uintptr_t base, uint32_t size, uintptr_t start,
+                               uintptr_t end)
+{
+    uintptr_t limit;
+
+    if (size == 0)
+        return 0;
+    if (base > (UINTPTR_MAX - ((uintptr_t)size - 1u)))
+        return 0;
+    limit = base + (uintptr_t)size - 1u;
+    return (start >= base) && (end <= limit);
+}
+
+static int task_stack_range_valid(const struct task *t, const void *ptr,
+                                  uintptr_t len)
+{
+    uintptr_t start;
+    uintptr_t end;
+    uintptr_t stack_start;
+    uintptr_t stack_end;
+
+    if (!t || !ptr || len == 0)
+        return -1;
+
+    start = (uintptr_t)ptr;
+    if (start > (UINTPTR_MAX - (len - 1u)))
+        return -1;
+    end = start + len - 1u;
+
+    stack_start = (uintptr_t)t->tb.cur_stack;
+    if (stack_start > (UINTPTR_MAX - (SCHEDULER_STACK_SIZE - 1u)))
+        return -1;
+    stack_end = stack_start + SCHEDULER_STACK_SIZE - 1u;
+
+    return ((start >= stack_start) && (end <= stack_end)) ? 0 : -1;
+}
+
+static int task_ptr_range_valid_for_task(const void *ptr, unsigned int len,
+                                         const struct task *t)
+{
+    struct task_meminfo info;
+    uintptr_t start;
+    uintptr_t end;
+    uint32_t i;
+
+    if (len == 0)
+        return 0;
+    if (!ptr || !t)
+        return -1;
+    if (t->tb.pid == 0)
+        return 0;
+
+    start = (uintptr_t)ptr;
+    if (start > (UINTPTR_MAX - ((uintptr_t)len - 1u)))
+        return -1;
+    end = start + (uintptr_t)len - 1u;
+
+    if (task_stack_range_valid(t, ptr, len) == 0)
+        return 0;
+
+    if (secure_meminfo(t->tb.pid, &info) != 0)
+        return -1;
+    if (task_range_contains(info.ram_base, info.ram_size, start, end))
+        return 0;
+    for (i = 0; i < info.n_heap_regions && i < 3u; i++) {
+        if (task_range_contains(info.heap[i].base, info.heap[i].size, start, end))
+            return 0;
+    }
+
+    return -1;
+}
+
 int task_ptr_valid(const void *ptr)
 {
     return task_ptr_valid_for_task(ptr, _cur_task);
+}
+
+int task_ptr_range_valid(const void *ptr, unsigned int len)
+{
+    return task_ptr_range_valid_for_task(ptr, len, _cur_task);
 }
 
 #pragma GCC push_options
@@ -3603,16 +3753,22 @@ int __naked sv_call_handler(void)
     /* save current SP to TCB */
     _cur_task->tb.sp = _top_stack;
 
+    if (task_stack_range_valid(_cur_task, _cur_task->tb.sp,
+        EXTRA_FRAME_SIZE + NVIC_FRAME_SIZE + (10 * sizeof(uint32_t))) != 0) {
+        task_terminate(_cur_task);
+        task_switch();
+        irq_on();
+        goto return_from_syscall;
+    }
+
     /* Get function arguments */
-    n_stack = (struct nvic_stack_frame *)(_cur_task->tb.sp + NVIC_FRAME_SIZE);
+    n_stack = task_nvic_frame(_cur_task);
     a0 = &n_stack->r0;
     a1 = &n_stack->r1;
     a2 = &n_stack->r2;
     a3 = &n_stack->r3;
-    a4 = (uint32_t *)((uint8_t *)_cur_task->tb.sp +
-                      (EXTRA_FRAME_SIZE + NVIC_FRAME_SIZE + 8*4));
-    a5 = (uint32_t *)((uint8_t *)_cur_task->tb.sp +
-                      (EXTRA_FRAME_SIZE + NVIC_FRAME_SIZE + 8*4 + 4));
+    a4 = task_stack_arg_slot(_cur_task, 0);
+    a5 = task_stack_arg_slot(_cur_task, 1);
 
     n_syscall = *a0;
 
