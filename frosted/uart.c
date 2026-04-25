@@ -78,7 +78,7 @@ struct stm32_uart_port {
     struct device *dev;
     struct cirbuf *rxbuf;
     uint8_t irq;
-    int8_t sid;
+    int16_t sid;   /* foreground pid (kernel pids are 16-bit; -1 = none) */
 };
 
 static struct stm32_uart_port uart_ports[MAX_UART_PORTS];
@@ -278,7 +278,7 @@ static int stm32_uart_open(const char *path, int flags)
 static int stm32_uart_read(struct fnode *fno, void *buf, unsigned int len)
 {
     struct stm32_uart_port *port;
-    int len_available;
+    size_t len_available;
     uint8_t *ptr = (uint8_t *)buf;
     int out = 0;
 
@@ -291,7 +291,7 @@ static int stm32_uart_read(struct fnode *fno, void *buf, unsigned int len)
     
     mutex_lock(port->dev->mutex);
     len_available =  cirbuf_bytesinuse(port->rxbuf);
-    if (len_available <= 0) {
+    if (len_available == 0) {
         port->dev->task = this_task();
         task_suspend();
         out = SYS_CALL_AGAIN;
@@ -299,7 +299,7 @@ static int stm32_uart_read(struct fnode *fno, void *buf, unsigned int len)
     }
 
     if (len_available < len)
-        len = len_available;
+        len = (unsigned int)len_available;
 
     for(out = 0; out < len; out++) {
         /* read data */
@@ -337,10 +337,15 @@ static int stm32_uart_poll(struct fnode *fno, uint16_t events, uint16_t *revents
     return ready;
 }
 
-static void stm32_uart_flush_tx(stm32_usart_t *regs)
+static int stm32_uart_flush_tx(stm32_usart_t *regs)
 {
-    while ((regs->ISR & USART_ISR_TC) == 0)
-        ;
+    uint32_t spins = 1000000U;
+
+    while ((regs->ISR & USART_ISR_TC) == 0) {
+        if (spins-- == 0)
+            return -ETIMEDOUT;
+    }
+    return 0;
 }
 
 static int stm32_uart_write(struct fnode *fno, const void *buf, unsigned int len)
@@ -362,7 +367,8 @@ static int stm32_uart_write(struct fnode *fno, const void *buf, unsigned int len
         port->regs->TDR = data[i];
     }
 
-    stm32_uart_flush_tx(port->regs);
+    if (stm32_uart_flush_tx(port->regs) < 0)
+        return -ETIMEDOUT;
     return (int)len;
 }
 
@@ -387,7 +393,7 @@ static void stm32_uart_tty_attach(struct fnode *fno, int pid)
     port = (struct stm32_uart_port *)FNO_MOD_PRIV(fno, &mod_devuart);
     if (!port)
         return;
-    port->sid = (int8_t)pid;
+    port->sid = (int16_t)pid;
 }
 
 static void stm32_uart_setup_module(void)
