@@ -43,24 +43,15 @@ static const char empty_value[] = "";
 
 int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
 
-struct sigaction act_child;
-struct sigaction act_int;
-
 int no_reprint_prmpt;
 
-/**
- * SIGNAL HANDLERS
- */
-// signal handler for SIGCHLD */
-void signalHandler_child(int p);
-// signal handler for SIGINT
-void signalHandler_int(int p);
+static void signalHandler_child(int p);
+static void signalHandler_int(int p);
 int changeDirectory(char *args[]);
 
 #define LIMIT 16    // max number of tokens for a command
 #define MAXLINE 256 // max number of characters from user input
 static char currentDirectory[128];
-static char lastcmd[128] = "";
 
 #define HISTORY_MAX 8
 static char history_entries[HISTORY_MAX][MAXLINE];
@@ -87,11 +78,6 @@ static void update_pwd_env(void)
         return;
 
     setenv("PWD", cwd, 1);
-}
-
-int puts_r(struct _reent *r, const char *s)
-{
-    return strlen(s);
 }
 
 static int fresh_exec(char *arg0, char **argv);
@@ -174,9 +160,6 @@ static void history_store_line(const char *line, int persist)
     strncpy(history_entries[history_len], clean, MAXLINE - 1);
     history_entries[history_len][MAXLINE - 1] = '\0';
     history_len++;
-done:
-    strncpy(lastcmd, clean, sizeof(lastcmd) - 1);
-    lastcmd[sizeof(lastcmd) - 1] = '\0';
     if (persist)
         history_append_file(clean);
 }
@@ -441,7 +424,7 @@ void shell_init(char *file)
 /**
  * Method used to print the welcome screen of our shell
  */
-void welcomeScreen()
+static void welcomeScreen(void)
 {
     printf("\r\n\t============================================\r\n");
     printf("\t          Frosted shell - aka \"Fresh\"         \r\n");
@@ -451,31 +434,28 @@ void welcomeScreen()
     printf("\r\n\r\n");
 }
 
-/**
- * SIGNAL HANDLERS
- */
+/* SIGCHLD: drain every reapable zombie. WNOHANG-loop matches POSIX
+ * shells — a single SIGCHLD can cover multiple exits when the kernel
+ * coalesces them, which our previous one-shot reap leaked.
+ *
+ * Frosted's toolchain doesn't define sig_atomic_t; volatile int is
+ * the closest equivalent and matches the previous declarations. */
+static volatile int child_pid = 0;
+static volatile int child_status = 0;
 
-/**
- * signal handler for SIGCHLD
- */
-static int child_pid = 0;
-static int child_status = 0;
-
-void signalHandler_child(int p)
+static void signalHandler_child(int p)
 {
-    /* Wait for all dead processes.
-     * We use a non-blocking call (WNOHANG) to be sure this signal handler will
-     * not
-     * block if a child was cleaned up in another part of the program. */
-    child_pid = waitpid(-1, &child_status, WNOHANG);
+    int st;
+    pid_t r;
+    (void)p;
+    while ((r = waitpid(-1, &st, WNOHANG)) > 0) {
+        child_pid = r;
+        child_status = st;
+    }
 }
 
-/**
- *	Displays the prompt for the shell
- */
-void shellPrompt()
+static void shellPrompt(void)
 {
-    // We print the prompt in the form "<user>@<host> <cwd> >"
     char prompt[256];
     char hostn[] = "frosted";
     char *cwd = getcwd(currentDirectory, 128);
@@ -485,15 +465,12 @@ void shellPrompt()
     }
 }
 
-/**
- * Signal handler for SIGINT
- */
-
-volatile static int interrupted = 0;
-void signalHandler_int(int p)
+/* SIGINT during prompt: caught so the kernel doesn't terminate the
+ * shell. Body intentionally empty — the read loop notices the
+ * interruption via EINTR and reprints the prompt. */
+static void signalHandler_int(int p)
 {
-    // shellPrompt();
-    interrupted++;
+    (void)p;
 }
 
 /**
@@ -1160,17 +1137,9 @@ int commandHandler(char *args[], int argc)
     }
 }
 
-void pointer_shift(int *a, int s, int n)
-{
-    int i;
-    for (i = n; i > s - 1; i--) {
-        *(a + i + 1) = *(a + i);
-    }
-}
-
 char *readline_tty(char *input, int size)
 {
-    while (2 > 1) {
+    for (;;) {
         int len = 0, pos = 0;
         int out = STDOUT_FILENO;
         char got[5];
