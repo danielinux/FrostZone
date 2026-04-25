@@ -229,25 +229,16 @@ int icebox_strace(int argc, char *argv[])
     }
 
     /* Drain events until the child exits. sched_yield between reads so the
-     * tracee gets CPU. Also time out if nothing happens for a long time —
-     * avoids hanging on this platform's incomplete SIGCHLD delivery. */
-    {
-        int idle_yields = 0;
-        while (!child_exited && idle_yields < 2000) {
-            int n = drain_events(pid);
-            if (n == 0)
-                idle_yields++;
-            else
-                idle_yields = 0;
-            sys_sched_yield();
-        }
+     * tracee gets CPU. No fixed iteration limit: a long-blocking syscall
+     * (accept, read on stdin, waitpid) would trigger a false "stuck" kill.
+     * Instead, use kill(pid,0) to detect when the process is truly gone. */
+    while (!child_exited) {
         drain_events(pid);
-        if (!child_exited) {
-            fprintf(stderr, "strace: child pid=%d seems stuck or gone\n",
-                    (int)pid);
-            ptrace(PTRACE_KILL, pid, NULL, NULL);
-        }
+        if (kill(pid, 0) < 0 && errno == ESRCH)
+            break;   /* process has vanished; SIGCHLD may have been missed */
+        sys_sched_yield();
     }
+    drain_events(pid);
 
     if (WIFEXITED(child_status))
         fprintf(stderr, "+++ exited with %d +++\n", WEXITSTATUS(child_status));
