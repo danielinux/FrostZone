@@ -3753,14 +3753,6 @@ int __naked sv_call_handler(void)
     /* save current SP to TCB */
     _cur_task->tb.sp = _top_stack;
 
-    if (task_stack_range_valid(_cur_task, _cur_task->tb.sp,
-        EXTRA_FRAME_SIZE + NVIC_FRAME_SIZE + (10 * sizeof(uint32_t))) != 0) {
-        task_terminate(_cur_task);
-        task_switch();
-        irq_on();
-        goto return_from_syscall;
-    }
-
     /* Get function arguments */
     n_stack = task_nvic_frame(_cur_task);
     a0 = &n_stack->r0;
